@@ -142,10 +142,14 @@ async function uploadToPostiz({ buffer, name, contentType }) {
 }
 
 // ── Platform-specific default settings ──────────────────────────────
+// IMPORTANT: post_type is required across ALL platforms by this Postiz
+// validator (kept seeing 'post_type must be one of: post, story' even on
+// TikTok). So we always include it.
 function defaultSettings(platform) {
   const p = (platform || '').toLowerCase()
   if (p.includes('tiktok')) {
     return {
+      post_type: 'post',
       privacy_level: 'PUBLIC_TO_EVERYONE',
       duet: false,
       stitch: false,
@@ -158,7 +162,6 @@ function defaultSettings(platform) {
     }
   }
   if (p.includes('instagram')) {
-    // 'reel' butuh video; 'story' butuh 24h; 'post' aman default.
     return {
       post_type: 'post',
       collaborators: [],
@@ -166,6 +169,7 @@ function defaultSettings(platform) {
   }
   if (p.includes('youtube')) {
     return {
+      post_type: 'post',
       title: '',
       type: 'public',
     }
@@ -173,7 +177,7 @@ function defaultSettings(platform) {
   if (p.includes('facebook') || p.includes('fb')) {
     return { post_type: 'post' }
   }
-  // Unknown platform — sane fallback that works untuk most platforms.
+  // Unknown platform — sane fallback.
   return { post_type: 'post' }
 }
 
