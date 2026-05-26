@@ -56,16 +56,18 @@ export default async function DashLayout({ children }) {
           <div className="text-sm font-bold">CAK Video</div>
           <div className="text-xs text-[var(--muted)] truncate">{activeWs?.name}</div>
         </div>
+        <NavLink href="/studio" label="🎬 Studio" />
+        <div className="text-[9px] uppercase text-[var(--muted2)] font-bold tracking-wider mt-4 mb-1 px-3">v3 Add-ons</div>
         <NavLink href="/dashboard" label="📊 Dashboard" />
-        <NavLink href="/generate" label="⚡ Generate" />
-        <NavLink href="/qc" label="🧪 QC" />
         <NavLink href="/posting" label="📮 Posting" />
         <NavLink href="/scheduled" label="📅 Scheduled" />
-        <NavLink href="/results" label="📁 Results" />
-        <div className="text-[9px] uppercase text-[var(--muted2)] font-bold tracking-wider mt-4 mb-1 px-3">Library</div>
         <NavLink href="/brands" label="🏷 Brands" />
         <NavLink href="/personas" label="🎭 Personas" />
         <NavLink href="/refs" label="🖼 References" />
+        <div className="text-[9px] uppercase text-[var(--muted2)] font-bold tracking-wider mt-4 mb-1 px-3">v3 Beta (queue → worker)</div>
+        <NavLink href="/generate" label="⚡ Generate Beta" />
+        <NavLink href="/qc" label="🧪 QC Beta" />
+        <NavLink href="/results" label="📁 Results Beta" />
         <div className="mt-auto pt-4 border-t border-[var(--border)] text-xs text-[var(--muted)]">
           <div className="mb-2 truncate">{user.email}</div>
           <SignOutButton />
