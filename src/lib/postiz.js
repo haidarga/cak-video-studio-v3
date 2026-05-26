@@ -117,7 +117,7 @@ async function uploadToPostiz({ buffer, name, contentType }) {
 // ── Platform-specific default settings ──────────────────────────────
 function defaultSettings(platform) {
   const p = (platform || '').toLowerCase()
-  if (p === 'tiktok') {
+  if (p.includes('tiktok')) {
     return {
       privacy_level: 'PUBLIC_TO_EVERYONE',
       duet: false,
@@ -130,32 +130,52 @@ function defaultSettings(platform) {
       title: '',
     }
   }
-  if (p === 'instagram' || p === 'instagram-standalone') {
+  if (p.includes('instagram')) {
+    // 'reel' butuh video; 'story' butuh 24h; 'post' aman default.
     return {
-      post_type: 'reel',
+      post_type: 'post',
       collaborators: [],
     }
   }
-  if (p === 'youtube' || p === 'youtube-standalone') {
+  if (p.includes('youtube')) {
     return {
       title: '',
       type: 'public',
     }
   }
-  // Conservative default
-  return {}
+  if (p.includes('facebook') || p.includes('fb')) {
+    return { post_type: 'post' }
+  }
+  // Unknown platform — sane fallback that works untuk most platforms.
+  return { post_type: 'post' }
 }
 
 // ── Create post ─────────────────────────────────────────────────────
 export async function createPostizPost({ channelId, content, mediaUrl, scheduledFor, platform }) {
   if (!channelId) throw new Error('channelId kosong — persona belum link ke Postiz channel')
 
-  // 1) Upload media to Postiz first (TikTok rejects external URLs)
+  // Auto-detect platform via integration lookup kalau platform kosong (UI
+  // sebelumnya kadang gak save postiz_platform pas pick channel).
+  if (!platform) {
+    try {
+      const channels = await fetchPostizChannels()
+      const ch = channels.find((c) => String(c.id) === String(channelId))
+      if (ch) platform = ch.platform || ch.raw?.providerIdentifier || ''
+    } catch (e) { /* ignore — fall through dengan platform kosong */ }
+  }
+
+  // 1) Upload media to Postiz first (Postiz nolak external URLs; harus
+  // domain uploads.postiz.com). Returns { id, path } yang dua-duanya
+  // dibutuhin di posts[].value[].image[].
   let imageField = []
   if (mediaUrl) {
     const media = await downloadMedia(mediaUrl)
     const uploaded = await uploadToPostiz(media)
-    imageField = [{ id: String(uploaded.id) }]
+    imageField = [{
+      id: String(uploaded.id),
+      path: uploaded.path || uploaded.raw?.url || '',
+      name: uploaded.raw?.name || media.name,
+    }]
   }
 
   const isScheduled = !!scheduledFor
