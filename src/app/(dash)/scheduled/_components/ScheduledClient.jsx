@@ -166,6 +166,23 @@ function ScheduleRow({ sp, onCancel, onDelete }) {
 }
 
 function ScheduleModal({ result, onClose, onSubmit }) {
+  const [drafting, setDrafting] = useState(false)
+  const [draftErr, setDraftErr] = useState('')
+
+  async function aiDraftCaption() {
+    setDrafting(true); setDraftErr('')
+    try {
+      const res = await fetch('/api/draft/caption', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ result_id: result.id }),
+      })
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error)
+      setCaption(data.caption)
+    } catch (e) { setDraftErr(e.message) }
+    setDrafting(false)
+  }
+
   const [when, setWhen] = useState('now') // 'now' | 'later'
   const [datetime, setDatetime] = useState(() => {
     const d = new Date(Date.now() + 3600000) // +1 hour default
@@ -214,10 +231,17 @@ function ScheduleModal({ result, onClose, onSubmit }) {
           </div>
 
           <div>
-            <label className="block text-[10px] uppercase text-[var(--muted)] font-semibold mb-1">Caption (optional)</label>
-            <textarea rows={3} value={caption} onChange={(e) => setCaption(e.target.value)}
-              placeholder="Caption + hashtag..."
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-[10px] uppercase text-[var(--muted)] font-semibold">Caption (optional)</label>
+              <button onClick={aiDraftCaption} disabled={drafting} type="button"
+                className="px-2.5 py-1 rounded text-[10px] font-bold bg-gradient-to-r from-purple-500 to-pink-500 text-white hover:opacity-90 disabled:opacity-50">
+                {drafting ? '⏳ Drafting...' : '✨ AI Caption'}
+              </button>
+            </div>
+            <textarea rows={4} value={caption} onChange={(e) => setCaption(e.target.value)}
+              placeholder="Caption + hashtag... atau klik ✨ AI Caption biar Gemini draft otomatis pakai context brand + persona + video."
               className="w-full text-sm px-3 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)]" />
+            {draftErr && <div className="text-[10px] text-red-400 mt-1">⚠ {draftErr}</div>}
           </div>
         </div>
         <div className="px-6 py-4 border-t border-[var(--border)] flex justify-end gap-3">
