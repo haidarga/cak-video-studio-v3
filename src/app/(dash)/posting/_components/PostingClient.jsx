@@ -201,6 +201,36 @@ function FilterPill({ on, onClick, label }) {
   )
 }
 
+function platformEmoji(platform) {
+  const p = (platform || '').toLowerCase()
+  if (p.includes('tiktok')) return '🎵'
+  if (p.includes('instagram')) return '📷'
+  if (p.includes('youtube')) return '▶️'
+  if (p.includes('facebook') || p === 'fb') return '👤'
+  if (p === 'x' || p.includes('twitter')) return '𝕏'
+  if (p.includes('linkedin')) return '💼'
+  if (p.includes('thread')) return '🧵'
+  return '🌐'
+}
+
+function PlatformIcon({ platform }) {
+  const p = (platform || '').toLowerCase()
+  const emoji = platformEmoji(p)
+  const colors = {
+    tiktok: 'bg-pink-500/20 text-pink-300 border-pink-500/40',
+    instagram: 'bg-purple-500/20 text-purple-300 border-purple-500/40',
+    youtube: 'bg-red-500/20 text-red-300 border-red-500/40',
+    facebook: 'bg-blue-500/20 text-blue-300 border-blue-500/40',
+  }
+  const colorKey = Object.keys(colors).find((k) => p.includes(k)) || ''
+  return (
+    <div className={`flex flex-col items-center justify-center w-9 h-9 rounded border flex-shrink-0 ${colors[colorKey] || 'bg-[var(--surface2)] border-[var(--border)]'}`}>
+      <span className="text-base leading-none">{emoji}</span>
+      <span className="text-[7px] uppercase font-bold tracking-tighter mt-0.5">{(p.split('-')[0] || '?').slice(0, 6)}</span>
+    </div>
+  )
+}
+
 function PersonaRow({ persona: p, channels, takenChannelIds, onAssign }) {
   return (
     <div className="grid grid-cols-[2fr_1fr_1fr_2fr_auto] gap-3 px-5 py-3 items-center text-sm">
@@ -230,9 +260,10 @@ function PersonaRow({ persona: p, channels, takenChannelIds, onAssign }) {
       <div className="text-xs min-w-0">
         {p.matchedChannel ? (
           <div className="flex items-center gap-2">
+            <PlatformIcon platform={p.matchedChannel.platform} />
             <div className="flex-1 min-w-0">
               <div className="font-semibold truncate">{p.matchedChannel.name}</div>
-              <div className="text-[9px] text-[var(--muted)]">@{p.matchedChannel.username || ''} <span className="uppercase">· {p.matchedChannel.platform}</span></div>
+              <div className="text-[9px] text-[var(--muted)]">@{p.matchedChannel.username || ''}</div>
             </div>
             <button onClick={() => onAssign(null)} className="text-[10px] text-red-400 hover:underline" title="Unlink">unlink</button>
           </div>
@@ -243,20 +274,41 @@ function PersonaRow({ persona: p, channels, takenChannelIds, onAssign }) {
         ) : (
           <select onChange={(e) => {
               const ch = channels.find((c) => String(c.id) === e.target.value)
-              if (ch) onAssign(ch)
+              if (!ch) return
+              // Confirm before saving — bantu user verify platform yg bener
+              const ok = confirm(`Link "${p.name}" ke channel ini?\n\n${ch.name} (@${ch.username || '—'})\nPlatform: ${(ch.platform || '?').toUpperCase()}\n\nID: ${ch.id}`)
+              if (ok) onAssign(ch)
               e.target.value = ''
             }}
             defaultValue=""
             className="text-xs w-full px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)]">
             <option value="">{p.postiz_channel_id ? '⚠ ID lama — pilih ulang' : '— pilih channel —'}</option>
-            {channels.map((c) => {
-              const taken = takenChannelIds.has(String(c.id))
-              return (
-                <option key={c.id} value={String(c.id)} disabled={taken}>
-                  {c.name} (@{c.username || '—'}) · {c.platform}{taken ? ' [taken]' : ''}
-                </option>
-              )
-            })}
+            {(() => {
+              // Group by platform with optgroup buat kurangin salah pilih.
+              const groups = {}
+              channels.forEach((c) => {
+                const key = (c.platform || 'unknown').toUpperCase()
+                if (!groups[key]) groups[key] = []
+                groups[key].push(c)
+              })
+              const platformOrder = ['TIKTOK', 'INSTAGRAM', 'INSTAGRAM-STANDALONE', 'YOUTUBE', 'YOUTUBE-STANDALONE', 'FACEBOOK', 'X', 'LINKEDIN', 'THREADS', 'UNKNOWN']
+              const sorted = Object.keys(groups).sort((a, b) => {
+                const ai = platformOrder.indexOf(a); const bi = platformOrder.indexOf(b)
+                return (ai < 0 ? 999 : ai) - (bi < 0 ? 999 : bi)
+              })
+              return sorted.map((plat) => (
+                <optgroup key={plat} label={`${platformEmoji(plat)}  ${plat} (${groups[plat].length})`}>
+                  {groups[plat].map((c) => {
+                    const taken = takenChannelIds.has(String(c.id))
+                    return (
+                      <option key={c.id} value={String(c.id)} disabled={taken}>
+                        {c.name} (@{c.username || '—'}){taken ? ' [taken]' : ''}
+                      </option>
+                    )
+                  })}
+                </optgroup>
+              ))
+            })()}
           </select>
         )}
       </div>
