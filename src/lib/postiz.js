@@ -1,7 +1,12 @@
 // SERVER-ONLY Postiz API client.
 // Env: POSTIZ_API_URL + POSTIZ_API_KEY
-// Public API path varies by Postiz install — we try `/public/v1`, `/api/public/v1`,
-// and legacy `/api/v1` in order.
+//
+// Flow per Postiz public API:
+// 1) POST /upload (multipart) — server-side upload media → returns { id, path }
+// 2) POST /posts — create post with image: [{ id: <uploadId> }] + platform settings
+//
+// Postiz nolak external media URLs (e.g. Supabase Storage) — image[].URL harus
+// di domain uploads.postiz.com, jadi kita HARUS upload-relay dulu.
 
 function getCreds() {
   const url = (process.env.POSTIZ_API_URL || '').replace(/\/$/, '')
@@ -11,7 +16,7 @@ function getCreds() {
   return { url, key }
 }
 
-async function postizFetch(path, init = {}) {
+async function postizJson(path, init = {}) {
   const { url, key } = getCreds()
   const headers = {
     'Authorization': key,
@@ -23,7 +28,7 @@ async function postizFetch(path, init = {}) {
   let json = null
   try { json = text ? JSON.parse(text) : null } catch {}
   if (!res.ok) {
-    const errMsg = json?.message || json?.error || text.slice(0, 240) || `HTTP ${res.status}`
+    const errMsg = json?.message || json?.error || text.slice(0, 400) || `HTTP ${res.status}`
     const err = new Error(`Postiz ${res.status} @ ${path}: ${errMsg}`)
     err.status = res.status
     err.path = path
@@ -33,29 +38,26 @@ async function postizFetch(path, init = {}) {
   return json
 }
 
-async function postizFetchWithFallback(paths, init) {
+async function postizJsonFallback(paths, init) {
   let lastErr
   for (const p of paths) {
-    try { return await postizFetch(p, init) }
+    try { return await postizJson(p, init) }
     catch (e) {
       lastErr = e
-      // Only fall through on 404 (path mismatch). Other errors (401/400/500) bubble
-      // because trying other paths won't help — the issue is elsewhere.
       if (e.status && e.status !== 404) throw e
     }
   }
   throw lastErr
 }
 
-// Fetch the workspace's connected channels/integrations from Postiz.
+// ── Channels / integrations ─────────────────────────────────────────
 export async function fetchPostizChannels() {
-  const data = await postizFetchWithFallback(
+  const data = await postizJsonFallback(
     ['/public/v1/integrations', '/api/public/v1/integrations', '/api/v1/integrations/list', '/api/v1/integrations'],
     { method: 'GET' }
   )
   const list = Array.isArray(data) ? data : (data?.integrations || data?.channels || data?.data || [])
   return list.map((c) => ({
-    // Postiz docs show integration.id is the DB id used in POST /posts body.
     id: c.id || c.identifier || c.channelId,
     name: c.name || c.profile?.name || c.username || 'Unknown',
     username: c.username || c.profile?.username || '',
@@ -65,55 +67,126 @@ export async function fetchPostizChannels() {
   })).filter((c) => c.id)
 }
 
-// Create a post on Postiz — either post now or schedule.
-// channelId: Postiz integration id (string/cuid)
-// content: caption text
-// mediaUrl: public URL of image OR video (Supabase Storage URL works)
-// scheduledFor: ISO timestamp, or null/undefined for post-now
-export async function createPostizPost({ channelId, content, mediaUrl, scheduledFor }) {
-  if (!channelId) throw new Error('channelId kosong — persona belum link ke Postiz channel')
-  const isScheduled = !!scheduledFor
+// ── Media upload relay ──────────────────────────────────────────────
+async function downloadMedia(url) {
+  const res = await fetch(url, { cache: 'no-store' })
+  if (!res.ok) throw new Error(`Gagal download media (${res.status}) dari ${url.slice(0, 80)}`)
+  const buffer = Buffer.from(await res.arrayBuffer())
+  const contentType = res.headers.get('content-type') || 'application/octet-stream'
+  const lastSeg = url.split('/').pop()?.split('?')[0] || 'media'
+  return { buffer, contentType, name: lastSeg }
+}
 
-  // Build body with integration as { id }. Per Postiz public API docs:
-  // https://docs.postiz.com/public-api/posts
-  const buildBody = (integration) => ({
+async function uploadToPostiz({ buffer, name, contentType }) {
+  const { url, key } = getCreds()
+  const paths = ['/public/v1/upload', '/api/public/v1/upload', '/api/v1/upload']
+  let lastErr
+  for (const path of paths) {
+    try {
+      const form = new FormData()
+      const blob = new Blob([buffer], { type: contentType })
+      form.append('file', blob, name)
+      const res = await fetch(`${url}${path}`, {
+        method: 'POST',
+        headers: { 'Authorization': key }, // no Content-Type — let fetch set multipart boundary
+        body: form,
+      })
+      const text = await res.text()
+      let json = null
+      try { json = text ? JSON.parse(text) : null } catch {}
+      if (!res.ok) {
+        const msg = json?.message || json?.error || text.slice(0, 240) || `HTTP ${res.status}`
+        const err = new Error(`Postiz upload ${res.status} @ ${path}: ${msg}`)
+        err.status = res.status
+        if (res.status !== 404) throw err
+        lastErr = err
+        continue
+      }
+      // Postiz upload returns { id, path, name, organizationId } — id is what posts.image[] wants.
+      const id = json?.id || json?.path || json?.url
+      if (!id) throw new Error('Postiz upload response gak include id/path: ' + JSON.stringify(json).slice(0, 200))
+      return { id, path: json.path || json.url || null, raw: json }
+    } catch (e) {
+      lastErr = e
+      if (e.status && e.status !== 404) throw e
+    }
+  }
+  throw lastErr
+}
+
+// ── Platform-specific default settings ──────────────────────────────
+function defaultSettings(platform) {
+  const p = (platform || '').toLowerCase()
+  if (p === 'tiktok') {
+    return {
+      privacy_level: 'PUBLIC_TO_EVERYONE',
+      duet: false,
+      stitch: false,
+      comment: true,
+      autoAddMusic: 'no',
+      brand_content_toggle: false,
+      brand_organic_toggle: false,
+      content_posting_method: 'DIRECT_POST',
+      title: '',
+    }
+  }
+  if (p === 'instagram' || p === 'instagram-standalone') {
+    return {
+      post_type: 'reel',
+      collaborators: [],
+    }
+  }
+  if (p === 'youtube' || p === 'youtube-standalone') {
+    return {
+      title: '',
+      type: 'public',
+    }
+  }
+  // Conservative default
+  return {}
+}
+
+// ── Create post ─────────────────────────────────────────────────────
+export async function createPostizPost({ channelId, content, mediaUrl, scheduledFor, platform }) {
+  if (!channelId) throw new Error('channelId kosong — persona belum link ke Postiz channel')
+
+  // 1) Upload media to Postiz first (TikTok rejects external URLs)
+  let imageField = []
+  if (mediaUrl) {
+    const media = await downloadMedia(mediaUrl)
+    const uploaded = await uploadToPostiz(media)
+    imageField = [{ id: String(uploaded.id) }]
+  }
+
+  const isScheduled = !!scheduledFor
+  const settings = defaultSettings(platform)
+
+  const body = {
     type: isScheduled ? 'schedule' : 'now',
     date: scheduledFor || new Date(Date.now() + 60_000).toISOString(),
     shortLink: false,
+    tags: [],
     posts: [{
-      integration,
+      integration: { id: String(channelId) },
       value: [{
         content: content || '',
-        image: mediaUrl ? [{ path: mediaUrl }] : [],
+        image: imageField,
       }],
+      settings,
     }],
-  })
+  }
 
   const paths = ['/public/v1/posts', '/api/public/v1/posts', '/api/v1/posts']
-  // Try { id } shape first (per docs), then fallback to plain string in case
-  // a self-hosted build expects that.
-  const shapes = [
-    { integration: { id: String(channelId) } },
-    { integration: String(channelId) },
-  ]
-
   let lastErr
   for (const path of paths) {
-    for (const s of shapes) {
-      try {
-        return await postizFetch(path, {
-          method: 'POST',
-          body: JSON.stringify(buildBody(s.integration)),
-        })
-      } catch (e) {
-        lastErr = e
-        // 404 -> try next path/shape. Other status codes -> bail (no point retrying).
-        if (e.status && e.status !== 404) {
-          throw new Error(`${e.message} (channel_id=${channelId})`)
-        }
+    try {
+      return await postizJson(path, { method: 'POST', body: JSON.stringify(body) })
+    } catch (e) {
+      lastErr = e
+      if (e.status && e.status !== 404) {
+        throw new Error(`${e.message} (channel_id=${channelId}, platform=${platform || '?'})`)
       }
     }
   }
-  // All combinations 404'd — surface the channel id so user can verify it exists in Postiz.
-  throw new Error(`${lastErr?.message || 'Postiz post gagal'} — channel_id=${channelId} gak match integration apapun di Postiz. Cek list channel di /posting → klik 🔄 Sync Channels → pastikan persona lu link ke channel yang valid.`)
+  throw new Error(`${lastErr?.message || 'Postiz post gagal'} — channel_id=${channelId}, platform=${platform || '?'}`)
 }

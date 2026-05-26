@@ -3,10 +3,15 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createPostizPost } from '@/lib/postiz'
 
+// Vercel Pro: allow up to 60s — we need time to download media + relay-upload
+// to Postiz before creating the post.
+export const maxDuration = 60
+
 // POST /api/postiz/post — actually push a scheduled_posts row to Postiz.
 // Body: { scheduled_post_id }
-// Reads the row, validates persona has postiz_channel_id, pushes to Postiz
-// (now OR scheduled depending on scheduled_for), updates row with response.
+// Reads the row, validates persona has postiz_channel_id, downloads media,
+// relays it to Postiz /upload, then creates the post with platform-specific
+// settings. Updates row with response.
 export async function POST(req) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -41,6 +46,7 @@ export async function POST(req) {
       content,
       mediaUrl,
       scheduledFor: sp.scheduled_for,
+      platform: sp.personas?.postiz_platform || null,
     })
 
     // Try to extract a returned id (Postiz response shape varies by version)
