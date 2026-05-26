@@ -45,6 +45,27 @@ export default function PostingClient({ workspaceId, initialPersonas }) {
     })
   }, [personas, channels])
 
+  // Channel IDs already taken by other personas (so we don't double-assign)
+  const takenChannelIds = useMemo(() => {
+    return new Set(personas.map((p) => p.postiz_channel_id).filter(Boolean).map(String))
+  }, [personas])
+
+  // Link / unlink a Postiz channel to a persona inline (no need to open /personas)
+  async function assignChannel(persona, channel) {
+    setErr('')
+    const patch = channel ? {
+      postiz_channel_id: String(channel.id),
+      postiz_channel_label: channel.name,
+      postiz_platform: channel.platform,
+    } : {
+      postiz_channel_id: null,
+      postiz_channel_label: null,
+      postiz_platform: null,
+    }
+    const { error } = await supabase.from('personas').update(patch).eq('id', persona.id)
+    if (error) setErr(error.message)
+  }
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
     return personaList.filter((p) => {
@@ -120,11 +141,13 @@ export default function PostingClient({ workspaceId, initialPersonas }) {
           </div>
         ) : (
           <div className="divide-y divide-[var(--border)]">
-            <div className="grid grid-cols-[2fr_1fr_1fr_1.5fr_auto] gap-3 px-5 py-2 text-[10px] uppercase text-[var(--muted)] font-semibold tracking-wider">
-              <div>Persona</div><div>Username</div><div>Status</div><div>Postiz Channel</div><div>Actions</div>
+            <div className="grid grid-cols-[2fr_1fr_1fr_2fr_auto] gap-3 px-5 py-2 text-[10px] uppercase text-[var(--muted)] font-semibold tracking-wider">
+              <div>Persona</div><div>Username</div><div>Status</div><div>Postiz Channel</div><div>Edit</div>
             </div>
             {filtered.map((p) => (
-              <PersonaRow key={p.id} persona={p} />
+              <PersonaRow key={p.id} persona={p}
+                channels={channels} takenChannelIds={takenChannelIds}
+                onAssign={(ch) => assignChannel(p, ch)} />
             ))}
           </div>
         )}
@@ -178,9 +201,9 @@ function FilterPill({ on, onClick, label }) {
   )
 }
 
-function PersonaRow({ persona: p }) {
+function PersonaRow({ persona: p, channels, takenChannelIds, onAssign }) {
   return (
-    <div className="grid grid-cols-[2fr_1fr_1fr_1.5fr_auto] gap-3 px-5 py-3 items-center text-sm">
+    <div className="grid grid-cols-[2fr_1fr_1fr_2fr_auto] gap-3 px-5 py-3 items-center text-sm">
       <div className="flex items-center gap-3 min-w-0">
         {p.avatar_url ? (
           <img src={p.avatar_url} alt="" className="w-9 h-9 rounded-full object-cover flex-shrink-0" />
@@ -196,24 +219,48 @@ function PersonaRow({ persona: p }) {
       </div>
       <div className="text-xs text-[#93c5fd] truncate">@{p.username || '—'}</div>
       <div>
-        {p.isConnected ? (
+        {p.isConnected && p.matchedChannel ? (
           <span className="text-[10px] font-semibold text-green-400 border border-green-500/40 px-2 py-0.5 rounded">✓ Terhubung</span>
+        ) : p.postiz_channel_id ? (
+          <span className="text-[10px] font-semibold text-orange-400 border border-orange-500/40 px-2 py-0.5 rounded" title="ID tersimpan, channel gak match di Postiz sync">⚠ Drift</span>
         ) : (
           <span className="text-[10px] font-semibold text-red-400 border border-red-500/40 px-2 py-0.5 rounded">⊘ Belum</span>
         )}
       </div>
-      <div className="text-xs truncate">
+      <div className="text-xs min-w-0">
         {p.matchedChannel ? (
-          <span><strong>{p.matchedChannel.name}</strong> <span className="text-[var(--muted)] uppercase text-[9px]">{p.matchedChannel.platform}</span></span>
-        ) : p.postiz_channel_id ? (
-          <span className="text-[var(--muted)]">ID tersimpan, channel gak ditemukan di Postiz</span>
+          <div className="flex items-center gap-2">
+            <div className="flex-1 min-w-0">
+              <div className="font-semibold truncate">{p.matchedChannel.name}</div>
+              <div className="text-[9px] text-[var(--muted)]">@{p.matchedChannel.username || ''} <span className="uppercase">· {p.matchedChannel.platform}</span></div>
+            </div>
+            <button onClick={() => onAssign(null)} className="text-[10px] text-red-400 hover:underline" title="Unlink">unlink</button>
+          </div>
+        ) : !channels ? (
+          <span className="text-[var(--muted2)] text-[10px]">Klik <strong>🔄 Sync Channels</strong> di atas ☝️</span>
+        ) : channels.length === 0 ? (
+          <span className="text-[var(--muted2)] text-[10px]">Sync kosong — gak ada channel di Postiz</span>
         ) : (
-          <span className="text-[var(--muted)]">—</span>
+          <select onChange={(e) => {
+              const ch = channels.find((c) => String(c.id) === e.target.value)
+              if (ch) onAssign(ch)
+              e.target.value = ''
+            }}
+            defaultValue=""
+            className="text-xs w-full px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)]">
+            <option value="">{p.postiz_channel_id ? '⚠ ID lama — pilih ulang' : '— pilih channel —'}</option>
+            {channels.map((c) => {
+              const taken = takenChannelIds.has(String(c.id))
+              return (
+                <option key={c.id} value={String(c.id)} disabled={taken}>
+                  {c.name} (@{c.username || '—'}) · {c.platform}{taken ? ' [taken]' : ''}
+                </option>
+              )
+            })}
+          </select>
         )}
       </div>
-      <div className="text-xs text-[var(--muted)] flex gap-2">
-        <button title="Buka di Personas tab" onClick={() => window.location.href = '/personas'}>↗</button>
-      </div>
+      <a href="/personas" className="text-xs text-[var(--muted)] hover:text-white" title="Edit lengkap di Personas">✎</a>
     </div>
   )
 }
