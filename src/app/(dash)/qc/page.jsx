@@ -11,10 +11,13 @@ export default async function QCPage() {
   const ws = memberships?.[0]?.workspaces
   if (!ws) return <div className="p-4 text-sm text-[var(--muted)]">No workspace</div>
 
-  const { data: results } = await supabase
-    .from('results').select('*, personas(id, name, username, avatar_url)')
-    .eq('workspace_id', ws.id).not('qc_status', 'is', null)
-    .order('created_at', { ascending: false }).limit(200)
+  const [{ data: results }, { data: personas }] = await Promise.all([
+    supabase.from('results').select('*, personas(id, name, username, avatar_url, postiz_channel_id)')
+      .eq('workspace_id', ws.id).not('qc_status', 'is', null)
+      .order('created_at', { ascending: false }),
+    supabase.from('personas').select('id, name, username, avatar_url, postiz_channel_id')
+      .eq('workspace_id', ws.id).order('created_at', { ascending: false }),
+  ])
 
-  return <QCClient workspaceId={ws.id} initialResults={results || []} />
+  return <QCClient workspaceId={ws.id} userId={user.id} initialResults={results || []} personas={personas || []} />
 }

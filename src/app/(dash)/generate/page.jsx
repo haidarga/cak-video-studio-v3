@@ -12,15 +12,12 @@ export default async function GeneratePage() {
   const ws = memberships?.[0]?.workspaces
   if (!ws) return <div className="p-4 text-sm text-[var(--muted)]">No workspace</div>
 
-  const [{ data: personas }, { data: jobs }, brandRes] = await Promise.all([
+  const [{ data: personas }, { data: refs }, brandRes] = await Promise.all([
     supabase
       .from('personas')
       .select('id, name, username, avatar_url, role_label, postiz_channel_id, persona_refs(refs(id, fal_url, label, knowledge, kind))')
       .eq('workspace_id', ws.id).order('created_at', { ascending: false }),
-    supabase
-      .from('jobs')
-      .select('*')
-      .eq('workspace_id', ws.id).order('created_at', { ascending: false }).limit(25),
+    supabase.from('refs').select('id, fal_url, label, knowledge, kind').eq('workspace_id', ws.id).order('created_at', { ascending: false }),
     ws.active_brand_id
       ? supabase.from('brands').select('id, name, notes, config').eq('id', ws.active_brand_id).single()
       : Promise.resolve({ data: null }),
@@ -31,8 +28,8 @@ export default async function GeneratePage() {
       workspaceId={ws.id}
       userId={user.id}
       activeBrand={brandRes?.data || null}
-      initialPersonas={personas || []}
-      initialJobs={jobs || []}
+      personas={personas || []}
+      workspaceRefs={refs || []}
     />
   )
 }
