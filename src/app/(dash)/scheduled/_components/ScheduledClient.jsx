@@ -169,6 +169,23 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
 function ScheduleRow({ sp, onCancel, onDelete, onRetry }) {
   const r = sp.results
   const p = sp.personas
+  const [showRaw, setShowRaw] = useState(false)
+
+  // Detect platform/media mismatch — TikTok cuma terima video, kalau image yg
+  // dikirim, Postiz queue tapi TikTok bakal reject silent.
+  const platformLower = (p?.postiz_platform || '').toLowerCase()
+  const mismatch =
+    (platformLower.includes('tiktok') && r?.type === 'image') ||
+    (platformLower.includes('youtube') && r?.type === 'image')
+
+  // Try to extract post URL from Postiz response so user can verify langsung
+  const responseUrl =
+    sp.external_response?.url
+    || sp.external_response?.posts?.[0]?.releaseURL
+    || sp.external_response?.[0]?.releaseURL
+    || sp.external_response?.releaseURL
+    || null
+
   return (
     <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-3 flex items-start gap-3">
       <div className="w-14 aspect-[9/16] rounded overflow-hidden bg-black flex-shrink-0">
@@ -182,13 +199,37 @@ function ScheduleRow({ sp, onCancel, onDelete, onRetry }) {
           {p?.name && <>→ <strong>{p.name}</strong> @{p.username} {p.postiz_platform && <span className="uppercase text-[9px]">· {p.postiz_platform}</span>}</>}
         </div>
         {sp.caption && <div className="text-[10px] text-[var(--muted)] mt-1 line-clamp-1">📝 {sp.caption}</div>}
+
+        {mismatch && (
+          <div className="text-[10px] text-yellow-400 mt-1 bg-yellow-900/20 border border-yellow-700/40 px-2 py-1 rounded">
+            ⚠ Mismatch: lu kirim <strong>{r.type}</strong> ke <strong>{p.postiz_platform}</strong> yang cuma terima video. Postiz queue diterima tapi platform bakal reject silent. Generate VIDEO dari grid dulu di /generate.
+          </div>
+        )}
+
         {sp.status === 'failed' && sp.error && (
-          <div className="text-[10px] text-red-400 mt-1 bg-red-900/20 border border-red-900/40 px-2 py-1 rounded">
+          <div className="text-[10px] text-red-400 mt-1 bg-red-900/20 border border-red-900/40 px-2 py-1 rounded whitespace-pre-wrap">
             ⚠ {sp.error}
           </div>
         )}
         {sp.status === 'posted' && sp.posted_at && (
-          <div className="text-[10px] text-green-400 mt-1">✓ Posted {new Date(sp.posted_at).toLocaleString()}</div>
+          <div className="text-[10px] text-green-400 mt-1">
+            ✓ Submitted ke Postiz {new Date(sp.posted_at).toLocaleString()}
+            {responseUrl && <> · <a href={responseUrl} target="_blank" rel="noreferrer" className="underline">Liat post →</a></>}
+          </div>
+        )}
+
+        {/* Raw Postiz response — buat debug kalau status posted tapi platform gak nongol */}
+        {sp.external_response && (
+          <div className="mt-1">
+            <button onClick={() => setShowRaw((s) => !s)} className="text-[9px] text-[var(--muted)] underline hover:text-white">
+              {showRaw ? '▼ Hide' : '▶ Postiz response (debug)'}
+            </button>
+            {showRaw && (
+              <pre className="text-[9px] text-[var(--muted)] mt-1 bg-[var(--surface2)] border border-[var(--border)] p-2 rounded max-h-40 overflow-auto whitespace-pre-wrap break-all">
+                {JSON.stringify(sp.external_response, null, 2)}
+              </pre>
+            )}
+          </div>
         )}
       </div>
       <div className="text-xs text-right flex-shrink-0">
@@ -211,6 +252,12 @@ function ScheduleRow({ sp, onCancel, onDelete, onRetry }) {
 function ScheduleModal({ result, onClose, onSubmit }) {
   const [drafting, setDrafting] = useState(false)
   const [draftErr, setDraftErr] = useState('')
+
+  // Warning kalau image dikirim ke platform yg cuma terima video
+  const platformLower = (result.personas?.postiz_platform || '').toLowerCase()
+  const mediaMismatch =
+    (platformLower.includes('tiktok') && result.type === 'image') ||
+    (platformLower.includes('youtube') && result.type === 'image')
 
   async function aiDraftCaption() {
     setDrafting(true); setDraftErr('')
@@ -255,6 +302,11 @@ function ScheduleModal({ result, onClose, onSubmit }) {
               <div className="text-xs text-[var(--muted)]">→ <strong>{result.personas?.name}</strong> @{result.personas?.username}</div>
               {!channelOK && (
                 <div className="text-xs text-red-400 mt-2">⚠ Persona ini belum konek Postiz channel. Set Postiz Integration ID di /personas dulu.</div>
+              )}
+              {mediaMismatch && (
+                <div className="text-xs text-yellow-400 mt-2 bg-yellow-900/20 border border-yellow-700/40 px-2 py-1.5 rounded">
+                  ⚠ <strong>Mismatch:</strong> lu kirim <code>{result.type}</code> ke platform <code>{platformLower}</code> yang cuma terima video. Postiz bakal queue tapi {platformLower} reject silent — gak bakal nongol di feed. Generate VIDEO dari grid dulu di /generate.
+                </div>
               )}
             </div>
           </div>

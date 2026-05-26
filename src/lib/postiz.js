@@ -181,9 +181,11 @@ export async function createPostizPost({ channelId, content, mediaUrl, scheduled
   const isScheduled = !!scheduledFor
   const settings = defaultSettings(platform)
 
+  // For 'now' mode, use current ISO (NOT +60s future, which would actually
+  // schedule it ~1 menit di depan and bisa bingungin user).
   const body = {
     type: isScheduled ? 'schedule' : 'now',
-    date: scheduledFor || new Date(Date.now() + 60_000).toISOString(),
+    date: scheduledFor || new Date().toISOString(),
     shortLink: false,
     tags: [],
     posts: [{
