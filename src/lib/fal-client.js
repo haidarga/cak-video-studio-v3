@@ -77,6 +77,31 @@ export function buildVidInput(vidModel, { prompt, image_url, reference_urls, dur
   return { prompt, image_url, duration: parseInt(duration) || 5, aspect_ratio }
 }
 
+// Build the 3×3 storyboard grid prompt from structured panels.
+// Output asks the image model to render ONE storyboard sheet (header + 3x3
+// grid of cells, each cell with scene num, time range, photo, and 3 text
+// blocks: Visual / Dialog / Keterangan), mirroring v2's PipelineTab logic.
+export function buildStoryboardGridPrompt(panels = [], ar = '9:16', concept = '') {
+  const nine = panels.slice(0, 9)
+  let t = 0
+  const cells = nine.map((p) => {
+    const dur = Math.max(1, parseInt(p.seconds) || 2)
+    const range = `${t}-${t + dur} detik`
+    t += dur
+    const lines = [`Scene ${p.n} (${range}) — ${(p.title || '').trim()}`]
+    lines.push(`   Visual: ${(p.visual || p.scene || '').trim()}`)
+    if (p.dialog) lines.push(`   Dialog/VO: "${p.dialog.trim()}"`)
+    lines.push(`   Keterangan: ${(p.purpose || p.onscreen || '').trim()}`)
+    return lines.join('\n')
+  }).join('\n')
+  const header = (concept || 'STORYBOARD 3x3').trim().toUpperCase()
+  return `Design ONE professional STORYBOARD SHEET image — an ad-agency shot-breakdown TABLE — clean white background, ${ar} canvas.
+LAYOUT: header bar with the title "${header}". Below, a 3x3 GRID of 9 equal cells in 3 rows x 3 columns, thin grey table lines. Each cell top-to-bottom: scene number in a circle badge + time range in bold; a photographic still; a small white block with three labeled lines (Visual / Dialog/VO / Keterangan).
+HARD RULES: the SAME character(s) and product packaging CONSISTENT across all relevant cells. Cohesive lighting & color grade. Crisp, correctly-spelled, legible Indonesian text. No watermark.
+THE 9 CELLS, in order (left to right, top to bottom):
+${cells}`
+}
+
 export function productDirective(notes) {
   const n = (notes || '').trim()
   if (!n) return ''

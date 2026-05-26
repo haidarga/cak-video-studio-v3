@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import {
   falRun, buildImgInput, buildVidInput, productDirective,
+  buildStoryboardGridPrompt,
   IMG_QUALITY, VID_STABILITY, VIDEO_MODELS, IMAGE_MODELS,
 } from '@/lib/fal-client'
 
@@ -153,6 +154,16 @@ function PersonaSection({ persona, workspaceRefs, state, onPatch, globalConfig, 
       return { shots: next }
     })
   }
+  function patchPanel(shotIdx, panelIdx, key, value) {
+    onPatch((s) => {
+      const next = [...s.shots]
+      const shot = next[shotIdx]
+      const panels = [...(shot.raw.panels || [])]
+      panels[panelIdx] = { ...panels[panelIdx], [key]: value }
+      next[shotIdx] = { ...shot, raw: { ...shot.raw, panels } }
+      return { shots: next }
+    })
+  }
 
   const selectedRefs = useMemo(() => {
     const all = new Map()
@@ -175,17 +186,47 @@ function PersonaSection({ persona, workspaceRefs, state, onPatch, globalConfig, 
       })
       const data = await res.json()
       if (!data.ok) throw new Error(data.error)
-      const items = data.parsed.shots || data.parsed.panels || []
-      const shotsInit = items.map((it, i) => ({
-        id: `${persona.id}-${i}-${Date.now()}`,
-        raw: globalConfig.mode === 'storyboard'
-          ? { storyboard: data.parsed, panel_idx: i, image_prompt: '', video_motion: it.video_motion || '', dialogue: it.dialog || it.dialogue || '', duration: it.seconds || 2, shot_label: it.title || `Panel ${it.n}` }
-          : { image_prompt: it.image_prompt || '', video_motion: it.video_motion || '', dialogue: it.dialogue || '', duration: it.duration || 5, shot_label: `Shot ${it.shot}` },
-        label: globalConfig.mode === 'storyboard' ? `${persona.name} — ${it.title || 'Panel ' + (i + 1)}` : `${persona.name} — Shot ${it.shot || i + 1}`,
-        image: { status: 'idle' },
-        video: { status: 'idle' },
-        approved: false,
-      }))
+
+      // Storyboard mode = ONE shot containing all 9 panels (single grid image
+      // + single 15s video). Per-shot mode = N separate shots.
+      let shotsInit
+      if (globalConfig.mode === 'storyboard') {
+        const panels = data.parsed.panels || []
+        shotsInit = [{
+          id: `${persona.id}-storyboard-${Date.now()}`,
+          raw: {
+            concept: data.parsed.concept || '',
+            panels: panels.map((p) => ({
+              n: p.n, title: p.title || '', visual: p.visual || p.scene || '',
+              dialog: p.dialog || '', onscreen: p.onscreen || p.purpose || '',
+              seconds: p.seconds || 2, shot_type: p.shot_type || '',
+            })),
+            video_motion: 'Smooth camera transitions through 9 scenes with subtle focus pulls and natural pacing',
+            duration: panels.reduce((sum, p) => sum + (parseInt(p.seconds) || 2), 0) || 15,
+            shot_label: 'Storyboard 3×3',
+          },
+          label: `${persona.name} — Storyboard`,
+          image: { status: 'idle' },
+          video: { status: 'idle' },
+          approved: false,
+        }]
+      } else {
+        const items = data.parsed.shots || []
+        shotsInit = items.map((it, i) => ({
+          id: `${persona.id}-${i}-${Date.now()}`,
+          raw: {
+            image_prompt: it.image_prompt || '',
+            video_motion: it.video_motion || '',
+            dialogue: it.dialogue || '',
+            duration: it.duration || 5,
+            shot_label: `Shot ${it.shot}`,
+          },
+          label: `${persona.name} — Shot ${it.shot || i + 1}`,
+          image: { status: 'idle' },
+          video: { status: 'idle' },
+          approved: false,
+        }))
+      }
       onPatch({ parsed: data.parsed, shots: shotsInit })
     } catch (e) { onErr(`${persona.name}: ${e.message}`) }
     onPatch({ busy: false })
@@ -199,7 +240,13 @@ function PersonaSection({ persona, workspaceRefs, state, onPatch, globalConfig, 
       const productKnowledge = selectedRefs.map((r) => (r.knowledge || '').trim()).filter(Boolean).join('\n')
       const directive = productDirective(productKnowledge || activeBrand?.notes)
       const refUrls = selectedRefs.map((r) => r.fal_url).filter(Boolean)
-      const fullPrompt = `${shot.raw.image_prompt || shot.raw.shot_label}. ${globalConfig.ar} composition. CONTINUITY: keep characters & product identical to references.${directive} ${IMG_QUALITY}`
+
+      // Storyboard mode = ONE grid image built from all 9 panels.
+      // Per-shot mode = single image from this shot's image_prompt.
+      const basePrompt = shot.raw.panels
+        ? buildStoryboardGridPrompt(shot.raw.panels, globalConfig.ar, shot.raw.concept)
+        : (shot.raw.image_prompt || shot.raw.shot_label)
+      const fullPrompt = `${basePrompt}. ${globalConfig.ar} composition. CONTINUITY: keep characters & product identical to references.${directive} ${IMG_QUALITY}`
       const imgInput = buildImgInput(globalConfig.imgModel, { prompt: fullPrompt, refUrls, ar: globalConfig.ar })
       const imgResult = await falRun(globalConfig.imgModel, imgInput, { onProgress: (p) => patchShot(idx, { image: { status: p } }) })
       const imageUrl = imgResult.images?.[0]?.url
@@ -216,9 +263,21 @@ function PersonaSection({ persona, workspaceRefs, state, onPatch, globalConfig, 
     patchShot(idx, { video: { status: 'generating' } })
     try {
       const refUrls = selectedRefs.map((r) => r.fal_url).filter(Boolean)
-      const motion = shot.raw.dialogue
-        ? `${shot.raw.video_motion}. The subject speaks in fluent native ${globalConfig.lang}: "${shot.raw.dialogue}". ${VID_STABILITY}`
-        : `${shot.raw.video_motion || 'Natural cinematic motion'}. ${VID_STABILITY}`
+
+      // Storyboard: dialogue = all panel dialogs concatenated; flows across 9 scenes.
+      // Per-shot: dialogue = this shot's single line.
+      let motion
+      if (shot.raw.panels) {
+        const allDialogs = shot.raw.panels.map((p) => p.dialog).filter(Boolean).join(' ')
+        const flow = shot.raw.video_motion || 'Smooth transitions through 9 storyboard scenes'
+        motion = allDialogs
+          ? `${flow}. Continuous multi-scene sequence flowing through 9 storyboard panels in order. The narrator/subjects speak naturally in ${globalConfig.lang}: "${allDialogs}". ${VID_STABILITY}`
+          : `${flow}. Continuous sequence through 9 storyboard panels. ${VID_STABILITY}`
+      } else {
+        motion = shot.raw.dialogue
+          ? `${shot.raw.video_motion}. The subject speaks in fluent native ${globalConfig.lang}: "${shot.raw.dialogue}". ${VID_STABILITY}`
+          : `${shot.raw.video_motion || 'Natural cinematic motion'}. ${VID_STABILITY}`
+      }
       const vidInput = buildVidInput(globalConfig.vidModel, {
         prompt: motion, image_url: shot.image.url, reference_urls: refUrls,
         duration: shot.raw.duration || 5, aspect_ratio: globalConfig.ar,
@@ -345,16 +404,28 @@ function PersonaSection({ persona, workspaceRefs, state, onPatch, globalConfig, 
 
         {state.shots.length > 0 && (
           <div className="pt-3 border-t border-[var(--border)] space-y-3">
-            <div className="text-[10px] uppercase font-semibold text-[var(--muted)]">📝 Shots — edit text, gen image, approve, gen video</div>
+            <div className="text-[10px] uppercase font-semibold text-[var(--muted)]">
+              📝 {globalConfig.mode === 'storyboard' ? 'Storyboard — edit 9 panel, gen grid, approve, gen video' : 'Shots — edit text, gen image, approve, gen video'}
+            </div>
             {state.shots.map((shot, i) => (
-              <ShotEditor key={shot.id} shot={shot} idx={i}
-                onChangeRaw={(key, value) => patchShotRaw(i, key, value)}
-                onGenImage={() => genImageForShot(i)}
-                onGenVideo={() => genVideoForShot(i)}
-                onApprove={(v) => patchShot(i, { approved: v })}
-                onRename={(label) => { patchShot(i, { label }); renameResult(shot.video?.result_id, label) }}
-                onSendQC={() => sendToQC(i, shot.video?.result_id)}
-                onDelete={() => deleteResult(i, shot.video?.result_id)} />
+              shot.raw.panels
+                ? <StoryboardEditor key={shot.id} shot={shot} idx={i} ar={globalConfig.ar}
+                    onChangeRaw={(key, value) => patchShotRaw(i, key, value)}
+                    onChangePanel={(pi, key, value) => patchPanel(i, pi, key, value)}
+                    onGenImage={() => genImageForShot(i)}
+                    onGenVideo={() => genVideoForShot(i)}
+                    onApprove={(v) => patchShot(i, { approved: v })}
+                    onRename={(label) => { patchShot(i, { label }); renameResult(shot.video?.result_id, label) }}
+                    onSendQC={() => sendToQC(i, shot.video?.result_id)}
+                    onDelete={() => deleteResult(i, shot.video?.result_id)} />
+                : <ShotEditor key={shot.id} shot={shot} idx={i}
+                    onChangeRaw={(key, value) => patchShotRaw(i, key, value)}
+                    onGenImage={() => genImageForShot(i)}
+                    onGenVideo={() => genVideoForShot(i)}
+                    onApprove={(v) => patchShot(i, { approved: v })}
+                    onRename={(label) => { patchShot(i, { label }); renameResult(shot.video?.result_id, label) }}
+                    onSendQC={() => sendToQC(i, shot.video?.result_id)}
+                    onDelete={() => deleteResult(i, shot.video?.result_id)} />
             ))}
           </div>
         )}
@@ -461,6 +532,139 @@ function ShotEditor({ shot, idx, onChangeRaw, onGenImage, onGenVideo, onApprove,
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+function StoryboardEditor({ shot, idx, ar, onChangeRaw, onChangePanel, onGenImage, onGenVideo, onApprove, onRename, onSendQC, onDelete }) {
+  const [editing, setEditing] = useState(false)
+  const [label, setLabel] = useState(shot.label || '')
+  const [showPanels, setShowPanels] = useState(true)
+  const imgStatus = shot.image?.status || 'idle'
+  const vidStatus = shot.video?.status || 'idle'
+  const panels = shot.raw.panels || []
+  const totalSec = panels.reduce((s, p) => s + (parseInt(p.seconds) || 2), 0)
+  const aspectClass = ar === '16:9' ? 'aspect-video' : ar === '1:1' ? 'aspect-square' : 'aspect-[9/16]'
+
+  return (
+    <div className={`bg-[var(--surface2)] border rounded p-3 ${shot.approved ? 'border-[var(--accent)]' : 'border-[var(--border)]'}`}>
+      {/* Header */}
+      <div className="flex items-center justify-between gap-2 mb-3">
+        {editing ? (
+          <input value={label} onChange={(e) => setLabel(e.target.value)}
+            onBlur={() => { setEditing(false); if (label !== shot.label) onRename(label) }}
+            onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur() }}
+            autoFocus className="flex-1 text-sm px-2 py-1 rounded bg-[var(--surface)] border border-[var(--accent)] focus:outline-none" />
+        ) : (
+          <div onDoubleClick={() => setEditing(true)} className="text-sm font-bold cursor-text flex-1 truncate" title="double-click rename">
+            🗂 {shot.label}
+            <span className="ml-2 text-[var(--muted2)] font-normal text-xs">{totalSec}s total · {panels.length} panel</span>
+          </div>
+        )}
+        <div className="flex gap-1">
+          {shot.video?.url && (
+            <button onClick={onSendQC} title="Send to QC" className="text-xs px-2 py-1 rounded bg-[var(--surface)] border border-[var(--border)] hover:bg-[var(--border)] font-semibold">🧪</button>
+          )}
+          <button onClick={onDelete} title="Hapus" className="text-xs px-2 py-1 rounded text-red-400 hover:bg-[var(--surface)]">🗑</button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-4">
+        {/* Left: grid image preview + actions */}
+        <div>
+          <div className={`${aspectClass} bg-black rounded overflow-hidden border border-[var(--border)] relative`}>
+            {shot.video?.url ? (
+              <video src={shot.video.url} controls muted loop playsInline className="w-full h-full object-cover" />
+            ) : shot.image?.url ? (
+              <img src={shot.image.url} alt="" className="w-full h-full object-cover" />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center text-[10px] text-[var(--muted)] text-center p-2">
+                {imgStatus === 'idle' ? 'no grid yet — klik 🖼 Gen Grid' : imgStatus}
+              </div>
+            )}
+            {imgStatus !== 'idle' && imgStatus !== 'done' && imgStatus !== 'error' && (
+              <div className="absolute bottom-1 left-1 right-1 text-[10px] bg-black/80 text-white px-1.5 py-0.5 rounded truncate">⏳ img: {imgStatus}</div>
+            )}
+            {vidStatus !== 'idle' && vidStatus !== 'done' && vidStatus !== 'error' && (
+              <div className="absolute bottom-1 left-1 right-1 text-[10px] bg-orange-600 text-white px-1.5 py-0.5 rounded truncate">🎬 vid: {vidStatus}</div>
+            )}
+            {imgStatus === 'error' && (
+              <div className="absolute inset-x-1 bottom-1 text-[10px] bg-red-700 text-white px-1.5 py-0.5 rounded">⚠ {shot.image.error?.slice(0, 60)}</div>
+            )}
+            {vidStatus === 'error' && (
+              <div className="absolute inset-x-1 bottom-1 text-[10px] bg-red-700 text-white px-1.5 py-0.5 rounded">⚠ {shot.video.error?.slice(0, 60)}</div>
+            )}
+          </div>
+
+          <div className="mt-2 flex gap-1">
+            <button onClick={onGenImage} disabled={imgStatus === 'generating' || vidStatus === 'generating'}
+              className="flex-1 text-xs px-2 py-1.5 rounded bg-blue-500/80 hover:bg-blue-500 text-white font-semibold disabled:opacity-50">
+              {shot.image?.url ? '🔁 Re-gen Grid' : '🖼 Gen Grid'}
+            </button>
+            <label className={`flex items-center gap-1 px-2 py-1.5 rounded cursor-pointer text-xs font-semibold ${shot.approved ? 'bg-green-500/30 text-green-300 border border-green-500/50' : 'bg-[var(--surface)] border border-[var(--border)] text-[var(--muted)]'}`}>
+              <input type="checkbox" checked={shot.approved} disabled={!shot.image?.url} onChange={(e) => onApprove(e.target.checked)} className="w-3 h-3" />
+              OK
+            </label>
+          </div>
+          {shot.image?.url && (
+            <button onClick={onGenVideo} disabled={vidStatus === 'generating' || imgStatus === 'generating'}
+              className="w-full mt-1 text-xs px-2 py-1.5 rounded bg-[var(--accent)] text-white font-semibold disabled:opacity-50">
+              {shot.video?.url ? '🔁 Re-gen Video' : `🎬 Gen Video (${totalSec || 15}s)`}
+            </button>
+          )}
+        </div>
+
+        {/* Right: concept + motion + 9 panels editable */}
+        <div className="space-y-3 min-w-0">
+          <FieldRow label="📜 Konsep Storyboard">
+            <input value={shot.raw.concept || ''} onChange={(e) => onChangeRaw('concept', e.target.value)}
+              placeholder="One-line concept (e.g. SEBUAH IBU MENYADARI ANCAMAN OBESITAS...)"
+              className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)]" />
+          </FieldRow>
+          <FieldRow label="🎥 Video Motion (transisi antar scene, max 30 kata)">
+            <textarea rows={2} value={shot.raw.video_motion || ''} onChange={(e) => onChangeRaw('video_motion', e.target.value)}
+              placeholder="Smooth transitions between scenes, subtle focus pulls..."
+              className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] resize-y" />
+          </FieldRow>
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[9px] uppercase text-[var(--muted)] font-semibold tracking-wider">9 Panel — edit per scene</div>
+              <button onClick={() => setShowPanels((s) => !s)} className="text-[10px] text-[var(--muted)] underline hover:text-white">
+                {showPanels ? 'Hide panels' : 'Show panels'}
+              </button>
+            </div>
+            {showPanels && (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
+                {panels.map((panel, pi) => (
+                  <PanelCard key={pi} panel={panel} onChange={(key, value) => onChangePanel(pi, key, value)} />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PanelCard({ panel, onChange }) {
+  return (
+    <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-2">
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <span className="w-5 h-5 rounded-full bg-[var(--accent)] text-white text-[10px] flex items-center justify-center font-bold flex-shrink-0">{panel.n}</span>
+        <input value={panel.title || ''} onChange={(e) => onChange('title', e.target.value)}
+          placeholder="TITLE" className="flex-1 min-w-0 text-[11px] px-1.5 py-0.5 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] font-bold uppercase" />
+        <input type="number" min={1} max={5} value={panel.seconds || 2} onChange={(e) => onChange('seconds', parseInt(e.target.value) || 2)}
+          className="w-12 text-[10px] px-1 py-0.5 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] text-center" title="seconds" />
+        <span className="text-[9px] text-[var(--muted)]">s</span>
+      </div>
+      <textarea rows={2} value={panel.visual || ''} onChange={(e) => onChange('visual', e.target.value)}
+        placeholder="📷 Visual..." className="w-full text-[10px] px-1.5 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] mb-1 resize-none" />
+      <textarea rows={2} value={panel.dialog || ''} onChange={(e) => onChange('dialog', e.target.value)}
+        placeholder='💬 "Dialog/VO..."' className="w-full text-[10px] px-1.5 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] text-[#93c5fd] italic mb-1 resize-none" />
+      <textarea rows={1} value={panel.onscreen || ''} onChange={(e) => onChange('onscreen', e.target.value)}
+        placeholder="📝 Keterangan..." className="w-full text-[10px] px-1.5 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] text-[var(--muted)] resize-none" />
     </div>
   )
 }
