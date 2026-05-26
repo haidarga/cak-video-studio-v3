@@ -41,13 +41,15 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
       setErr(`${result.personas?.name || 'Persona'} belum konek ke Postiz channel — set di /posting`)
       return
     }
-    // 1. Insert DB row with pending status.
+    // 1. Insert DB row. Use status='posting' (already in enum) as initial —
+    // /api/postiz/post takes over within ms and transitions to posted/scheduled/failed.
+    // (Earlier draft used 'pending' which needed an enum migration; skipped.)
     const { data: sp, error } = await supabase.from('scheduled_posts').insert({
       workspace_id: workspaceId,
       result_id: result.id,
       persona_id: result.personas.id,
       scheduled_for: scheduledFor || null,
-      status: 'pending',
+      status: 'posting',
       caption: caption || null,
       created_by: userId,
     }).select('id').single()
@@ -199,7 +201,7 @@ function ScheduleRow({ sp, onCancel, onDelete, onRetry }) {
       </div>
       <div className="flex flex-col gap-1 flex-shrink-0">
         {sp.status === 'failed' && <button onClick={onRetry} className="text-[10px] text-orange-400 hover:underline font-semibold">↻ Retry</button>}
-        {(sp.status === 'scheduled' || sp.status === 'pending') && <button onClick={onCancel} className="text-[10px] text-orange-400 hover:underline">Cancel</button>}
+        {sp.status === 'scheduled' && <button onClick={onCancel} className="text-[10px] text-orange-400 hover:underline">Cancel</button>}
         <button onClick={onDelete} className="text-[10px] text-red-400 hover:underline">Hapus</button>
       </div>
     </div>

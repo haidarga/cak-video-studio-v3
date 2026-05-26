@@ -81,27 +81,64 @@ OUTPUT (JSON only):
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.9, maxOutputTokens: 1024, responseMimeType: 'application/json' },
+          generationConfig: { temperature: 0.85, maxOutputTokens: 2048, responseMimeType: 'application/json' },
         }),
       }
     )
     const data = await res.json()
     if (data.error) throw new Error(data.error.message)
-    if (!data.candidates?.length) throw new Error('Gemini blocked (safety?)')
-    let text = data.candidates[0].content.parts[0].text || ''
-    text = text.replace(/```json|```/g, '').trim()
-    const first = text.indexOf('{')
-    const last = text.lastIndexOf('}')
-    if (first >= 0 && last > first) text = text.slice(first, last + 1)
-    const parsed = JSON.parse(text)
+    if (!data.candidates?.length) {
+      const reason = data.promptFeedback?.blockReason || 'unknown'
+      throw new Error(`Gemini ngeblock (${reason}) — coba brand notes / persona prompt yang lebih netral.`)
+    }
+    const rawText = data.candidates[0].content?.parts?.[0]?.text || ''
+    if (!rawText.trim()) throw new Error('Gemini balik kosong — finishReason: ' + (data.candidates[0].finishReason || '?'))
+
+    // Try strict JSON parse first; fall back to regex extraction so a corrupt
+    // JSON (unterminated string, etc) still yields a usable caption.
+    const parsed = parseCaptionJson(rawText)
+    if (!parsed.caption) throw new Error('Gemini gak ngasih caption — output: ' + rawText.slice(0, 200))
+
     const tags = (parsed.hashtags || [])
       .map((t) => String(t).trim().replace(/^#/, ''))
       .filter(Boolean)
       .map((t) => `#${t}`)
       .join(' ')
-    const full = (parsed.caption || '').trim() + (tags ? `\n\n${tags}` : '')
+    const full = parsed.caption.trim() + (tags ? `\n\n${tags}` : '')
     return NextResponse.json({ ok: true, caption: full, hashtags: parsed.hashtags || [] })
   } catch (e) {
     return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: 500 })
   }
+}
+
+// Robust parser: tries JSON.parse first, then regex-extract on failure.
+// Handles malformed responses (unterminated strings, trailing commas,
+// markdown fences) without throwing.
+function parseCaptionJson(rawText) {
+  let text = rawText.replace(/```json|```/g, '').trim()
+  const first = text.indexOf('{')
+  const last = text.lastIndexOf('}')
+  if (first >= 0 && last > first) text = text.slice(first, last + 1)
+
+  // Attempt 1: clean parse
+  try { return JSON.parse(text) } catch {}
+
+  // Attempt 2: try to fix common issues — escape stray newlines inside strings
+  try {
+    const fixed = text.replace(/("[^"]*?")|(\n+)/g, (m, str, nl) => str || ' ')
+    return JSON.parse(fixed)
+  } catch {}
+
+  // Attempt 3: regex extract caption + hashtags
+  const captionMatch = text.match(/"caption"\s*:\s*"((?:[^"\\]|\\.)*)/s)
+  const hashtagsBlock = text.match(/"hashtags"\s*:\s*\[([^\]]*)\]/s)
+  const caption = captionMatch?.[1]
+    ?.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\') || ''
+  const hashtags = hashtagsBlock
+    ? [...hashtagsBlock[1].matchAll(/"([^"]+)"/g)].map((m) => m[1])
+    : []
+  if (caption) return { caption, hashtags }
+
+  // Attempt 4: bare text — use first 280 chars as caption, no hashtags
+  return { caption: text.slice(0, 280).trim(), hashtags: [] }
 }
