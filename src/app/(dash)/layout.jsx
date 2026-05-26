@@ -57,13 +57,15 @@ export default async function DashLayout({ children }) {
           <div className="text-xs text-[var(--muted)] truncate">{activeWs?.name}</div>
         </div>
         <NavLink href="/dashboard" label="📊 Dashboard" />
-        <NavLink href="/personas" label="🎭 Personas" />
-        <NavLink href="/brands" label="🏷 Brands" />
-        <NavLink href="/refs" label="🖼 References" />
         <NavLink href="/generate" label="⚡ Generate" />
         <NavLink href="/qc" label="🧪 QC" />
-        <NavLink href="/results" label="📁 Results" />
+        <NavLink href="/posting" label="📮 Posting" />
         <NavLink href="/scheduled" label="📅 Scheduled" />
+        <NavLink href="/results" label="📁 Results" />
+        <div className="text-[9px] uppercase text-[var(--muted2)] font-bold tracking-wider mt-4 mb-1 px-3">Library</div>
+        <NavLink href="/brands" label="🏷 Brands" />
+        <NavLink href="/personas" label="🎭 Personas" />
+        <NavLink href="/refs" label="🖼 References" />
         <div className="mt-auto pt-4 border-t border-[var(--border)] text-xs text-[var(--muted)]">
           <div className="mb-2 truncate">{user.email}</div>
           <SignOutButton />
