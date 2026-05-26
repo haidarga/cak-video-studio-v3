@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import {
   falRun, buildImgInput, buildVidInput, productDirective,
@@ -267,29 +267,25 @@ function PersonaSection({ persona, workspaceRefs, state, onPatch, globalConfig, 
             className="w-full text-sm px-3 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)]" />
         </div>
 
-        <div>
-          <label className="block text-[10px] uppercase text-[var(--muted)] font-semibold mb-1">
-            Refs ({state.refIds.size}/{allAvailableRefs.length}) — character + product
-          </label>
-          <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto p-1">
-            {allAvailableRefs.map((r) => {
-              const on = state.refIds.has(r.id)
-              return (
-                <button key={r.id} onClick={() => {
-                  const next = new Set(state.refIds)
-                  next.has(r.id) ? next.delete(r.id) : next.add(r.id)
-                  onPatch({ refIds: next })
-                }}
-                  className={`flex items-center gap-1.5 px-2 py-1 rounded border text-xs ${on ? 'border-[var(--accent)] bg-[var(--accent)]/10' : 'border-[var(--border)] bg-[var(--surface2)] opacity-60 hover:opacity-100'}`}>
-                  <img src={r.fal_url} alt="" className="w-7 h-7 rounded object-cover" />
-                  <span className="max-w-[80px] truncate">{r.label || 'unlabeled'}</span>
-                  {r.kind === 'product' && <span title="product" className="text-[9px]">📦</span>}
-                  {r.knowledge && <span title="has knowledge" className="text-[9px]">📋</span>}
-                </button>
-              )
-            })}
-          </div>
-        </div>
+        <RefsPicker
+          allRefs={allAvailableRefs}
+          selectedIds={state.refIds}
+          onToggle={(id) => {
+            const next = new Set(state.refIds)
+            next.has(id) ? next.delete(id) : next.add(id)
+            onPatch({ refIds: next })
+          }}
+          workspaceId={workspaceId}
+          userId={userId}
+          personaId={persona.id}
+          supabase={supabase}
+          onErr={onErr}
+          onAdded={(newRef) => {
+            // newly uploaded ref auto-selected
+            const next = new Set(state.refIds); next.add(newRef.id)
+            onPatch({ refIds: next })
+          }}
+        />
 
         <div className="flex gap-2">
           <button onClick={parseNaskah} disabled={state.busy || !state.naskah.trim()}
@@ -333,6 +329,151 @@ function PersonaSection({ persona, workspaceRefs, state, onPatch, globalConfig, 
         )}
       </div>
     </section>
+  )
+}
+
+function RefsPicker({ allRefs, selectedIds, onToggle, workspaceId, userId, personaId, supabase, onErr, onAdded }) {
+  const [extras, setExtras] = useState([])
+  const [opening, setOpening] = useState(false)
+  const fileRef = useRef(null)
+  const [pendingFile, setPendingFile] = useState(null) // File object preview before save
+  const [pLabel, setPLabel] = useState('')
+  const [pKnowledge, setPKnowledge] = useState('')
+  const [pKind, setPKind] = useState('character')
+  const [busy, setBusy] = useState(false)
+
+  const merged = [...extras, ...allRefs.filter((r) => !extras.some((e) => e.id === r.id))]
+
+  function onFilePicked(e) {
+    const f = e.target.files?.[0]
+    if (!f) return
+    setPendingFile(f)
+    setPLabel('')
+    setPKnowledge('')
+    setPKind('character')
+    setOpening(true)
+    e.target.value = ''
+  }
+
+  async function savePending() {
+    if (!pendingFile) return
+    setBusy(true); onErr('')
+    try {
+      const ext = (pendingFile.name.split('.').pop() || 'jpg').toLowerCase()
+      const path = `${workspaceId}/ref-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
+      const { error: upErr } = await supabase.storage.from('refs').upload(path, pendingFile, { upsert: false, contentType: pendingFile.type })
+      if (upErr) throw upErr
+      const { data: { publicUrl } } = supabase.storage.from('refs').getPublicUrl(path)
+      const { data: row, error } = await supabase.from('refs')
+        .insert({
+          workspace_id: workspaceId,
+          fal_url: publicUrl,
+          label: pLabel.trim() || pendingFile.name.replace(/\.[^.]+$/, ''),
+          knowledge: pKnowledge.trim() || null,
+          kind: pKind,
+          created_by: userId,
+        })
+        .select('id, fal_url, label, knowledge, kind').single()
+      if (error) throw error
+      // Link to persona (so it shows up in their persona_refs join too)
+      if (personaId) {
+        await supabase.from('persona_refs').insert({ persona_id: personaId, ref_id: row.id })
+      }
+      setExtras((p) => [{ ...row, source: 'just-uploaded' }, ...p])
+      onAdded(row)
+      setOpening(false); setPendingFile(null)
+    } catch (e) { onErr('Upload: ' + e.message) }
+    setBusy(false)
+  }
+
+  return (
+    <div>
+      <label className="block text-[10px] uppercase text-[var(--muted)] font-semibold mb-1.5">
+        Refs ({selectedIds.size}/{merged.length}) — character + product
+      </label>
+      <div className="flex flex-wrap gap-2 max-h-56 overflow-y-auto p-1">
+        {merged.map((r) => {
+          const on = selectedIds.has(r.id)
+          return (
+            <button key={r.id} onClick={() => onToggle(r.id)} type="button"
+              className={`relative w-[88px] rounded border ${on ? 'border-[var(--accent)] ring-1 ring-[var(--accent)]' : 'border-[var(--border)] opacity-60 hover:opacity-100'}`}>
+              <div className="aspect-square w-full bg-[var(--surface2)] rounded-t overflow-hidden">
+                <img src={r.fal_url} alt={r.label} className="w-full h-full object-cover" />
+              </div>
+              <div className="px-1 py-1">
+                <div className="text-[10px] font-semibold truncate text-left">{r.label || 'unlabeled'}</div>
+                <div className="flex justify-between text-[9px]">
+                  <span className="text-[var(--muted)]">{r.kind === 'product' ? '📦' : '👤'}</span>
+                  {r.knowledge && <span title={r.knowledge} className="text-[var(--accent)]">📋</span>}
+                </div>
+              </div>
+              {on && <span className="absolute top-1 right-1 w-4 h-4 rounded-full bg-[var(--accent)] text-white text-[10px] flex items-center justify-center">✓</span>}
+            </button>
+          )
+        })}
+
+        <button type="button" onClick={() => fileRef.current?.click()}
+          className="w-[88px] aspect-square mt-0 rounded border-2 border-dashed border-[var(--border)] flex flex-col items-center justify-center gap-1 text-[var(--muted)] hover:border-[var(--accent)] hover:text-[var(--accent)]"
+          style={{ height: 116 }}>
+          <span className="text-2xl">+</span>
+          <span className="text-[9px] font-semibold">Upload</span>
+        </button>
+        <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onFilePicked} />
+      </div>
+
+      {opening && pendingFile && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6" onClick={(e) => { if (e.target === e.currentTarget) setOpening(false) }}>
+          <div className="w-full max-w-lg bg-[var(--surface)] rounded-xl border border-[var(--border)]">
+            <div className="px-5 py-3 border-b border-[var(--border)] flex items-center justify-between">
+              <h3 className="text-base font-bold">+ Upload Reference</h3>
+              <button onClick={() => setOpening(false)} className="text-[var(--muted)]">✕</button>
+            </div>
+            <div className="p-5 space-y-3">
+              <div className="grid grid-cols-[120px_1fr] gap-4 items-start">
+                <img src={URL.createObjectURL(pendingFile)} alt="" className="w-full aspect-square object-cover rounded border border-[var(--border)]" />
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-[10px] uppercase text-[var(--muted)] font-semibold mb-1">Label / Nama</label>
+                    <input value={pLabel} onChange={(e) => setPLabel(e.target.value)} placeholder="e.g. AceKid kaleng 400g / Budi"
+                      className="w-full text-sm px-3 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)]" />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] uppercase text-[var(--muted)] font-semibold mb-1">Tipe</label>
+                    <div className="flex gap-2">
+                      {[['character', '👤 Karakter'], ['product', '📦 Produk']].map(([v, l]) => (
+                        <button key={v} onClick={() => setPKind(v)} type="button"
+                          className={`px-3 py-1.5 rounded text-xs ${pKind === v ? 'bg-[var(--accent)] text-white' : 'bg-[var(--surface2)] text-[var(--muted)]'}`}>{l}</button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] uppercase text-[var(--muted)] font-semibold mb-1">
+                  📋 Keterangan / Product Knowledge {pKind === 'character' && <span className="text-[var(--muted2)] normal-case">(opsional buat character)</span>}
+                </label>
+                <textarea rows={5} value={pKnowledge} onChange={(e) => setPKnowledge(e.target.value)}
+                  placeholder={pKind === 'product'
+                    ? 'TEKS KEMASAN: "AceKid", "Activegro", "3+ Years"\nWARNA & CIRI: kaleng biru-kuning, tutup biru\nATURAN: kaleng tegak, logo hadap kamera, jangan distorsi\nVARIAN: 130g / 400g'
+                    : 'Catatan karakter: ekspresi, gaya, pose default, dll. (opsional)'}
+                  className="w-full text-sm px-3 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)]" />
+                <div className="text-[10px] text-[var(--muted2)] mt-1">
+                  Auto-inject ke prompt image gen pas ref ini ke-link ke shot.
+                </div>
+              </div>
+            </div>
+            <div className="px-5 py-3 border-t border-[var(--border)] flex justify-end gap-3">
+              <button onClick={() => setOpening(false)} className="px-4 py-2 rounded text-sm">Batal</button>
+              <button onClick={savePending} disabled={busy}
+                className="px-5 py-2 rounded bg-[var(--accent)] text-white text-sm font-semibold disabled:opacity-50">
+                {busy ? '⏳ Uploading...' : '✓ Simpan + Pakai'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 

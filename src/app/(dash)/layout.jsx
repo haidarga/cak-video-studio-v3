@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import SignOutButton from './_components/SignOutButton'
+import ActiveBrandWidget from './_components/ActiveBrandWidget'
 
 export default async function DashLayout({ children }) {
   const supabase = await createClient()
@@ -12,7 +13,7 @@ export default async function DashLayout({ children }) {
   // Get user's workspaces (joined via workspace_members)
   const { data: memberships } = await supabase
     .from('workspace_members')
-    .select('workspace_id, role, workspaces(id, name)')
+    .select('workspace_id, role, workspaces(id, name, active_brand_id)')
     .eq('user_id', user.id)
     .order('added_at', { ascending: true })
 
@@ -49,12 +50,23 @@ export default async function DashLayout({ children }) {
     }
   }
 
+  // Fetch brands for the active workspace (for sidebar widget)
+  const { data: brands } = await supabase
+    .from('brands').select('id, name').eq('workspace_id', activeWs.id).order('created_at', { ascending: false })
+
   return (
     <div className="min-h-screen flex">
       <aside className="w-56 border-r border-[var(--border)] bg-[var(--surface)] p-4 flex flex-col gap-1">
-        <div className="mb-4">
+        <div className="mb-3">
           <div className="text-sm font-bold">CAK Video</div>
           <div className="text-xs text-[var(--muted)] truncate">{activeWs?.name}</div>
+        </div>
+        <div className="mb-4">
+          <ActiveBrandWidget
+            workspaceId={activeWs.id}
+            activeBrandId={activeWs.active_brand_id}
+            brands={brands || []}
+          />
         </div>
         <NavLink href="/generate" label="⚡ Generate" />
         <NavLink href="/qc" label="🧪 QC" />

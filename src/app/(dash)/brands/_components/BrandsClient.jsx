@@ -114,6 +114,29 @@ function BrandEditor({ brand, workspaceId, userId, onClose, onError }) {
   const [campaignGoals, setCampaignGoals] = useState(cfg.campaign_goals || '')
   const [competitorInsight, setCompetitorInsight] = useState(cfg.competitor_insight || '')
   const [busy, setBusy] = useState(false)
+  const [drafting, setDrafting] = useState(false)
+
+  async function aiDraft() {
+    if (!name.trim()) { onError('Isi Nama Brand dulu sebelum AI Draft'); return }
+    setDrafting(true); onError('')
+    try {
+      const res = await fetch('/api/draft/brand-strategy', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), category: category.trim(), guardrails: guardrails.trim() }),
+      })
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error)
+      const d = data.draft
+      // Only fill fields that are currently empty — jangan timpa kalau user udah isi
+      if (!targetAudience.trim() && d.target_audience) setTargetAudience(d.target_audience)
+      if (!toneOfVoice.trim() && d.tone_of_voice) setToneOfVoice(d.tone_of_voice)
+      if (!contentPillars.trim() && d.content_pillars?.length) setContentPillars(d.content_pillars.join('\n'))
+      if (!keyMessages.trim() && d.key_messages?.length) setKeyMessages(d.key_messages.join('\n'))
+      if (!campaignGoals.trim() && d.campaign_goals) setCampaignGoals(d.campaign_goals)
+      if (!competitorInsight.trim() && d.competitor_insight) setCompetitorInsight(d.competitor_insight)
+    } catch (e) { onError('AI Draft: ' + e.message) }
+    setDrafting(false)
+  }
 
   async function save() {
     if (!name.trim()) { onError('Nama brand wajib diisi'); return }
@@ -171,8 +194,14 @@ function BrandEditor({ brand, workspaceId, userId, onClose, onError }) {
       </label>
 
       <div className="pt-3 border-t border-[var(--border)]">
-        <div className="text-sm font-bold mb-1">📋 Communication Strategy</div>
-        <div className="text-xs text-[var(--muted)] mb-4">Foundation buat semua konten. AI pake ini sebagai "brain" strategik saat generate.</div>
+        <div className="flex items-center justify-between mb-1">
+          <div className="text-sm font-bold">📋 Communication Strategy</div>
+          <button onClick={aiDraft} disabled={drafting || !name.trim()}
+            className="px-3 py-1.5 rounded text-xs font-semibold bg-gradient-to-r from-purple-500 to-pink-500 text-white hover:opacity-90 disabled:opacity-50">
+            {drafting ? '⏳ Drafting...' : '✨ AI Draft Strategy'}
+          </button>
+        </div>
+        <div className="text-xs text-[var(--muted)] mb-4">Foundation buat semua konten. AI pake ini sebagai "brain" strategik saat generate. Klik ✨ AI Draft buat auto-isi field yang masih kosong.</div>
 
         <Field label="Target Audience">
           <Textarea rows={2} value={targetAudience} onChange={setTargetAudience}

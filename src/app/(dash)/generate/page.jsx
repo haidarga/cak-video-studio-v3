@@ -1,6 +1,11 @@
 import { createClient } from '@/lib/supabase/server'
 import GenerateClient from './_components/GenerateClient'
 
+// Revalidate the server-rendered persona/refs/brand list every 30s so the page
+// loads fast on subsequent visits while staying reasonably fresh. Client-side
+// realtime still picks up live changes during a session.
+export const revalidate = 30
+
 export default async function GeneratePage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
