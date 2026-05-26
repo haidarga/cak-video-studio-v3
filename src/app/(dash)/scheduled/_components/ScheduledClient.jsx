@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 
 const STATUS_COLORS = {
+  pending:   'text-blue-300 border-blue-500/40 bg-blue-500/10',
   scheduled: 'text-blue-400 border-blue-500/40 bg-blue-500/10',
   posting:   'text-orange-400 border-orange-500/40 bg-orange-500/10',
   posted:    'text-green-400 border-green-500/40 bg-green-500/10',
@@ -37,21 +38,49 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
 
   async function schedule(result, scheduledFor, caption) {
     if (!result.personas?.postiz_channel_id) {
-      setErr(`${result.personas?.name || 'Persona'} belum konek ke Postiz channel — set Postiz Integration ID di /personas`)
+      setErr(`${result.personas?.name || 'Persona'} belum konek ke Postiz channel — set di /posting`)
       return
     }
-    const { error } = await supabase.from('scheduled_posts').insert({
+    // 1. Insert DB row with pending status.
+    const { data: sp, error } = await supabase.from('scheduled_posts').insert({
       workspace_id: workspaceId,
       result_id: result.id,
       persona_id: result.personas.id,
       scheduled_for: scheduledFor || null,
-      status: 'scheduled',
+      status: 'pending',
       caption: caption || null,
       created_by: userId,
-    })
-    if (error) setErr(error.message)
-    else setPicking(null)
+    }).select('id').single()
+    if (error) { setErr(error.message); return }
+    setPicking(null)
+
+    // 2. Push to Postiz (now OR scheduled — Postiz handles its own scheduling)
+    try {
+      const res = await fetch('/api/postiz/post', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scheduled_post_id: sp.id }),
+      })
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error)
+    } catch (e) {
+      setErr(`Push ke Postiz gagal: ${e.message}. Row tersimpan sbg 'failed' — bisa retry di list.`)
+    }
   }
+
+  async function retryPostiz(scheduledPostId) {
+    setErr('')
+    try {
+      const res = await fetch('/api/postiz/post', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scheduled_post_id: scheduledPostId }),
+      })
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error)
+    } catch (e) {
+      setErr(`Retry gagal: ${e.message}`)
+    }
+  }
+
   async function cancel(id) {
     if (!confirm('Cancel scheduled post?')) return
     const { error } = await supabase.from('scheduled_posts').update({ status: 'cancelled' }).eq('id', id)
@@ -66,7 +95,8 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
   const grouped = useMemo(() => {
     const map = { upcoming: [], posted: [], failed: [], cancelled: [] }
     scheduled.forEach((s) => {
-      if (s.status === 'posted') map.posted.push(s)
+      if (s.status === 'failed') map.failed.push(s)
+      else if (s.status === 'posted') map.posted.push(s)
       else if (s.status === 'failed') map.failed.push(s)
       else if (s.status === 'cancelled') map.cancelled.push(s)
       else map.upcoming.push(s)
@@ -118,7 +148,9 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
         ) : (
           <div className="space-y-2">
             {[...grouped.upcoming, ...grouped.posted, ...grouped.failed, ...grouped.cancelled].map((s) => (
-              <ScheduleRow key={s.id} sp={s} onCancel={() => cancel(s.id)} onDelete={() => remove(s.id)} />
+              <ScheduleRow key={s.id} sp={s}
+                onCancel={() => cancel(s.id)} onDelete={() => remove(s.id)}
+                onRetry={() => retryPostiz(s.id)} />
             ))}
           </div>
         )}
@@ -132,11 +164,11 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
   )
 }
 
-function ScheduleRow({ sp, onCancel, onDelete }) {
+function ScheduleRow({ sp, onCancel, onDelete, onRetry }) {
   const r = sp.results
   const p = sp.personas
   return (
-    <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-3 flex items-center gap-3">
+    <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-3 flex items-start gap-3">
       <div className="w-14 aspect-[9/16] rounded overflow-hidden bg-black flex-shrink-0">
         {r?.type === 'video'
           ? <video src={r.url} muted className="w-full h-full object-cover" />
@@ -148,8 +180,16 @@ function ScheduleRow({ sp, onCancel, onDelete }) {
           {p?.name && <>→ <strong>{p.name}</strong> @{p.username} {p.postiz_platform && <span className="uppercase text-[9px]">· {p.postiz_platform}</span>}</>}
         </div>
         {sp.caption && <div className="text-[10px] text-[var(--muted)] mt-1 line-clamp-1">📝 {sp.caption}</div>}
+        {sp.status === 'failed' && sp.error && (
+          <div className="text-[10px] text-red-400 mt-1 bg-red-900/20 border border-red-900/40 px-2 py-1 rounded">
+            ⚠ {sp.error}
+          </div>
+        )}
+        {sp.status === 'posted' && sp.posted_at && (
+          <div className="text-[10px] text-green-400 mt-1">✓ Posted {new Date(sp.posted_at).toLocaleString()}</div>
+        )}
       </div>
-      <div className="text-xs text-right">
+      <div className="text-xs text-right flex-shrink-0">
         <span className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${STATUS_COLORS[sp.status] || ''}`}>
           {sp.status}
         </span>
@@ -157,8 +197,9 @@ function ScheduleRow({ sp, onCancel, onDelete }) {
           {sp.scheduled_for ? new Date(sp.scheduled_for).toLocaleString() : 'now'}
         </div>
       </div>
-      <div className="flex flex-col gap-1">
-        {sp.status === 'scheduled' && <button onClick={onCancel} className="text-[10px] text-orange-400 hover:underline">Cancel</button>}
+      <div className="flex flex-col gap-1 flex-shrink-0">
+        {sp.status === 'failed' && <button onClick={onRetry} className="text-[10px] text-orange-400 hover:underline font-semibold">↻ Retry</button>}
+        {(sp.status === 'scheduled' || sp.status === 'pending') && <button onClick={onCancel} className="text-[10px] text-orange-400 hover:underline">Cancel</button>}
         <button onClick={onDelete} className="text-[10px] text-red-400 hover:underline">Hapus</button>
       </div>
     </div>
