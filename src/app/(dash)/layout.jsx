@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import SignOutButton from './_components/SignOutButton'
 
 export default async function DashLayout({ children }) {
@@ -17,28 +18,35 @@ export default async function DashLayout({ children }) {
 
   let activeWs = memberships?.[0]?.workspaces
 
-  // Bootstrap: if user has no workspace yet, auto-create one.
-  // The DB trigger `workspace_owner_member` adds them as owner-member automatically.
+  // Bootstrap: if user has no workspace yet, auto-create one using the admin
+  // client. The RLS-checked client sometimes loses JWT context during Server
+  // Component renders, which would make this insert fail with an RLS violation
+  // even though the user is signed in. Service-role bypasses RLS; we still set
+  // owner_id from the server-verified user.id. The DB trigger
+  // `workspace_owner_member` adds them as 'owner' member automatically.
   if (!activeWs) {
-    const { data: ws, error } = await supabase
-      .from('workspaces')
-      .insert({ name: 'My Workspace', owner_id: user.id })
-      .select('id, name')
-      .single()
-    if (error) {
-      // Surface schema-not-yet-applied state gracefully
+    try {
+      const admin = createAdminClient()
+      const { data: ws, error } = await admin
+        .from('workspaces')
+        .insert({ name: 'My Workspace', owner_id: user.id })
+        .select('id, name')
+        .single()
+      if (error) throw error
+      activeWs = ws
+    } catch (e) {
       return (
-        <div className="p-8">
+        <div className="p-8 max-w-xl">
           <h1 className="text-xl font-bold mb-2">Setup belum kelar</h1>
           <p className="text-sm text-[var(--muted)]">
-            DB schema belum di-apply. Paste <code>supabase/migrations/0001_init.sql</code> ke
-            Supabase SQL Editor lalu refresh.
+            Gak bisa bikin workspace pertama. Kemungkinan: (1) DB schema belum di-apply
+            (paste <code>supabase/migrations/0001_init.sql</code> ke Supabase SQL Editor),
+            atau (2) <code>SUPABASE_SERVICE_ROLE_KEY</code> di Vercel env belum di-set / salah.
           </p>
-          <pre className="mt-4 text-xs text-red-400 whitespace-pre-wrap">{error.message}</pre>
+          <pre className="mt-4 text-xs text-red-400 whitespace-pre-wrap">{String(e?.message || e)}</pre>
         </div>
       )
     }
-    activeWs = ws
   }
 
   return (
