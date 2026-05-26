@@ -319,10 +319,37 @@ function PersonaSection({ persona, workspaceRefs, state, onPatch, globalConfig, 
     onPatch({ busy: false })
   }
 
-  async function sendToQC(idx, resultId) {
-    if (!resultId) return
-    const { error } = await supabase.from('results').update({ qc_status: 'pending' }).eq('id', resultId)
-    if (error) onErr(error.message)
+  // Send the BEST currently-available output (video > image) to QC.
+  // If video exists -> just flip qc_status='pending' on its results row.
+  // If only image exists -> INSERT a new image result row dengan qc_status=pending.
+  async function sendToQC(idx) {
+    const shot = state.shots[idx]
+    if (!shot) return
+    onErr('')
+
+    // Prefer video if available
+    if (shot.video?.result_id) {
+      const { error } = await supabase.from('results').update({ qc_status: 'pending' }).eq('id', shot.video.result_id)
+      if (error) { onErr(error.message); return }
+      patchShot(idx, { qc_sent: 'video' })
+      return
+    }
+
+    // Fallback: send image-only result
+    if (shot.image?.url) {
+      const { data: row, error } = await supabase.from('results').insert({
+        workspace_id: workspaceId, persona_id: persona.id, type: 'image',
+        url: shot.image.url, label: shot.label, ar: globalConfig.ar,
+        group_label: persona.name, qc_status: 'pending',
+        meta: { source: 'generate-image-only', raw: shot.raw },
+        created_by: userId,
+      }).select('id').single()
+      if (error) { onErr(error.message); return }
+      patchShot(idx, { image: { ...shot.image, result_id: row.id }, qc_sent: 'image' })
+      return
+    }
+
+    onErr(`${persona.name}: belum ada image atau video buat dikirim ke QC`)
   }
   async function renameResult(resultId, label) {
     if (!resultId) return
@@ -416,7 +443,7 @@ function PersonaSection({ persona, workspaceRefs, state, onPatch, globalConfig, 
                     onGenVideo={() => genVideoForShot(i)}
                     onApprove={(v) => patchShot(i, { approved: v })}
                     onRename={(label) => { patchShot(i, { label }); renameResult(shot.video?.result_id, label) }}
-                    onSendQC={() => sendToQC(i, shot.video?.result_id)}
+                    onSendQC={() => sendToQC(i)}
                     onDelete={() => deleteResult(i, shot.video?.result_id)} />
                 : <ShotEditor key={shot.id} shot={shot} idx={i}
                     onChangeRaw={(key, value) => patchShotRaw(i, key, value)}
@@ -424,7 +451,7 @@ function PersonaSection({ persona, workspaceRefs, state, onPatch, globalConfig, 
                     onGenVideo={() => genVideoForShot(i)}
                     onApprove={(v) => patchShot(i, { approved: v })}
                     onRename={(label) => { patchShot(i, { label }); renameResult(shot.video?.result_id, label) }}
-                    onSendQC={() => sendToQC(i, shot.video?.result_id)}
+                    onSendQC={() => sendToQC(i)}
                     onDelete={() => deleteResult(i, shot.video?.result_id)} />
             ))}
           </div>
@@ -485,6 +512,20 @@ function ShotEditor({ shot, idx, onChangeRaw, onGenImage, onGenVideo, onApprove,
               className="w-full mt-1 text-[10px] px-1.5 py-1 rounded bg-[var(--accent)] text-white font-semibold disabled:opacity-50">
               {shot.video?.url ? '🔁 Re-vid' : '🎬 Vid this one'}
             </button>
+          )}
+
+          {/* Prominent Send to QC — visible begitu ada image atau video */}
+          {(shot.image?.url || shot.video?.url) && (
+            shot.qc_sent ? (
+              <a href="/qc" className="block w-full mt-1 text-[10px] px-1.5 py-1 rounded bg-green-500/30 hover:bg-green-500/50 border border-green-500/50 text-green-300 font-semibold text-center">
+                ✓ In QC →
+              </a>
+            ) : (
+              <button onClick={onSendQC}
+                className="w-full mt-1 text-[10px] px-1.5 py-1 rounded bg-purple-500 hover:bg-purple-600 text-white font-bold">
+                🧪 Send to QC
+              </button>
+            )
           )}
         </div>
 
@@ -611,6 +652,20 @@ function StoryboardEditor({ shot, idx, ar, onChangeRaw, onChangePanel, onGenImag
               className="w-full mt-1 text-xs px-2 py-1.5 rounded bg-[var(--accent)] text-white font-semibold disabled:opacity-50">
               {shot.video?.url ? '🔁 Re-gen Video' : `🎬 Gen Video (${totalSec || 15}s)`}
             </button>
+          )}
+
+          {/* Prominent Send to QC — visible begitu ada image atau video */}
+          {(shot.image?.url || shot.video?.url) && (
+            shot.qc_sent ? (
+              <a href="/qc" className="block w-full mt-1 text-xs px-2 py-1.5 rounded bg-green-500/30 hover:bg-green-500/50 border border-green-500/50 text-green-300 font-semibold text-center">
+                ✓ In QC → buka QC
+              </a>
+            ) : (
+              <button onClick={onSendQC}
+                className="w-full mt-1 text-xs px-2 py-1.5 rounded bg-purple-500 hover:bg-purple-600 text-white font-bold">
+                🧪 Send to QC {shot.video?.url ? '(video)' : '(image)'}
+              </button>
+            )
           )}
         </div>
 

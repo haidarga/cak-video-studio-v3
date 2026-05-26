@@ -13,7 +13,7 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
   const supabase = createClient()
   const [results, setResults] = useState(initialResults)
   const [openNote, setOpenNote] = useState(null)
-  const [busyUpload, setBusyUpload] = useState(null) // persona_id while uploading
+  const [busyUpload, setBusyUpload] = useState(null) // { id, name, sizeMB, stage } while uploading
   const [filter, setFilter] = useState('all') // status filter
   const [err, setErr] = useState('')
 
@@ -57,12 +57,38 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
   }
 
   async function uploadExternal(persona, file) {
-    setBusyUpload(persona.id); setErr('')
+    setErr('')
+
+    // Pre-flight checks supaya errornya jelas, bukan silent fail.
+    const sizeMB = file.size / 1024 / 1024
+    if (sizeMB > 200) {
+      setErr(`File "${file.name}" terlalu besar (${sizeMB.toFixed(1)}MB). Max 200MB. Compress dulu pake CapCut/Handbrake atau adjust file_size_limit di Supabase Storage bucket 'refs'.`)
+      return
+    }
+    if (!file.type.startsWith('video/') && !file.type.startsWith('image/')) {
+      setErr(`File "${file.name}" type "${file.type}" gak didukung. Hanya video/* atau image/*.`)
+      return
+    }
+
+    setBusyUpload({ id: persona.id, name: file.name, sizeMB: sizeMB.toFixed(1), stage: 'uploading' })
     try {
       const ext = (file.name.split('.').pop() || 'mp4').toLowerCase()
       const path = `${workspaceId}/external-${persona.id}-${Date.now()}.${ext}`
-      const { error: upErr } = await supabase.storage.from('refs').upload(path, file, { upsert: false, contentType: file.type })
-      if (upErr) throw upErr
+      const { error: upErr } = await supabase.storage.from('refs').upload(path, file, {
+        upsert: false, contentType: file.type, cacheControl: '3600',
+      })
+      if (upErr) {
+        // Surface meaningful storage errors
+        const msg = upErr.message || ''
+        if (msg.includes('exceeded') || msg.includes('size')) {
+          throw new Error(`File terlalu besar buat bucket. Jalanin migration 0004_raise_upload_limit.sql di Supabase SQL Editor dulu. (${msg})`)
+        }
+        if (msg.includes('mime') || msg.includes('type')) {
+          throw new Error(`MIME type ditolak bucket. Migration 0004 set allowed_mime_types=null biar terima semua. (${msg})`)
+        }
+        throw new Error(`Storage upload gagal: ${msg}`)
+      }
+      setBusyUpload((s) => ({ ...s, stage: 'inserting' }))
       const { data: { publicUrl } } = supabase.storage.from('refs').getPublicUrl(path)
       const isVideo = file.type.startsWith('video/')
       const { error: insErr } = await supabase.from('results').insert({
@@ -74,10 +100,10 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
         ar: '9:16',
         group_label: persona.name,
         qc_status: 'pending',
-        meta: { source: 'external_upload' },
+        meta: { source: 'external_upload', original_name: file.name, size_bytes: file.size, mime: file.type },
         created_by: userId,
       })
-      if (insErr) throw insErr
+      if (insErr) throw new Error(`Insert ke results gagal: ${insErr.message}`)
     } catch (e) { setErr(`Upload ${persona.name}: ${e.message}`) }
     setBusyUpload(null)
   }
@@ -128,7 +154,7 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
       <div className="space-y-6">
         {byPersona.map(({ persona, items }) => (
           <PersonaGroup key={persona?.id || '_unassigned'} persona={persona} items={items}
-            busyUpload={busyUpload === persona?.id}
+            busyUpload={busyUpload?.id === persona?.id ? busyUpload : null}
             onUpload={(file) => persona && uploadExternal(persona, file)}
             onSetStatus={setStatus} onRemove={removeFromQC} onOpenNote={setOpenNote}
             onRename={rename} onDeletePerma={deletePerma} />
@@ -187,9 +213,11 @@ function PersonaGroup({ persona, items, busyUpload, onUpload, onSetStatus, onRem
           <>
             <input ref={fileRef} type="file" accept="video/*,image/*" className="hidden"
               onChange={(e) => { const f = e.target.files?.[0]; if (f) onUpload(f); e.target.value = '' }} />
-            <button onClick={() => fileRef.current?.click()} disabled={busyUpload}
+            <button onClick={() => fileRef.current?.click()} disabled={!!busyUpload}
               className="ml-auto px-3 py-1.5 rounded text-xs font-semibold bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)] disabled:opacity-50">
-              {busyUpload ? '⏳ Uploading...' : '+ Upload External Video'}
+              {busyUpload
+                ? `⏳ ${busyUpload.stage === 'inserting' ? 'Saving...' : `Uploading ${busyUpload.name} (${busyUpload.sizeMB}MB)`}`
+                : '+ Upload External Video'}
             </button>
           </>
         )}
