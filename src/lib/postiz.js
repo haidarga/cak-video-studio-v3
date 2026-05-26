@@ -51,6 +51,33 @@ async function postizJsonFallback(paths, init) {
 }
 
 // ── Channels / integrations ─────────────────────────────────────────
+function pickPlatform(c) {
+  const v =
+    c?.providerIdentifier ||
+    c?.platform ||
+    c?.provider ||
+    c?.platform_type ||
+    c?.type ||
+    c?.integration?.providerIdentifier ||
+    c?.integration?.provider ||
+    c?.profile?.platform ||
+    c?.profile?.providerIdentifier ||
+    ''
+  return String(v).toLowerCase()
+}
+function pickUsername(c) {
+  return (
+    c?.username ||
+    c?.profile?.username ||
+    c?.internalId ||
+    c?.profile?.internalId ||
+    c?.handle ||
+    c?.profile?.handle ||
+    c?.account ||
+    ''
+  )
+}
+
 export async function fetchPostizChannels() {
   const data = await postizJsonFallback(
     ['/public/v1/integrations', '/api/public/v1/integrations', '/api/v1/integrations/list', '/api/v1/integrations'],
@@ -60,8 +87,8 @@ export async function fetchPostizChannels() {
   return list.map((c) => ({
     id: c.id || c.identifier || c.channelId,
     name: c.name || c.profile?.name || c.username || 'Unknown',
-    username: c.username || c.profile?.username || '',
-    platform: (c.providerIdentifier || c.platform || c.provider || '').toLowerCase(),
+    username: pickUsername(c),
+    platform: pickPlatform(c),
     avatar: c.picture || c.profile?.picture || c.avatar || null,
     raw: c,
   })).filter((c) => c.id)

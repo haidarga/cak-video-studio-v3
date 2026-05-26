@@ -159,12 +159,22 @@ export default function PostingClient({ workspaceId, initialPersonas }) {
             <summary className="cursor-pointer">Liat semua channel yang ke-sync dari Postiz ({channels.length})</summary>
             <div className="mt-2 grid grid-cols-2 md:grid-cols-3 gap-2">
               {channels.map((c) => (
-                <div key={c.id} className="bg-[var(--surface2)] border border-[var(--border)] rounded p-2">
-                  <div className="font-semibold text-[var(--text)]">{c.name}</div>
-                  <div className="text-[10px]">@{c.username} · {c.platform}</div>
-                  <code className="text-[9px] text-[var(--muted2)] break-all">{c.id}</code>
-                </div>
+                <details key={c.id} className="bg-[var(--surface2)] border border-[var(--border)] rounded">
+                  <summary className="p-2 cursor-pointer">
+                    <span className="font-semibold text-[var(--text)]">{c.name}</span>
+                    <div className="text-[10px]">
+                      @{c.username || '—'}{c.platform && <> · <span className="uppercase">{c.platform}</span></>}
+                    </div>
+                    <code className="text-[9px] text-[var(--muted2)] break-all">{c.id}</code>
+                  </summary>
+                  <pre className="text-[9px] p-2 border-t border-[var(--border)] bg-black/30 overflow-auto max-h-48 whitespace-pre-wrap break-all">
+                    {JSON.stringify(c.raw, null, 2)}
+                  </pre>
+                </details>
               ))}
+            </div>
+            <div className="text-[10px] text-[var(--muted2)] mt-2">
+              ℹ️ Klik kartu buat liat raw response dari Postiz. Kalau platform/username kosong, Postiz API gak return field itu — gua mungkin perlu adjust mapping. Kirim raw JSON ke gua kalau perlu.
             </div>
           </details>
         </div>
@@ -231,6 +241,26 @@ function PlatformIcon({ platform }) {
   )
 }
 
+function PlatformOverride({ personaId, current, onSet }) {
+  return (
+    <select
+      value={current || ''}
+      onChange={(e) => { if (e.target.value) onSet(e.target.value) }}
+      onClick={(e) => e.stopPropagation()}
+      className="text-[9px] px-1 py-0.5 rounded bg-[var(--surface)] border border-orange-500/40 text-orange-300"
+      title="Set manual karena Postiz gak balikin platform">
+      <option value="">set platform</option>
+      <option value="tiktok">🎵 TikTok</option>
+      <option value="instagram">📷 Instagram</option>
+      <option value="youtube">▶️ YouTube</option>
+      <option value="facebook">👤 Facebook</option>
+      <option value="x">𝕏 X/Twitter</option>
+      <option value="linkedin">💼 LinkedIn</option>
+      <option value="threads">🧵 Threads</option>
+    </select>
+  )
+}
+
 function PersonaRow({ persona: p, channels, takenChannelIds, onAssign }) {
   return (
     <div className="grid grid-cols-[2fr_1fr_1fr_2fr_auto] gap-3 px-5 py-3 items-center text-sm">
@@ -260,10 +290,15 @@ function PersonaRow({ persona: p, channels, takenChannelIds, onAssign }) {
       <div className="text-xs min-w-0">
         {p.matchedChannel ? (
           <div className="flex items-center gap-2">
-            <PlatformIcon platform={p.matchedChannel.platform} />
+            <PlatformIcon platform={p.matchedChannel.platform || p.postiz_platform} />
             <div className="flex-1 min-w-0">
               <div className="font-semibold truncate">{p.matchedChannel.name}</div>
-              <div className="text-[9px] text-[var(--muted)]">@{p.matchedChannel.username || ''}</div>
+              <div className="text-[9px] text-[var(--muted)] flex items-center gap-1">
+                @{p.matchedChannel.username || '—'}
+                {!p.matchedChannel.platform && (
+                  <PlatformOverride personaId={p.id} current={p.postiz_platform} onSet={(plat) => onAssign({ ...p.matchedChannel, platform: plat, _platformOverride: true })} />
+                )}
+              </div>
             </div>
             <button onClick={() => onAssign(null)} className="text-[10px] text-red-400 hover:underline" title="Unlink">unlink</button>
           </div>
