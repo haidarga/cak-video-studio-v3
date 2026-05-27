@@ -70,6 +70,7 @@ export default async function DashLayout({ children }) {
         </div>
         <NavLink href="/generate" label="⚡ Generate" />
         <NavLink href="/qc" label="🧪 QC" />
+        <NavLink href="/editor" label="✂️ Editor" />
         <NavLink href="/scheduled" label="📅 Scheduled" />
         <NavLink href="/posting" label="📮 Posting" />
         <NavLink href="/dashboard" label="📊 Dashboard" />
