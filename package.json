@@ -18,7 +18,9 @@
     "@remotion/google-fonts": "^4.0.462",
     "@remotion/transitions": "^4.0.462",
     "remotion": "^4.0.462",
-    "@fal-ai/client": "^1.4.0"
+    "@fal-ai/client": "^1.4.0",
+    "@ffmpeg/ffmpeg": "^0.12.10",
+    "@ffmpeg/util": "^0.12.1"
   },
   "devDependencies": {
     "autoprefixer": "^10.4.20",
