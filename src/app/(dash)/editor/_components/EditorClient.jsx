@@ -1,42 +1,74 @@
 'use client'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { renderProject } from '@/lib/editor-render'
+import { renderProject, totalDuration, clipDuration, clipInTrack, activeClipAt } from '@/lib/editor-render'
 
-// Editor v2 (gacor): trim + speed + volume per source, text overlay,
-// image overlay (logo/sticker), music underlay, ffmpeg.wasm MP4 export
-// dengan canvas/WebM fallback.
+// Editor v3 final: multi-clip video sequencing + transitions (cut/fade/crossfade)
+// + filters (brightness/contrast/saturation/blur) per clip + speed + volume +
+// text + image overlay + music underlay + ffmpeg.wasm MP4 export.
+
+const DEFAULT_FILTERS = { brightness: 0, contrast: 1, saturation: 1, blur: 0 }
+const DEFAULT_TRANSITION = { type: 'cut', duration: 0.5 }
 
 const DEFAULT_PROJECT = {
   name: 'Untitled project',
   ar: '9:16',
-  source: { result_id: null, url: null, trim_start: 0, trim_end: null, speed: 1, volume: 1 },
-  text_clips: [],   // { id, kind:'text', text, start, end, x_pct, y_pct, size, color, weight, bg, align }
-  image_clips: [],  // { id, kind:'image', src_url, src_name, start, end, x_pct, y_pct, w_pct, opacity }
-  audio_clips: [],  // { id, kind:'audio', src_url, src_name, start, duration, volume }
+  video_clips: [], // { id, src_url, src_label, src_duration, src_in, src_out, speed, volume, filters, transition_in }
+  text_clips: [],
+  image_clips: [],
+  audio_clips: [],
 }
 
 function uid() { return Math.random().toString(36).slice(2, 10) }
 
-// Backward-compat: old projects had flat source_url. Normalize on load.
 function normalizeProject(raw) {
   if (!raw) return DEFAULT_PROJECT
-  if (raw.source) return { ...DEFAULT_PROJECT, ...raw, source: { ...DEFAULT_PROJECT.source, ...raw.source } }
-  // Old v1 shape
+  // v3 native
+  if (Array.isArray(raw.video_clips)) {
+    return {
+      ...DEFAULT_PROJECT,
+      ...raw,
+      video_clips: raw.video_clips.map((c) => ({
+        ...c,
+        filters: { ...DEFAULT_FILTERS, ...(c.filters || {}) },
+        transition_in: { ...DEFAULT_TRANSITION, ...(c.transition_in || {}) },
+      })),
+    }
+  }
+  // v2 had single `source`
+  if (raw.source) {
+    return {
+      ...DEFAULT_PROJECT,
+      name: raw.name || 'Untitled', ar: raw.ar || '9:16',
+      video_clips: raw.source.url ? [{
+        id: uid(), src_url: raw.source.url, src_label: '(legacy)',
+        src_duration: raw.source.trim_end || 60,
+        src_in: raw.source.trim_start || 0,
+        src_out: raw.source.trim_end || 60,
+        speed: raw.source.speed || 1, volume: raw.source.volume || 1,
+        filters: { ...DEFAULT_FILTERS },
+        transition_in: { ...DEFAULT_TRANSITION },
+      }] : [],
+      text_clips: raw.text_clips || [],
+      image_clips: raw.image_clips || [],
+      audio_clips: raw.audio_clips || [],
+    }
+  }
+  // v1
   return {
     ...DEFAULT_PROJECT,
-    name: raw.name || 'Untitled',
-    ar: raw.ar || '9:16',
-    source: {
-      result_id: raw.source_result_id || null,
-      url: raw.source_url || null,
-      trim_start: raw.trim_start || 0,
-      trim_end: raw.trim_end || null,
+    name: raw.name || 'Untitled', ar: raw.ar || '9:16',
+    video_clips: raw.source_url ? [{
+      id: uid(), src_url: raw.source_url, src_label: '(legacy v1)',
+      src_duration: raw.trim_end || 60,
+      src_in: raw.trim_start || 0,
+      src_out: raw.trim_end || 60,
       speed: 1, volume: 1,
-    },
+      filters: { ...DEFAULT_FILTERS },
+      transition_in: { ...DEFAULT_TRANSITION },
+    }] : [],
     text_clips: raw.text_clips || [],
-    image_clips: [],
-    audio_clips: [],
+    image_clips: [], audio_clips: [],
   }
 }
 
@@ -44,8 +76,7 @@ export default function EditorClient({ workspaceId, userId, results, projects })
   const supabase = createClient()
   const [project, setProject] = useState(DEFAULT_PROJECT)
   const [projectId, setProjectId] = useState(null)
-  const [selected, setSelected] = useState(null) // { kind: 'source'|'text'|'image'|'audio', id }
-  const [duration, setDuration] = useState(0)
+  const [selected, setSelected] = useState(null) // { kind, id }
   const [currentTime, setCurrentTime] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [exporting, setExporting] = useState(false)
@@ -53,29 +84,58 @@ export default function EditorClient({ workspaceId, userId, results, projects })
   const [err, setErr] = useState('')
   const [saving, setSaving] = useState(false)
   const videoRef = useRef(null)
+  const playRafRef = useRef(null)
   const imageInputRef = useRef(null)
   const audioInputRef = useRef(null)
 
   const videoSources = useMemo(() => results.filter((r) => r.type === 'video' && r.url), [results])
+  const totalDur = useMemo(() => totalDuration(project.video_clips), [project.video_clips])
+  const activeClipInfo = useMemo(() => activeClipAt(currentTime, project.video_clips), [currentTime, project.video_clips])
+  const activeClip = activeClipInfo ? project.video_clips[activeClipInfo.index] : null
 
   function patch(p) { setProject((cur) => ({ ...cur, ...(typeof p === 'function' ? p(cur) : p) })) }
-  function patchSource(p) { setProject((cur) => ({ ...cur, source: { ...cur.source, ...p } })) }
 
-  function pickSource(result) {
-    setProject({
-      ...DEFAULT_PROJECT,
-      name: result.label ? `${result.label} (edit)` : 'Untitled project',
-      ar: result.ar || '9:16',
-      source: { result_id: result.id, url: result.url, trim_start: 0, trim_end: null, speed: 1, volume: 1 },
+  async function addVideoClip(result) {
+    setErr('')
+    // Probe duration via a temporary video element
+    const probe = document.createElement('video')
+    probe.src = result.url
+    probe.crossOrigin = 'anonymous'
+    const dur = await new Promise((res) => { probe.onloadedmetadata = () => res(probe.duration || 10); probe.onerror = () => res(10) })
+    const c = {
+      id: uid(), src_url: result.url, src_label: result.label || 'untitled',
+      src_duration: dur, src_in: 0, src_out: dur, speed: 1, volume: 1,
+      filters: { ...DEFAULT_FILTERS },
+      transition_in: project.video_clips.length === 0 ? { ...DEFAULT_TRANSITION } : { type: 'crossfade', duration: 0.5 },
+    }
+    patch((p) => ({ ...p, video_clips: [...p.video_clips, c] }))
+    if (project.video_clips.length === 0) {
+      setProject((p) => ({ ...p, name: result.label ? `${result.label} (edit)` : p.name, ar: result.ar || p.ar }))
+    }
+    setSelected({ kind: 'video', id: c.id })
+  }
+
+  function removeVideoClip(id) {
+    patch((p) => ({ ...p, video_clips: p.video_clips.filter((c) => c.id !== id) }))
+    if (selected?.id === id) setSelected(null)
+  }
+
+  function moveVideoClip(id, dir) {
+    patch((p) => {
+      const idx = p.video_clips.findIndex((c) => c.id === id)
+      if (idx < 0) return p
+      const nidx = dir === 'up' ? idx - 1 : idx + 1
+      if (nidx < 0 || nidx >= p.video_clips.length) return p
+      const next = [...p.video_clips]
+      ;[next[idx], next[nidx]] = [next[nidx], next[idx]]
+      return { ...p, video_clips: next }
     })
-    setSelected({ kind: 'source' })
-    setCurrentTime(0); setDuration(0)
   }
 
   function addTextClip() {
     const c = {
       id: uid(), kind: 'text', text: 'Tap to edit',
-      start: Math.max(0, currentTime), end: Math.min(duration || 5, (currentTime || 0) + 2),
+      start: Math.max(0, currentTime), end: Math.min(totalDur || 5, (currentTime || 0) + 2),
       x_pct: 50, y_pct: 80, size: 48, color: '#ffffff', weight: 700,
       bg: 'rgba(0,0,0,0.6)', align: 'center',
     }
@@ -84,18 +144,16 @@ export default function EditorClient({ workspaceId, userId, results, projects })
   }
 
   async function onImageFile(e) {
-    const f = e.target.files?.[0]
-    if (!f) return
-    e.target.value = ''
-    if (!f.type.startsWith('image/')) { setErr('File harus image (PNG/JPG/WebP)'); return }
+    const f = e.target.files?.[0]; if (!f) return; e.target.value = ''
+    if (!f.type.startsWith('image/')) { setErr('File harus image'); return }
     try {
-      const path = `${workspaceId}/editor-img-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.${f.name.split('.').pop()}`
+      const path = `${workspaceId}/editor-img-${Date.now()}.${f.name.split('.').pop()}`
       const { error: upErr } = await supabase.storage.from('refs').upload(path, f, { contentType: f.type })
       if (upErr) throw upErr
       const { data: { publicUrl } } = supabase.storage.from('refs').getPublicUrl(path)
       const c = {
         id: uid(), kind: 'image', src_url: publicUrl, src_name: f.name,
-        start: currentTime, end: Math.min(duration || 5, currentTime + 3),
+        start: currentTime, end: Math.min(totalDur || 5, currentTime + 3),
         x_pct: 90, y_pct: 10, w_pct: 15, opacity: 1,
       }
       patch((p) => ({ ...p, image_clips: [...p.image_clips, c] }))
@@ -104,20 +162,14 @@ export default function EditorClient({ workspaceId, userId, results, projects })
   }
 
   async function onAudioFile(e) {
-    const f = e.target.files?.[0]
-    if (!f) return
-    e.target.value = ''
-    if (!f.type.startsWith('audio/')) { setErr('File harus audio (MP3/WAV/M4A)'); return }
+    const f = e.target.files?.[0]; if (!f) return; e.target.value = ''
+    if (!f.type.startsWith('audio/')) { setErr('File harus audio'); return }
     try {
       const path = `${workspaceId}/editor-audio-${Date.now()}.${f.name.split('.').pop()}`
       const { error: upErr } = await supabase.storage.from('refs').upload(path, f, { contentType: f.type })
       if (upErr) throw upErr
       const { data: { publicUrl } } = supabase.storage.from('refs').getPublicUrl(path)
-      // Replace existing music (single-slot for v2)
-      const c = {
-        id: uid(), kind: 'audio', src_url: publicUrl, src_name: f.name,
-        start: 0, duration: duration || 15, volume: 0.3,
-      }
+      const c = { id: uid(), kind: 'audio', src_url: publicUrl, src_name: f.name, start: 0, duration: totalDur || 15, volume: 0.3 }
       patch({ audio_clips: [c] })
       setSelected({ kind: 'audio', id: c.id })
     } catch (e) { setErr('Upload audio: ' + e.message) }
@@ -132,25 +184,22 @@ export default function EditorClient({ workspaceId, userId, results, projects })
     }))
   }
   function deleteClip(kind, id) {
-    setProject((proj) => ({
-      ...proj,
-      [`${kind}_clips`]: proj[`${kind}_clips`].filter((c) => c.id !== id),
-    }))
+    setProject((proj) => ({ ...proj, [`${kind}_clips`]: proj[`${kind}_clips`].filter((c) => c.id !== id) }))
     if (selected?.id === id) setSelected(null)
   }
 
   async function saveProject() {
-    if (!project.source.result_id) { setErr('Pilih source video dulu'); return }
+    if (project.video_clips.length === 0) { setErr('Tambah minimal 1 video clip dulu'); return }
     setSaving(true); setErr('')
     try {
       if (projectId) {
         const { error } = await supabase.from('editor_projects')
-          .update({ name: project.name, source_result_id: project.source.result_id, config: project, updated_at: new Date().toISOString() })
+          .update({ name: project.name, source_result_id: null, config: project, updated_at: new Date().toISOString() })
           .eq('id', projectId)
         if (error) throw error
       } else {
         const { data, error } = await supabase.from('editor_projects')
-          .insert({ workspace_id: workspaceId, name: project.name, source_result_id: project.source.result_id, config: project, created_by: userId })
+          .insert({ workspace_id: workspaceId, name: project.name, config: project, created_by: userId })
           .select('id').single()
         if (error) throw error
         setProjectId(data.id)
@@ -164,32 +213,19 @@ export default function EditorClient({ workspaceId, userId, results, projects })
     const { data, error } = await supabase.from('editor_projects').select('*').eq('id', id).single()
     if (error) { setErr(error.message); return }
     setProject(normalizeProject(data.config))
-    setProjectId(data.id)
-    setSelected(null)
+    setProjectId(data.id); setSelected(null); setCurrentTime(0)
   }
 
-  function newProject() {
-    setProject(DEFAULT_PROJECT); setProjectId(null); setSelected(null)
-  }
-
-  const trimEnd = project.source.trim_end ?? duration
-  const exportDur = Math.max(0, (trimEnd - project.source.trim_start) / project.source.speed)
+  function newProject() { setProject(DEFAULT_PROJECT); setProjectId(null); setSelected(null); setCurrentTime(0) }
 
   async function exportVideo() {
-    if (!project.source.url) { setErr('Belum ada source video'); return }
+    if (project.video_clips.length === 0) { setErr('Belum ada video clip'); return }
     setExporting(true); setExportProgress('Persiapan...'); setErr('')
     try {
-      const projectForRender = {
-        ...project,
-        source: { ...project.source, trim_end: trimEnd },
-      }
-      const { blob, ext, mime } = await renderProject(projectForRender, setExportProgress)
-
-      setExportProgress(`Uploading ${(blob.size / 1024 / 1024).toFixed(1)}MB hasil...`)
+      const { blob, ext, mime } = await renderProject(project, setExportProgress)
+      setExportProgress(`Uploading ${(blob.size / 1024 / 1024).toFixed(1)}MB...`)
       const path = `${workspaceId}/editor-${Date.now()}.${ext}`
-      const { error: upErr } = await supabase.storage.from('refs').upload(path, blob, {
-        upsert: false, contentType: mime, cacheControl: '3600',
-      })
+      const { error: upErr } = await supabase.storage.from('refs').upload(path, blob, { upsert: false, contentType: mime, cacheControl: '3600' })
       if (upErr) throw upErr
       const { data: { publicUrl } } = supabase.storage.from('refs').getPublicUrl(path)
       const { error: insErr } = await supabase.from('results').insert({
@@ -197,12 +233,9 @@ export default function EditorClient({ workspaceId, userId, results, projects })
         label: project.name + ' (edited)', ar: project.ar,
         group_label: 'editor', qc_status: 'pending',
         meta: {
-          source: 'editor', editor_project_id: projectId,
-          text_clips: project.text_clips.length,
-          image_clips: project.image_clips.length,
-          audio_clips: project.audio_clips.length,
-          format: ext,
-          duration: exportDur,
+          source: 'editor', editor_project_id: projectId, format: ext,
+          duration: totalDur, video_clips: project.video_clips.length,
+          text_clips: project.text_clips.length, image_clips: project.image_clips.length, audio_clips: project.audio_clips.length,
         },
         created_by: userId,
       })
@@ -215,61 +248,96 @@ export default function EditorClient({ workspaceId, userId, results, projects })
     setExporting(false)
   }
 
-  // Playback
+  // Preview playback: drive video element from currentTime + activeClip
   useEffect(() => {
-    const v = videoRef.current; if (!v) return
-    function onLoaded() {
-      setDuration(v.duration || 0)
-      if (project.source.trim_end == null) patchSource({ trim_end: v.duration })
+    const v = videoRef.current
+    if (!v || !activeClip) return
+    if (v.src !== activeClip.src_url) {
+      v.src = activeClip.src_url
+      v.load()
     }
-    function onTime() {
-      setCurrentTime(v.currentTime)
-      if (v.currentTime >= trimEnd && playing) { v.currentTime = project.source.trim_start }
+    const targetTime = activeClipInfo.srcTime
+    if (Math.abs(v.currentTime - targetTime) > 0.3) {
+      v.currentTime = targetTime
     }
-    v.addEventListener('loadedmetadata', onLoaded)
-    v.addEventListener('timeupdate', onTime)
-    return () => { v.removeEventListener('loadedmetadata', onLoaded); v.removeEventListener('timeupdate', onTime) }
+    v.playbackRate = activeClip.speed || 1
+    v.volume = Math.min(1, activeClip.volume ?? 1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project.source.url, project.source.trim_start, project.source.trim_end, playing])
+  }, [activeClip?.id])
 
-  useEffect(() => {
+  function startPlayback() {
+    if (!project.video_clips.length) return
     const v = videoRef.current; if (!v) return
-    v.playbackRate = project.source.speed
-    v.volume = project.source.volume
-  }, [project.source.speed, project.source.volume])
-
-  function togglePlay() {
-    const v = videoRef.current; if (!v) return
-    if (v.paused) {
-      if (v.currentTime < project.source.trim_start || v.currentTime >= trimEnd) v.currentTime = project.source.trim_start
-      v.play(); setPlaying(true)
-    } else { v.pause(); setPlaying(false) }
+    setPlaying(true)
+    const startWallTime = performance.now()
+    const startTimelineTime = currentTime >= totalDur ? 0 : currentTime
+    if (currentTime >= totalDur) setCurrentTime(0)
+    function loop() {
+      const elapsed = (performance.now() - startWallTime) / 1000
+      const t = Math.min(totalDur, startTimelineTime + elapsed)
+      setCurrentTime(t)
+      if (t >= totalDur) { setPlaying(false); return }
+      // Sync video element to active clip
+      const info = activeClipAt(t, project.video_clips)
+      if (info) {
+        const vid = videoRef.current
+        if (vid) {
+          const clip = project.video_clips[info.index]
+          if (vid.src !== clip.src_url) { vid.src = clip.src_url; vid.load() }
+          if (Math.abs(vid.currentTime - info.srcTime) > 0.5) vid.currentTime = info.srcTime
+          if (vid.paused) vid.play().catch(() => {})
+        }
+      }
+      playRafRef.current = requestAnimationFrame(loop)
+    }
+    playRafRef.current = requestAnimationFrame(loop)
   }
+  function stopPlayback() {
+    setPlaying(false)
+    if (playRafRef.current) { cancelAnimationFrame(playRafRef.current); playRafRef.current = null }
+    if (videoRef.current) videoRef.current.pause()
+  }
+  function togglePlay() { playing ? stopPlayback() : startPlayback() }
+
   function seekTo(t) {
-    const v = videoRef.current; if (!v) return
-    v.currentTime = Math.max(0, Math.min(duration, t)); setCurrentTime(v.currentTime)
+    const nt = Math.max(0, Math.min(totalDur, t))
+    setCurrentTime(nt)
+    if (playing) {
+      stopPlayback()
+      setTimeout(startPlayback, 50)
+    } else {
+      // Sync video immediately
+      const info = activeClipAt(nt, project.video_clips)
+      if (info && videoRef.current) {
+        const clip = project.video_clips[info.index]
+        if (videoRef.current.src !== clip.src_url) { videoRef.current.src = clip.src_url; videoRef.current.load() }
+        videoRef.current.currentTime = info.srcTime
+      }
+    }
   }
 
   const aspectClass = project.ar === '16:9' ? 'aspect-video' : project.ar === '1:1' ? 'aspect-square' : 'aspect-[9/16]'
+  const videoFilter = activeClip?.filters
+    ? `brightness(${1 + (activeClip.filters.brightness || 0)}) contrast(${activeClip.filters.contrast || 1}) saturate(${activeClip.filters.saturation || 1}) blur(${activeClip.filters.blur || 0}px)`
+    : 'none'
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold">✂️ Editor <span className="text-xs text-[var(--muted2)] font-normal">v2 gacor</span></h1>
-          <p className="text-xs text-[var(--muted)]">Trim · Speed · Volume · Text · Image overlay · Music underlay · MP4 export via ffmpeg.wasm</p>
+          <h1 className="text-2xl font-bold">✂️ Editor <span className="text-xs text-[var(--muted2)] font-normal">v3 full</span></h1>
+          <p className="text-xs text-[var(--muted)]">Multi-clip · Transitions · Filters · Text · Image · Music · MP4</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <input value={project.name} onChange={(e) => patch({ name: e.target.value })}
-            placeholder="Project name"
+          <input value={project.name} onChange={(e) => patch({ name: e.target.value })} placeholder="Project name"
             className="text-sm px-3 py-1.5 rounded bg-[var(--surface)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] w-56" />
           <button onClick={newProject} className="px-3 py-1.5 text-xs rounded bg-[var(--surface)] border border-[var(--border)] hover:bg-[var(--surface2)]">+ New</button>
-          <button onClick={saveProject} disabled={saving || !project.source.result_id} className="px-3 py-1.5 text-xs rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)] disabled:opacity-50">
+          <button onClick={saveProject} disabled={saving || project.video_clips.length === 0} className="px-3 py-1.5 text-xs rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)] disabled:opacity-50">
             {saving ? '⏳ Save...' : '💾 Save'}
           </button>
-          <button onClick={exportVideo} disabled={exporting || !project.source.url}
+          <button onClick={exportVideo} disabled={exporting || project.video_clips.length === 0}
             className="px-4 py-1.5 text-xs font-bold rounded bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-50">
-            {exporting ? `⏳ Rendering...` : '⬇ Export → QC'}
+            {exporting ? `⏳ Rendering...` : `⬇ Export → QC (${totalDur.toFixed(1)}s)`}
           </button>
         </div>
       </div>
@@ -282,43 +350,33 @@ export default function EditorClient({ workspaceId, userId, results, projects })
         <div className="text-xs text-green-400 bg-green-900/20 border border-green-700/40 p-3 rounded">{exportProgress}</div>
       )}
 
-      <div className="grid grid-cols-[220px_1fr_300px] gap-3" style={{ minHeight: 600 }}>
-        {/* LEFT SIDEBAR */}
+      <div className="grid grid-cols-[230px_1fr_310px] gap-3" style={{ minHeight: 650 }}>
+        {/* LEFT */}
         <div className="space-y-3">
           <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-2">
-            <div className="text-[10px] uppercase font-semibold text-[var(--muted)] mb-2">Source video ({videoSources.length})</div>
+            <div className="text-[10px] uppercase font-semibold text-[var(--muted)] mb-2">+ Tambah video clip</div>
             <div className="space-y-1 max-h-64 overflow-auto">
               {videoSources.length === 0 ? (
                 <div className="text-[10px] text-[var(--muted)] p-2">Belum ada video. Generate di /generate dulu.</div>
-              ) : videoSources.map((r) => {
-                const on = project.source.result_id === r.id
-                return (
-                  <button key={r.id} onClick={() => pickSource(r)} className={`w-full text-left p-1.5 rounded border ${on ? 'border-[var(--accent)] bg-[var(--accent)]/10' : 'border-[var(--border)] hover:bg-[var(--surface2)]'}`}>
-                    <div className="flex gap-2">
-                      <video src={r.url} muted className="w-10 aspect-[9/16] object-cover rounded bg-black flex-shrink-0" />
-                      <div className="min-w-0 flex-1">
-                        <div className="text-[11px] font-semibold truncate">{r.label || 'untitled'}</div>
-                        <div className="text-[9px] text-[var(--muted)] truncate">{r.personas?.name || '—'}</div>
-                      </div>
+              ) : videoSources.map((r) => (
+                <button key={r.id} onClick={() => addVideoClip(r)} className="w-full text-left p-1.5 rounded border border-[var(--border)] hover:bg-[var(--surface2)] hover:border-[var(--accent)]">
+                  <div className="flex gap-2">
+                    <video src={r.url} muted className="w-10 aspect-[9/16] object-cover rounded bg-black flex-shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[11px] font-semibold truncate">{r.label || 'untitled'}</div>
+                      <div className="text-[9px] text-[var(--muted)] truncate">+ tambah ke sequence</div>
                     </div>
-                  </button>
-                )
-              })}
+                  </div>
+                </button>
+              ))}
             </div>
           </div>
 
-          {/* Add overlays */}
           <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-2 space-y-1">
-            <div className="text-[10px] uppercase font-semibold text-[var(--muted)] mb-1">+ Add overlay</div>
-            <button onClick={addTextClip} disabled={!project.source.url} className="w-full text-xs px-2 py-1.5 rounded bg-purple-500/20 border border-purple-500/40 hover:bg-purple-500/30 text-purple-200 disabled:opacity-50">
-              📝 Text overlay
-            </button>
-            <button onClick={() => imageInputRef.current?.click()} disabled={!project.source.url} className="w-full text-xs px-2 py-1.5 rounded bg-blue-500/20 border border-blue-500/40 hover:bg-blue-500/30 text-blue-200 disabled:opacity-50">
-              🖼 Image / Logo
-            </button>
-            <button onClick={() => audioInputRef.current?.click()} disabled={!project.source.url} className="w-full text-xs px-2 py-1.5 rounded bg-orange-500/20 border border-orange-500/40 hover:bg-orange-500/30 text-orange-200 disabled:opacity-50">
-              🎵 Music underlay
-            </button>
+            <div className="text-[10px] uppercase font-semibold text-[var(--muted)] mb-1">+ Overlay & audio</div>
+            <button onClick={addTextClip} disabled={!project.video_clips.length} className="w-full text-xs px-2 py-1.5 rounded bg-purple-500/20 border border-purple-500/40 hover:bg-purple-500/30 text-purple-200 disabled:opacity-50">📝 Text overlay</button>
+            <button onClick={() => imageInputRef.current?.click()} disabled={!project.video_clips.length} className="w-full text-xs px-2 py-1.5 rounded bg-blue-500/20 border border-blue-500/40 hover:bg-blue-500/30 text-blue-200 disabled:opacity-50">🖼 Image / Logo</button>
+            <button onClick={() => audioInputRef.current?.click()} disabled={!project.video_clips.length} className="w-full text-xs px-2 py-1.5 rounded bg-orange-500/20 border border-orange-500/40 hover:bg-orange-500/30 text-orange-200 disabled:opacity-50">🎵 Music underlay</button>
             <input ref={imageInputRef} type="file" accept="image/*" className="hidden" onChange={onImageFile} />
             <input ref={audioInputRef} type="file" accept="audio/*" className="hidden" onChange={onAudioFile} />
           </div>
@@ -338,21 +396,15 @@ export default function EditorClient({ workspaceId, userId, results, projects })
           )}
         </div>
 
-        {/* CENTER: Preview + multi-track timeline */}
+        {/* CENTER */}
         <div className="space-y-3 min-w-0">
           <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-3">
             <div className="relative mx-auto bg-black rounded overflow-hidden" style={{ maxWidth: 360 }}>
               <div className={`${aspectClass} relative w-full`}>
-                {project.source.url ? (
-                  <video ref={videoRef} src={project.source.url} className="w-full h-full object-contain" playsInline crossOrigin="anonymous" />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center text-xs text-[var(--muted)] text-center p-4">
-                    Pilih source video dari panel kiri
-                  </div>
-                )}
+                <video ref={videoRef} className="w-full h-full object-contain" playsInline crossOrigin="anonymous" muted={false}
+                  style={{ filter: videoFilter }} />
 
-                {/* Image overlays */}
-                {project.source.url && project.image_clips.map((c) => {
+                {project.image_clips.map((c) => {
                   if (currentTime < c.start || currentTime > c.end) return null
                   const on = selected?.kind === 'image' && selected.id === c.id
                   return (
@@ -365,9 +417,7 @@ export default function EditorClient({ workspaceId, userId, results, projects })
                       }} />
                   )
                 })}
-
-                {/* Text overlays */}
-                {project.source.url && project.text_clips.map((c) => {
+                {project.text_clips.map((c) => {
                   if (currentTime < c.start || currentTime > c.end) return null
                   const on = selected?.kind === 'text' && selected.id === c.id
                   return (
@@ -382,83 +432,86 @@ export default function EditorClient({ workspaceId, userId, results, projects })
                       }}>{c.text}</div>
                   )
                 })}
+                {activeClip && (
+                  <div className="absolute bottom-1 left-1 text-[9px] bg-black/70 text-white px-1.5 py-0.5 rounded">
+                    Clip {activeClipInfo.index + 1}/{project.video_clips.length}
+                  </div>
+                )}
               </div>
             </div>
 
             <div className="flex items-center gap-2 mt-3">
-              <button onClick={togglePlay} disabled={!project.source.url} className="px-3 py-1.5 rounded bg-[var(--accent)] text-white text-xs font-bold disabled:opacity-50">
+              <button onClick={togglePlay} disabled={!project.video_clips.length} className="px-3 py-1.5 rounded bg-[var(--accent)] text-white text-xs font-bold disabled:opacity-50">
                 {playing ? '⏸ Pause' : '▶ Play'}
               </button>
-              <button onClick={() => seekTo(project.source.trim_start)} disabled={!project.source.url} className="px-2 py-1.5 text-xs rounded bg-[var(--surface2)] border border-[var(--border)]">⏮</button>
+              <button onClick={() => seekTo(0)} disabled={!project.video_clips.length} className="px-2 py-1.5 text-xs rounded bg-[var(--surface2)] border border-[var(--border)]">⏮</button>
               <div className="text-[10px] text-[var(--muted)] font-mono flex-1 text-center">
-                {currentTime.toFixed(2)}s / {duration.toFixed(2)}s · export {exportDur.toFixed(2)}s @ {project.source.speed}x
+                {currentTime.toFixed(2)}s / {totalDur.toFixed(2)}s
               </div>
-              <button onClick={() => setSelected({ kind: 'source' })} className="text-[10px] underline text-[var(--muted)] hover:text-white">edit source</button>
             </div>
 
-            {duration > 0 && (
-              <input type="range" min={0} max={duration} step={0.01} value={currentTime}
+            {totalDur > 0 && (
+              <input type="range" min={0} max={totalDur} step={0.01} value={currentTime}
                 onChange={(e) => seekTo(parseFloat(e.target.value))} className="w-full mt-2" />
             )}
           </div>
 
-          {/* Multi-track timeline */}
-          {project.source.url && (
-            <Timeline project={project} duration={duration} currentTime={currentTime} trimEnd={trimEnd}
-              onSeek={seekTo} onSelectSource={() => setSelected({ kind: 'source' })}
-              onTrimStart={(t) => patchSource({ trim_start: Math.max(0, Math.min(t, trimEnd - 0.5)) })}
-              onTrimEnd={(t) => patchSource({ trim_end: Math.max(project.source.trim_start + 0.5, Math.min(t, duration)) })}
-              selected={selected} onSelect={setSelected}
-              onUpdateClip={updateClip} />
+          {project.video_clips.length > 0 && (
+            <Timeline project={project} totalDur={totalDur} currentTime={currentTime}
+              selected={selected} onSelect={setSelected} onSeek={seekTo} onUpdateClip={updateClip} />
           )}
         </div>
 
-        {/* RIGHT: Properties */}
+        {/* RIGHT */}
         <div className="space-y-3">
-          {selected?.kind === 'source' ? (
-            <SourcePanel source={project.source} duration={duration}
-              onUpdate={patchSource} ar={project.ar} onUpdateAr={(ar) => patch({ ar })} />
+          {selected?.kind === 'video' ? (
+            <VideoClipPanel clip={project.video_clips.find((c) => c.id === selected.id)}
+              isFirst={project.video_clips[0]?.id === selected.id}
+              onUpdate={(p) => updateClip('video', selected.id, p)}
+              onDelete={() => removeVideoClip(selected.id)}
+              onMoveUp={() => moveVideoClip(selected.id, 'up')}
+              onMoveDown={() => moveVideoClip(selected.id, 'down')} />
           ) : selected?.kind === 'text' ? (
-            <TextPanel clip={project.text_clips.find((c) => c.id === selected.id)} duration={duration}
-              onUpdate={(p) => updateClip('text', selected.id, p)}
-              onDelete={() => deleteClip('text', selected.id)} />
+            <TextPanel clip={project.text_clips.find((c) => c.id === selected.id)} duration={totalDur}
+              onUpdate={(p) => updateClip('text', selected.id, p)} onDelete={() => deleteClip('text', selected.id)} />
           ) : selected?.kind === 'image' ? (
-            <ImagePanel clip={project.image_clips.find((c) => c.id === selected.id)} duration={duration}
-              onUpdate={(p) => updateClip('image', selected.id, p)}
-              onDelete={() => deleteClip('image', selected.id)} />
+            <ImagePanel clip={project.image_clips.find((c) => c.id === selected.id)} duration={totalDur}
+              onUpdate={(p) => updateClip('image', selected.id, p)} onDelete={() => deleteClip('image', selected.id)} />
           ) : selected?.kind === 'audio' ? (
-            <AudioPanel clip={project.audio_clips.find((c) => c.id === selected.id)} duration={duration}
-              onUpdate={(p) => updateClip('audio', selected.id, p)}
-              onDelete={() => deleteClip('audio', selected.id)} />
+            <AudioPanel clip={project.audio_clips.find((c) => c.id === selected.id)} duration={totalDur}
+              onUpdate={(p) => updateClip('audio', selected.id, p)} onDelete={() => deleteClip('audio', selected.id)} />
           ) : (
             <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-3 text-xs text-[var(--muted)]">
               <div className="text-[10px] uppercase font-semibold mb-2">Properties</div>
-              Pilih track atau clip di timeline buat edit. Atau klik <em>"edit source"</em> di transport.
+              Pilih clip di timeline buat edit. Add video clips dari panel kiri buat mulai.
             </div>
           )}
 
-          {project.source.url && (
-            <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-3 text-xs">
-              <div className="text-[10px] uppercase font-semibold text-[var(--muted)] mb-2">Project</div>
-              <div>Trim: <strong>{project.source.trim_start.toFixed(2)}s → {trimEnd.toFixed(2)}s</strong></div>
-              <div>Speed: <strong>{project.source.speed}x</strong> · Volume: <strong>{Math.round(project.source.volume * 100)}%</strong></div>
-              <div>Export: <strong>{exportDur.toFixed(2)}s @ {project.ar}</strong></div>
-              <div className="text-[10px] text-[var(--muted2)] mt-2">
-                {project.text_clips.length} text · {project.image_clips.length} image · {project.audio_clips.length} music
-              </div>
+          <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-3 text-xs">
+            <div className="text-[10px] uppercase font-semibold text-[var(--muted)] mb-2">Project</div>
+            <div>Total: <strong>{totalDur.toFixed(2)}s</strong> @ {project.ar}</div>
+            <div className="text-[10px] text-[var(--muted2)] mt-1">
+              {project.video_clips.length} clip · {project.text_clips.length} text · {project.image_clips.length} img · {project.audio_clips.length} music
             </div>
-          )}
+            <Field label="Aspect ratio" className="mt-2">
+              <select value={project.ar} onChange={(e) => patch({ ar: e.target.value })} className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)]">
+                <option value="9:16">9:16 vertical</option>
+                <option value="16:9">16:9 horizontal</option>
+                <option value="1:1">1:1 square</option>
+              </select>
+            </Field>
+          </div>
         </div>
       </div>
     </div>
   )
 }
 
-function Timeline({ project, duration, currentTime, trimEnd, onSeek, onSelectSource, onTrimStart, onTrimEnd, selected, onSelect, onUpdateClip }) {
+function Timeline({ project, totalDur, currentTime, selected, onSelect, onSeek, onUpdateClip }) {
   const trackRef = useRef(null)
   const dragRef = useRef(null)
-  const pctToTime = (pct) => (pct / 100) * duration
-  const timeToPct = (t) => duration > 0 ? (t / duration) * 100 : 0
+  const pctToTime = (pct) => (pct / 100) * totalDur
+  const timeToPct = (t) => totalDur > 0 ? (t / totalDur) * 100 : 0
 
   function startDrag(e, kind, clipKind, clipId) {
     e.stopPropagation()
@@ -471,20 +524,18 @@ function Timeline({ project, duration, currentTime, trimEnd, onSeek, onSelectSou
       const x = ev.clientX - rect.left
       const pct = Math.max(0, Math.min(100, (x / rect.width) * 100))
       const t = pctToTime(pct)
-      if (kind === 'trimStart') onTrimStart(t)
-      else if (kind === 'trimEnd') onTrimEnd(t)
-      else if (kind === 'clipMove') {
+      if (kind === 'clipMove' && clipKind !== 'video') {
         const c = startClip
         const len = c.end - c.start
-        const dx = (ev.clientX - origin.x) / rect.width * duration
-        const ns = Math.max(0, Math.min(duration - len, c.start + dx))
+        const dx = (ev.clientX - origin.x) / rect.width * totalDur
+        const ns = Math.max(0, Math.min(totalDur - len, c.start + dx))
         onUpdateClip(clipKind, clipId, { start: ns, end: ns + len })
-      } else if (kind === 'clipStart') {
+      } else if (kind === 'clipStart' && clipKind !== 'video') {
         const c = startClip
         onUpdateClip(clipKind, clipId, { start: Math.max(0, Math.min(c.end - 0.1, t)) })
-      } else if (kind === 'clipEnd') {
+      } else if (kind === 'clipEnd' && clipKind !== 'video') {
         const c = startClip
-        onUpdateClip(clipKind, clipId, { end: Math.max(c.start + 0.1, Math.min(duration, t)) })
+        onUpdateClip(clipKind, clipId, { end: Math.max(c.start + 0.1, Math.min(totalDur, t)) })
       }
     }
     function onUp() { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); dragRef.current = null }
@@ -498,55 +549,70 @@ function Timeline({ project, duration, currentTime, trimEnd, onSeek, onSelectSou
     onSeek(pctToTime((x / rect.width) * 100))
   }
 
-  const Tracks = [
-    { kind: 'video', label: '📹 video', color: 'bg-[var(--accent)]/30', items: [{ id: 'src', start: project.source.trim_start, end: trimEnd, label: 'source', isSource: true }] },
-    { kind: 'image', label: '🖼 image', color: 'bg-blue-900/30', items: project.image_clips },
-    { kind: 'text', label: '📝 text', color: 'bg-purple-900/30', items: project.text_clips },
-    { kind: 'audio', label: '🎵 audio', color: 'bg-orange-900/30', items: project.audio_clips.map((c) => ({ ...c, end: c.start + c.duration })) },
-  ]
-
   return (
     <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-3 select-none">
       <div className="flex items-center justify-between mb-2">
-        <div className="text-[10px] uppercase font-semibold text-[var(--muted)]">Timeline</div>
-        <div className="text-[9px] text-[var(--muted2)]">Drag pill = move · drag edge = resize · click track = seek</div>
+        <div className="text-[10px] uppercase font-semibold text-[var(--muted)]">Timeline · multi-track</div>
+        <div className="text-[9px] text-[var(--muted2)]">Klik clip = select · drag pill (non-video) = move</div>
       </div>
 
       <div ref={trackRef} className="relative cursor-pointer" onClick={onTrackClick}>
-        {Tracks.map((trk) => (
-          <div key={trk.kind} className="flex items-center gap-2 mb-1.5">
-            <div className="w-12 text-[9px] text-[var(--muted)] font-semibold flex-shrink-0">{trk.label}</div>
-            <div className={`relative flex-1 h-7 ${trk.color} rounded`}>
-              {trk.items.map((c) => {
-                const isSel = !c.isSource && selected?.kind === trk.kind && selected.id === c.id
-                const start = c.start || 0
-                const end = c.end || start + 1
-                const isSrc = c.isSource
-                return (
-                  <div key={c.id}
-                    onMouseDown={(e) => { if (isSrc) return; startDrag(e, 'clipMove', trk.kind, c.id); onSelect({ kind: trk.kind, id: c.id }) }}
-                    onClick={(e) => { e.stopPropagation(); if (isSrc) onSelectSource(); else onSelect({ kind: trk.kind, id: c.id }) }}
-                    className={`absolute top-0.5 bottom-0.5 rounded text-[9px] text-white font-semibold flex items-center px-1.5 ${isSrc ? 'cursor-pointer' : 'cursor-grab'} ${isSel ? 'ring-2 ring-white' : ''} ${trk.kind === 'video' ? 'bg-[var(--accent)]' : trk.kind === 'image' ? 'bg-blue-600' : trk.kind === 'text' ? 'bg-purple-600' : 'bg-orange-600'}`}
-                    style={{ left: `${timeToPct(start)}%`, width: `${Math.max(2, timeToPct(end - start))}%` }}
-                    title={c.label || c.text || c.src_name || ''}>
-                    {isSrc && <>
-                      <div onMouseDown={(e) => startDrag(e, 'trimStart')} className="absolute left-0 top-0 bottom-0 w-1.5 bg-white/40 cursor-ew-resize rounded-l" />
-                      <div onMouseDown={(e) => startDrag(e, 'trimEnd')} className="absolute right-0 top-0 bottom-0 w-1.5 bg-white/40 cursor-ew-resize rounded-r" />
-                    </>}
-                    {!isSrc && <>
+        {/* VIDEO track */}
+        <div className="flex items-center gap-2 mb-1.5">
+          <div className="w-12 text-[9px] text-[var(--muted)] font-semibold flex-shrink-0">📹 video</div>
+          <div className="relative flex-1 h-8 bg-[var(--accent)]/10 rounded">
+            {project.video_clips.map((c, i) => {
+              const start = clipInTrack(project.video_clips, i)
+              const dur = clipDuration(c)
+              const isSel = selected?.kind === 'video' && selected.id === c.id
+              const hasTrans = i > 0 && c.transition_in && c.transition_in.type !== 'cut'
+              return (
+                <div key={c.id}
+                  onClick={(e) => { e.stopPropagation(); onSelect({ kind: 'video', id: c.id }) }}
+                  className={`absolute top-0.5 bottom-0.5 rounded text-[9px] text-white font-semibold flex items-center px-1.5 cursor-pointer bg-[var(--accent)] ${isSel ? 'ring-2 ring-white' : ''}`}
+                  style={{ left: `${timeToPct(start)}%`, width: `${Math.max(2, timeToPct(dur))}%` }}
+                  title={c.src_label}>
+                  {hasTrans && <div className="absolute -left-2 top-1/2 -translate-y-1/2 w-3 h-3 bg-yellow-400 rounded-full text-black text-[8px] flex items-center justify-center font-bold" title={`${c.transition_in.type} ${c.transition_in.duration}s`}>×</div>}
+                  <span className="truncate px-1">📹 {i + 1}. {c.src_label?.slice(0, 14) || '—'}</span>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* OVERLAYS */}
+        {[
+          { kind: 'image', label: '🖼 image', color: 'bg-blue-900/20', pillBg: 'bg-blue-600' },
+          { kind: 'text', label: '📝 text', color: 'bg-purple-900/20', pillBg: 'bg-purple-600' },
+          { kind: 'audio', label: '🎵 audio', color: 'bg-orange-900/20', pillBg: 'bg-orange-600' },
+        ].map((trk) => {
+          const items = trk.kind === 'audio'
+            ? (project.audio_clips || []).map((c) => ({ ...c, end: c.start + c.duration }))
+            : (project[`${trk.kind}_clips`] || [])
+          return (
+            <div key={trk.kind} className="flex items-center gap-2 mb-1.5">
+              <div className="w-12 text-[9px] text-[var(--muted)] font-semibold flex-shrink-0">{trk.label}</div>
+              <div className={`relative flex-1 h-7 ${trk.color} rounded`}>
+                {items.map((c) => {
+                  const isSel = selected?.kind === trk.kind && selected.id === c.id
+                  return (
+                    <div key={c.id}
+                      onMouseDown={(e) => { startDrag(e, 'clipMove', trk.kind, c.id); onSelect({ kind: trk.kind, id: c.id }) }}
+                      onClick={(e) => { e.stopPropagation(); onSelect({ kind: trk.kind, id: c.id }) }}
+                      className={`absolute top-0.5 bottom-0.5 rounded text-[9px] text-white font-semibold flex items-center px-1.5 cursor-grab ${trk.pillBg} ${isSel ? 'ring-2 ring-white' : ''}`}
+                      style={{ left: `${timeToPct(c.start)}%`, width: `${Math.max(2, timeToPct(c.end - c.start))}%` }}>
                       <div onMouseDown={(e) => startDrag(e, 'clipStart', trk.kind, c.id)} className="absolute left-0 top-0 bottom-0 w-1.5 bg-white/30 cursor-ew-resize rounded-l" />
                       <div onMouseDown={(e) => startDrag(e, 'clipEnd', trk.kind, c.id)} className="absolute right-0 top-0 bottom-0 w-1.5 bg-white/30 cursor-ew-resize rounded-r" />
-                    </>}
-                    <span className="truncate px-1">
-                      {isSrc ? '📹 src' : c.text ? `📝 ${c.text.slice(0, 18)}` : c.src_name ? (trk.kind === 'image' ? `🖼 ${c.src_name.slice(0, 14)}` : `🎵 ${c.src_name.slice(0, 14)}`) : ''}
-                    </span>
-                  </div>
-                )
-              })}
+                      <span className="truncate px-1">{trk.kind === 'text' ? `📝 ${c.text?.slice(0, 14)}` : trk.kind === 'image' ? `🖼 ${c.src_name?.slice(0, 12)}` : `🎵 ${c.src_name?.slice(0, 12)}`}</span>
+                    </div>
+                  )
+                })}
+              </div>
             </div>
-          </div>
-        ))}
-        {/* Playhead spans all tracks */}
+          )
+        })}
+
+        {/* Playhead */}
         <div className="absolute top-0 bottom-0 w-px bg-red-500 z-30 pointer-events-none" style={{ left: `calc(48px + (100% - 48px) * ${timeToPct(currentTime) / 100})` }}>
           <div className="absolute -top-1 -left-1 w-2 h-2 bg-red-500 rounded-full" />
         </div>
@@ -555,7 +621,7 @@ function Timeline({ project, duration, currentTime, trimEnd, onSeek, onSelectSou
       <div className="relative h-3 mt-1 ml-12">
         {[0, 0.25, 0.5, 0.75, 1].map((p, i) => (
           <span key={i} className="absolute text-[9px] text-[var(--muted)] font-mono" style={{ left: `${p * 100}%`, transform: 'translateX(-50%)' }}>
-            {(p * duration).toFixed(1)}s
+            {(p * totalDur).toFixed(1)}s
           </span>
         ))}
       </div>
@@ -563,34 +629,68 @@ function Timeline({ project, duration, currentTime, trimEnd, onSeek, onSelectSou
   )
 }
 
-function SourcePanel({ source, duration, onUpdate, ar, onUpdateAr }) {
-  const trimEnd = source.trim_end ?? duration
+function VideoClipPanel({ clip, isFirst, onUpdate, onDelete, onMoveUp, onMoveDown }) {
+  if (!clip) return null
+  const updFilter = (k, v) => onUpdate({ filters: { ...clip.filters, [k]: v } })
+  const updTrans = (k, v) => onUpdate({ transition_in: { ...clip.transition_in, [k]: v } })
   return (
-    <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-3 space-y-2 text-xs">
-      <div className="text-[10px] uppercase font-semibold text-[var(--muted)]">📹 Source video</div>
-      <Field label="Aspect ratio">
-        <select value={ar} onChange={(e) => onUpdateAr(e.target.value)} className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)]">
-          <option value="9:16">9:16 vertical</option>
-          <option value="16:9">16:9 horizontal</option>
-          <option value="1:1">1:1 square</option>
-        </select>
+    <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-3 space-y-2 text-xs max-h-[80vh] overflow-y-auto">
+      <div className="flex items-center justify-between">
+        <div className="text-[10px] uppercase font-semibold text-[var(--muted)]">📹 Video clip</div>
+        <div className="flex gap-1">
+          <button onClick={onMoveUp} className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--surface2)] hover:bg-[var(--border)]" title="Move up">▲</button>
+          <button onClick={onMoveDown} className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--surface2)] hover:bg-[var(--border)]" title="Move down">▼</button>
+          <button onClick={onDelete} className="text-[10px] px-1.5 py-0.5 rounded text-red-400 hover:bg-[var(--surface2)]">Hapus</button>
+        </div>
+      </div>
+      <div className="text-[9px] text-[var(--muted)] truncate">{clip.src_label}</div>
+
+      <Field label={`Trim in: ${(clip.src_in || 0).toFixed(2)}s`}>
+        <input type="range" min={0} max={clip.src_duration} step={0.05} value={clip.src_in} onChange={(e) => onUpdate({ src_in: parseFloat(e.target.value) })} className="w-full" />
       </Field>
-      <Field label={`Trim start: ${source.trim_start.toFixed(2)}s`}>
-        <input type="range" min={0} max={duration} step={0.05} value={source.trim_start}
-          onChange={(e) => onUpdate({ trim_start: parseFloat(e.target.value) })} className="w-full" />
+      <Field label={`Trim out: ${(clip.src_out || 0).toFixed(2)}s of ${clip.src_duration?.toFixed(1)}s`}>
+        <input type="range" min={0} max={clip.src_duration} step={0.05} value={clip.src_out} onChange={(e) => onUpdate({ src_out: parseFloat(e.target.value) })} className="w-full" />
       </Field>
-      <Field label={`Trim end: ${trimEnd.toFixed(2)}s`}>
-        <input type="range" min={0} max={duration} step={0.05} value={trimEnd}
-          onChange={(e) => onUpdate({ trim_end: parseFloat(e.target.value) })} className="w-full" />
+      <Field label={`Speed: ${clip.speed}x`}>
+        <input type="range" min={0.25} max={3} step={0.05} value={clip.speed} onChange={(e) => onUpdate({ speed: parseFloat(e.target.value) })} className="w-full" />
       </Field>
-      <Field label={`Speed: ${source.speed}x`}>
-        <input type="range" min={0.25} max={3} step={0.05} value={source.speed}
-          onChange={(e) => onUpdate({ speed: parseFloat(e.target.value) })} className="w-full" />
+      <Field label={`Volume: ${Math.round(clip.volume * 100)}%`}>
+        <input type="range" min={0} max={1.5} step={0.05} value={clip.volume} onChange={(e) => onUpdate({ volume: parseFloat(e.target.value) })} className="w-full" />
       </Field>
-      <Field label={`Volume: ${Math.round(source.volume * 100)}%`}>
-        <input type="range" min={0} max={1.5} step={0.05} value={source.volume}
-          onChange={(e) => onUpdate({ volume: parseFloat(e.target.value) })} className="w-full" />
-      </Field>
+
+      {!isFirst && (
+        <div className="pt-2 border-t border-[var(--border)]">
+          <div className="text-[10px] uppercase font-semibold text-yellow-400 mb-1.5">🎬 Transition (from previous)</div>
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Type">
+              <select value={clip.transition_in.type} onChange={(e) => updTrans('type', e.target.value)} className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)]">
+                <option value="cut">Cut (none)</option>
+                <option value="fade">Fade</option>
+                <option value="crossfade">Crossfade</option>
+              </select>
+            </Field>
+            <Field label={`Duration: ${clip.transition_in.duration}s`}>
+              <input type="range" min={0.1} max={2} step={0.1} value={clip.transition_in.duration} onChange={(e) => updTrans('duration', parseFloat(e.target.value))} className="w-full" disabled={clip.transition_in.type === 'cut'} />
+            </Field>
+          </div>
+        </div>
+      )}
+
+      <div className="pt-2 border-t border-[var(--border)]">
+        <div className="text-[10px] uppercase font-semibold text-cyan-400 mb-1.5">🎨 Filters</div>
+        <Field label={`Brightness: ${clip.filters.brightness > 0 ? '+' : ''}${(clip.filters.brightness * 100).toFixed(0)}%`}>
+          <input type="range" min={-0.5} max={0.5} step={0.05} value={clip.filters.brightness} onChange={(e) => updFilter('brightness', parseFloat(e.target.value))} className="w-full" />
+        </Field>
+        <Field label={`Contrast: ${clip.filters.contrast.toFixed(2)}x`}>
+          <input type="range" min={0.5} max={2} step={0.05} value={clip.filters.contrast} onChange={(e) => updFilter('contrast', parseFloat(e.target.value))} className="w-full" />
+        </Field>
+        <Field label={`Saturation: ${clip.filters.saturation.toFixed(2)}x`}>
+          <input type="range" min={0} max={3} step={0.05} value={clip.filters.saturation} onChange={(e) => updFilter('saturation', parseFloat(e.target.value))} className="w-full" />
+        </Field>
+        <Field label={`Blur: ${clip.filters.blur}px`}>
+          <input type="range" min={0} max={20} step={1} value={clip.filters.blur} onChange={(e) => updFilter('blur', parseInt(e.target.value))} className="w-full" />
+        </Field>
+      </div>
     </div>
   )
 }
@@ -600,12 +700,11 @@ function TextPanel({ clip, duration, onUpdate, onDelete }) {
   return (
     <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-3 space-y-2 text-xs">
       <div className="flex items-center justify-between">
-        <div className="text-[10px] uppercase font-semibold text-[var(--muted)]">📝 Text clip</div>
+        <div className="text-[10px] uppercase font-semibold text-[var(--muted)]">📝 Text overlay</div>
         <button onClick={onDelete} className="text-[10px] text-red-400 hover:underline">Hapus</button>
       </div>
       <Field label="Text">
-        <textarea value={clip.text} onChange={(e) => onUpdate({ text: e.target.value })} rows={2}
-          className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] resize-y" />
+        <textarea value={clip.text} onChange={(e) => onUpdate({ text: e.target.value })} rows={2} className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] resize-y" />
       </Field>
       <div className="grid grid-cols-2 gap-2">
         <Field label={`Start: ${clip.start.toFixed(2)}s`}>
@@ -616,28 +715,20 @@ function TextPanel({ clip, duration, onUpdate, onDelete }) {
         </Field>
       </div>
       <div className="grid grid-cols-2 gap-2">
-        <Field label={`X: ${clip.x_pct}%`}>
-          <input type="range" min={0} max={100} value={clip.x_pct} onChange={(e) => onUpdate({ x_pct: parseInt(e.target.value) })} className="w-full" />
-        </Field>
-        <Field label={`Y: ${clip.y_pct}%`}>
-          <input type="range" min={0} max={100} value={clip.y_pct} onChange={(e) => onUpdate({ y_pct: parseInt(e.target.value) })} className="w-full" />
-        </Field>
+        <Field label={`X: ${clip.x_pct}%`}><input type="range" min={0} max={100} value={clip.x_pct} onChange={(e) => onUpdate({ x_pct: parseInt(e.target.value) })} className="w-full" /></Field>
+        <Field label={`Y: ${clip.y_pct}%`}><input type="range" min={0} max={100} value={clip.y_pct} onChange={(e) => onUpdate({ y_pct: parseInt(e.target.value) })} className="w-full" /></Field>
       </div>
-      <Field label={`Size: ${clip.size}px`}>
-        <input type="range" min={16} max={120} value={clip.size} onChange={(e) => onUpdate({ size: parseInt(e.target.value) })} className="w-full" />
-      </Field>
+      <Field label={`Size: ${clip.size}px`}><input type="range" min={16} max={120} value={clip.size} onChange={(e) => onUpdate({ size: parseInt(e.target.value) })} className="w-full" /></Field>
       <div className="grid grid-cols-2 gap-2">
-        <Field label="Color">
-          <input type="color" value={clip.color} onChange={(e) => onUpdate({ color: e.target.value })} className="w-full h-8 rounded bg-[var(--surface2)] border border-[var(--border)] cursor-pointer" />
-        </Field>
+        <Field label="Color"><input type="color" value={clip.color} onChange={(e) => onUpdate({ color: e.target.value })} className="w-full h-8 rounded cursor-pointer" /></Field>
         <Field label="BG">
           <select value={clip.bg} onChange={(e) => onUpdate({ bg: e.target.value })} className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)]">
             <option value="transparent">Transparent</option>
             <option value="rgba(0,0,0,0.6)">Black 60%</option>
             <option value="rgba(0,0,0,0.85)">Black 85%</option>
             <option value="rgba(255,255,255,0.85)">White 85%</option>
-            <option value="rgba(255,87,87,0.85)">Red 85%</option>
-            <option value="rgba(255,193,7,0.85)">Yellow 85%</option>
+            <option value="rgba(255,87,87,0.85)">Red</option>
+            <option value="rgba(255,193,7,0.85)">Yellow</option>
           </select>
         </Field>
       </div>
@@ -669,27 +760,15 @@ function ImagePanel({ clip, duration, onUpdate, onDelete }) {
       <img src={clip.src_url} alt="" className="w-full max-h-24 object-contain bg-black/30 rounded" />
       <div className="text-[9px] text-[var(--muted)] truncate">{clip.src_name}</div>
       <div className="grid grid-cols-2 gap-2">
-        <Field label={`Start: ${clip.start.toFixed(2)}s`}>
-          <input type="range" min={0} max={duration} step={0.05} value={clip.start} onChange={(e) => onUpdate({ start: parseFloat(e.target.value) })} className="w-full" />
-        </Field>
-        <Field label={`End: ${clip.end.toFixed(2)}s`}>
-          <input type="range" min={0} max={duration} step={0.05} value={clip.end} onChange={(e) => onUpdate({ end: parseFloat(e.target.value) })} className="w-full" />
-        </Field>
+        <Field label={`Start: ${clip.start.toFixed(2)}s`}><input type="range" min={0} max={duration} step={0.05} value={clip.start} onChange={(e) => onUpdate({ start: parseFloat(e.target.value) })} className="w-full" /></Field>
+        <Field label={`End: ${clip.end.toFixed(2)}s`}><input type="range" min={0} max={duration} step={0.05} value={clip.end} onChange={(e) => onUpdate({ end: parseFloat(e.target.value) })} className="w-full" /></Field>
       </div>
       <div className="grid grid-cols-2 gap-2">
-        <Field label={`X: ${clip.x_pct}%`}>
-          <input type="range" min={0} max={100} value={clip.x_pct} onChange={(e) => onUpdate({ x_pct: parseInt(e.target.value) })} className="w-full" />
-        </Field>
-        <Field label={`Y: ${clip.y_pct}%`}>
-          <input type="range" min={0} max={100} value={clip.y_pct} onChange={(e) => onUpdate({ y_pct: parseInt(e.target.value) })} className="w-full" />
-        </Field>
+        <Field label={`X: ${clip.x_pct}%`}><input type="range" min={0} max={100} value={clip.x_pct} onChange={(e) => onUpdate({ x_pct: parseInt(e.target.value) })} className="w-full" /></Field>
+        <Field label={`Y: ${clip.y_pct}%`}><input type="range" min={0} max={100} value={clip.y_pct} onChange={(e) => onUpdate({ y_pct: parseInt(e.target.value) })} className="w-full" /></Field>
       </div>
-      <Field label={`Width: ${clip.w_pct}% of frame`}>
-        <input type="range" min={5} max={100} value={clip.w_pct} onChange={(e) => onUpdate({ w_pct: parseInt(e.target.value) })} className="w-full" />
-      </Field>
-      <Field label={`Opacity: ${Math.round(clip.opacity * 100)}%`}>
-        <input type="range" min={0} max={1} step={0.05} value={clip.opacity} onChange={(e) => onUpdate({ opacity: parseFloat(e.target.value) })} className="w-full" />
-      </Field>
+      <Field label={`Width: ${clip.w_pct}%`}><input type="range" min={5} max={100} value={clip.w_pct} onChange={(e) => onUpdate({ w_pct: parseInt(e.target.value) })} className="w-full" /></Field>
+      <Field label={`Opacity: ${Math.round(clip.opacity * 100)}%`}><input type="range" min={0} max={1} step={0.05} value={clip.opacity} onChange={(e) => onUpdate({ opacity: parseFloat(e.target.value) })} className="w-full" /></Field>
     </div>
   )
 }
@@ -699,27 +778,20 @@ function AudioPanel({ clip, duration, onUpdate, onDelete }) {
   return (
     <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-3 space-y-2 text-xs">
       <div className="flex items-center justify-between">
-        <div className="text-[10px] uppercase font-semibold text-[var(--muted)]">🎵 Music underlay</div>
+        <div className="text-[10px] uppercase font-semibold text-[var(--muted)]">🎵 Music</div>
         <button onClick={onDelete} className="text-[10px] text-red-400 hover:underline">Hapus</button>
       </div>
       <audio src={clip.src_url} controls className="w-full" />
       <div className="text-[9px] text-[var(--muted)] truncate">{clip.src_name}</div>
-      <Field label={`Mulai di: ${clip.start.toFixed(2)}s`}>
-        <input type="range" min={0} max={duration} step={0.1} value={clip.start} onChange={(e) => onUpdate({ start: parseFloat(e.target.value) })} className="w-full" />
-      </Field>
-      <Field label={`Volume: ${Math.round(clip.volume * 100)}%`}>
-        <input type="range" min={0} max={1.5} step={0.05} value={clip.volume} onChange={(e) => onUpdate({ volume: parseFloat(e.target.value) })} className="w-full" />
-      </Field>
-      <div className="text-[9px] text-[var(--muted2)]">
-        Tip: music underlay biasanya 20-40% buat di belakang dialog.
-      </div>
+      <Field label={`Mulai di: ${clip.start.toFixed(2)}s`}><input type="range" min={0} max={duration} step={0.1} value={clip.start} onChange={(e) => onUpdate({ start: parseFloat(e.target.value) })} className="w-full" /></Field>
+      <Field label={`Volume: ${Math.round(clip.volume * 100)}%`}><input type="range" min={0} max={1.5} step={0.05} value={clip.volume} onChange={(e) => onUpdate({ volume: parseFloat(e.target.value) })} className="w-full" /></Field>
     </div>
   )
 }
 
-function Field({ label, children }) {
+function Field({ label, children, className = '' }) {
   return (
-    <div>
+    <div className={className}>
       <div className="text-[9px] uppercase text-[var(--muted)] font-semibold mb-1">{label}</div>
       {children}
     </div>

@@ -1,11 +1,9 @@
 // Two export paths:
-// 1) ffmpeg.wasm — produces MP4 (H.264). Requires crossOriginIsolated
-//    (COOP/COEP headers set in next.config.mjs for /editor). Faster than
-//    realtime for short clips, slower init (~25MB wasm download once).
-// 2) MediaRecorder + canvas — produces WebM (VP9). Real-time speed (15s
-//    video = ~15s render). No special headers needed. Always available.
-//
-// We try ffmpeg first; fall back to canvas if anything fails.
+// 1) ffmpeg.wasm — MP4 with full feature set (multi-clip concat, crossfade
+//    transitions, per-clip filters via eq+boxblur, drawtext overlays, image
+//    overlays, audio mix). Requires crossOriginIsolated (COOP/COEP headers).
+// 2) MediaRecorder + canvas — WebM fallback. Limited to first video clip;
+//    transitions and filters approximated via canvas, no per-clip switching.
 
 let ffmpegInstance = null
 let ffmpegLoading = null
@@ -37,105 +35,188 @@ async function fetchToUint8(url) {
 }
 
 function escapeDrawText(s) {
-  // ffmpeg drawtext expects escaping for : \ ' and ,
   return String(s)
-    .replace(/\\/g, '\\\\')
-    .replace(/:/g, '\\:')
-    .replace(/'/g, "'\\''")
-    .replace(/,/g, '\\,')
-    .replace(/\n/g, '\\n')
+    .replace(/\\/g, '\\\\').replace(/:/g, '\\:')
+    .replace(/'/g, "'\\''").replace(/,/g, '\\,').replace(/\n/g, '\\n')
 }
 
-// Build ffmpeg filter_complex to apply trim, speed, text + image overlays,
-// audio music + volume, output to MP4.
-function buildFilterGraph(project, srcDims, canvasDims, audioInputIdx) {
-  const { trim_start, trim_end, speed = 1, volume = 1 } = project.source || {}
+// Duration of a single clip on the timeline (after speed adjustment).
+export function clipDuration(c) {
+  const len = Math.max(0, (c.src_out ?? 0) - (c.src_in ?? 0))
+  return len / Math.max(0.01, c.speed || 1)
+}
+
+// Timeline start position for clip at index i, accounting for crossfade overlaps.
+export function clipInTrack(clips, i) {
+  let t = 0
+  for (let j = 0; j < i; j++) {
+    t += clipDuration(clips[j])
+    const trIn = clips[j + 1]?.transition_in
+    if (j + 1 < clips.length && trIn && trIn.type !== 'cut') {
+      t -= (trIn.duration || 0.5)
+    }
+  }
+  return Math.max(0, t)
+}
+
+// Total timeline duration (sum minus crossfade overlaps).
+export function totalDuration(clips) {
+  if (!clips || clips.length === 0) return 0
+  let t = 0
+  clips.forEach((c, i) => {
+    t += clipDuration(c)
+    if (i > 0 && c.transition_in?.type && c.transition_in.type !== 'cut') {
+      t -= (c.transition_in.duration || 0.5)
+    }
+  })
+  return Math.max(0, t)
+}
+
+// Given timelineTime, find which video clip is active + its source time.
+export function activeClipAt(timelineTime, clips) {
+  let acc = 0
+  for (let i = 0; i < clips.length; i++) {
+    const dur = clipDuration(clips[i])
+    const end = acc + dur
+    if (timelineTime < end || i === clips.length - 1) {
+      const offsetInClip = Math.max(0, timelineTime - acc)
+      const srcTime = (clips[i].src_in || 0) + offsetInClip * (clips[i].speed || 1)
+      return { index: i, srcTime, clipStart: acc, clipEnd: end }
+    }
+    acc = end
+    const next = clips[i + 1]
+    if (next?.transition_in && next.transition_in.type !== 'cut') {
+      acc -= (next.transition_in.duration || 0.5)
+    }
+  }
+  return null
+}
+
+// Build ffmpeg per-clip filter chain: trim + speed (setpts) + eq filters + blur
+function videoClipFilter(c, label) {
+  const trimSrc = `trim=start=${c.src_in}:end=${c.src_out},setpts=${(1/(c.speed || 1)).toFixed(4)}*(PTS-STARTPTS)`
+  const f = c.filters || {}
+  const eqParts = []
+  if (f.brightness != null && f.brightness !== 0) eqParts.push(`brightness=${f.brightness.toFixed(3)}`)
+  if (f.contrast != null && f.contrast !== 1) eqParts.push(`contrast=${f.contrast.toFixed(3)}`)
+  if (f.saturation != null && f.saturation !== 1) eqParts.push(`saturation=${f.saturation.toFixed(3)}`)
+  const eq = eqParts.length ? `,eq=${eqParts.join(':')}` : ''
+  const blur = (f.blur && f.blur > 0) ? `,boxblur=${f.blur}:${f.blur}` : ''
+  return `${trimSrc}${eq}${blur},setsar=1${label}`
+}
+
+function audioClipFilter(c, label) {
+  const speed = c.speed || 1
+  const vol = c.volume ?? 1
+  // ffmpeg atempo limited to 0.5-100, chain it for higher ratios
+  const tempos = []
+  let s = speed
+  while (s < 0.5) { tempos.push('atempo=0.5'); s /= 0.5 }
+  while (s > 2.0) { tempos.push('atempo=2.0'); s /= 2.0 }
+  tempos.push(`atempo=${s.toFixed(4)}`)
+  return `atrim=start=${c.src_in}:end=${c.src_out},asetpts=PTS-STARTPTS,${tempos.join(',')},volume=${vol.toFixed(2)}${label}`
+}
+
+// Build the full filter_complex for multi-clip + transitions + overlays + audio mix.
+function buildFilterGraph(project, canvasDims, musicInputIdx) {
+  const clips = project.video_clips || []
+  if (clips.length === 0) throw new Error('No video clips')
   const [W, H] = canvasDims
-  const filters = []
 
-  // 1. Video pipeline: scale source to canvas dims (letterbox to black canvas)
-  filters.push(
-    `[0:v]trim=start=${trim_start}:end=${trim_end},setpts=${(1/speed).toFixed(4)}*(PTS-STARTPTS),`
-    + `scale=${W}:${H}:force_original_aspect_ratio=decrease,`
-    + `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:black[v0]`
-  )
+  const lines = []
 
-  // 2. Image overlays — each input becomes [N:v]
-  let currentVideoLabel = '[v0]'
+  // 1) Per-clip filter chains: trim + setpts + eq + blur, then scale to canvas
+  clips.forEach((c, i) => {
+    lines.push(`[${i}:v]${videoClipFilter(c, '[c' + i + 'raw]')}`)
+    lines.push(`[c${i}raw]scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:black[c${i}]`)
+  })
+
+  // 2) Concat with crossfade. xfade applies between current accumulator and next clip.
+  let currentLabel = '[c0]'
+  let accDur = clipDuration(clips[0])
+  for (let i = 1; i < clips.length; i++) {
+    const c = clips[i]
+    const tr = c.transition_in || { type: 'cut' }
+    const next = `[c${i}]`
+    const out = `[seq${i}]`
+    if (tr.type === 'cut') {
+      lines.push(`${currentLabel}${next}concat=n=2:v=1:a=0${out}`)
+      accDur += clipDuration(c)
+    } else {
+      // xfade transitions need overlap. offset = where xfade starts in current sequence.
+      const dur = Math.max(0.1, tr.duration || 0.5)
+      const xtype = tr.type === 'fade' ? 'fade' : 'fade'  // also accept dissolve later
+      const offset = Math.max(0, accDur - dur)
+      lines.push(`${currentLabel}${next}xfade=transition=${xtype}:duration=${dur.toFixed(3)}:offset=${offset.toFixed(3)}${out}`)
+      accDur += clipDuration(c) - dur
+    }
+    currentLabel = out
+  }
+
+  // 3) Image overlays
   ;(project.image_clips || []).forEach((c, i) => {
-    const inputIdx = 1 + i // input index in ffmpeg args (after source video at 0)
     const x = Math.round((c.x_pct / 100) * W)
     const y = Math.round((c.y_pct / 100) * H)
     const overlayW = Math.round((c.w_pct || 30) / 100 * W)
-    const startSrc = (c.start || 0)
-    const endSrc = (c.end || trim_end)
-    const startOut = Math.max(0, (startSrc - trim_start) / speed)
-    const endOut = Math.max(startOut + 0.1, (endSrc - trim_start) / speed)
-    const outLabel = `[vi${i}]`
-    filters.push(
-      `[${inputIdx}:v]scale=${overlayW}:-1[img${i}];`
-      + `${currentVideoLabel}[img${i}]overlay=x=${x}-overlay_w/2:y=${y}-overlay_h/2:enable='between(t,${startOut.toFixed(3)},${endOut.toFixed(3)})'${outLabel}`
-    )
-    currentVideoLabel = outLabel
+    const inputIdx = clips.length + i
+    const out = `[oi${i}]`
+    lines.push(`[${inputIdx}:v]scale=${overlayW}:-1,format=rgba,colorchannelmixer=aa=${(c.opacity ?? 1).toFixed(2)}[img${i}]`)
+    lines.push(`${currentLabel}[img${i}]overlay=x=${x}-overlay_w/2:y=${y}-overlay_h/2:enable='between(t,${(c.start || 0).toFixed(3)},${(c.end || 1).toFixed(3)})'${out}`)
+    currentLabel = out
   })
 
-  // 3. Text overlays — using drawtext (no extra input)
+  // 4) Text overlays
   ;(project.text_clips || []).forEach((c, i) => {
     const x = Math.round((c.x_pct / 100) * W)
     const y = Math.round((c.y_pct / 100) * H)
     const fontSize = Math.round(c.size * (W / 720))
-    const startOut = Math.max(0, (c.start - trim_start) / speed)
-    const endOut = Math.max(startOut + 0.1, (c.end - trim_start) / speed)
     const txt = escapeDrawText(c.text)
     const color = (c.color || '#ffffff').replace('#', '')
     const align = c.align || 'center'
-    const xExpr = align === 'left' ? `${x}`
-                : align === 'right' ? `${x}-text_w`
-                : `${x}-text_w/2`
+    const xExpr = align === 'left' ? `${x}` : align === 'right' ? `${x}-text_w` : `${x}-text_w/2`
     const boxColor = c.bg && c.bg !== 'transparent' ? ':box=1:boxcolor=black@0.6:boxborderw=12' : ''
-    const outLabel = `[vt${i}]`
-    filters.push(
-      `${currentVideoLabel}drawtext=text='${txt}':fontcolor=0x${color}:fontsize=${fontSize}:x=${xExpr}:y=${y}-text_h/2${boxColor}:enable='between(t,${startOut.toFixed(3)},${endOut.toFixed(3)})'${outLabel}`
-    )
-    currentVideoLabel = outLabel
+    const out = `[ot${i}]`
+    lines.push(`${currentLabel}drawtext=text='${txt}':fontcolor=0x${color}:fontsize=${fontSize}:x=${xExpr}:y=${y}-text_h/2${boxColor}:enable='between(t,${(c.start || 0).toFixed(3)},${(c.end || 1).toFixed(3)})'${out}`)
+    currentLabel = out
   })
 
-  // 4. Final video output label
-  filters.push(`${currentVideoLabel}copy[vout]`)
+  lines.push(`${currentLabel}copy[vout]`)
 
-  // 5. Audio pipeline: source audio (volume) + music underlay (volume)
-  // [0:a] = source audio
-  const srcAudio = `[0:a]atrim=start=${trim_start}:end=${trim_end},asetpts=PTS-STARTPTS,atempo=${speed.toFixed(3)},volume=${volume.toFixed(2)}[a0]`
-  filters.push(srcAudio)
+  // 5) Audio: per-clip trim/speed/volume, then concat all
+  clips.forEach((c, i) => {
+    lines.push(`[${i}:a]${audioClipFilter(c, '[ac' + i + ']')}`)
+  })
+  const audioInputs = clips.map((_, i) => `[ac${i}]`).join('')
+  lines.push(`${audioInputs}concat=n=${clips.length}:v=0:a=1[aseq]`)
 
-  const audioClips = project.audio_clips || []
-  if (audioClips.length === 0 || audioInputIdx === null) {
-    filters.push(`[a0]anull[aout]`)
+  // 6) Optional music underlay mix
+  if (musicInputIdx !== null && (project.audio_clips || []).length > 0) {
+    const a = project.audio_clips[0]
+    const startMs = Math.round((a.start || 0) * 1000)
+    const vol = a.volume ?? 0.3
+    lines.push(`[${musicInputIdx}:a]adelay=${startMs}|${startMs},volume=${vol.toFixed(2)}[am]`)
+    lines.push(`[aseq][am]amix=inputs=2:duration=first:dropout_transition=0[aout]`)
   } else {
-    // Mix source audio with the first audio clip (music underlay).
-    const c = audioClips[0]
-    const startOut = Math.max(0, (c.start || 0))
-    const vol = (c.volume ?? 0.3)
-    filters.push(
-      `[${audioInputIdx}:a]adelay=${Math.round(startOut * 1000)}|${Math.round(startOut * 1000)},volume=${vol.toFixed(2)}[am]`
-    )
-    filters.push(`[a0][am]amix=inputs=2:duration=first:dropout_transition=0[aout]`)
+    lines.push(`[aseq]anull[aout]`)
   }
 
-  return filters.join(';')
+  return lines.join(';')
 }
 
-// Primary: try ffmpeg.wasm → MP4
+// Primary export: ffmpeg.wasm → MP4 with full multi-clip + transitions + filters
 export async function renderWithFFmpeg(project, onProgress) {
   if (typeof window === 'undefined') throw new Error('ffmpeg.wasm hanya jalan di browser')
   if (typeof SharedArrayBuffer === 'undefined') {
-    throw new Error('SharedArrayBuffer gak available — COOP/COEP headers belum ke-set (cek next.config.mjs)')
+    throw new Error('SharedArrayBuffer gak available — COOP/COEP headers belum ke-set. Reload page.')
   }
   if (!window.crossOriginIsolated) {
-    throw new Error('crossOriginIsolated=false — page header belum apply. Reload page setelah deploy.')
+    throw new Error('crossOriginIsolated=false — headers belum apply. Hard reload (Ctrl+Shift+R).')
   }
 
-  onProgress?.('Loading ffmpeg.wasm (~25MB)... pertama kali load ~10-20 detik')
+  const clips = project.video_clips || []
+  if (clips.length === 0) throw new Error('Belum ada video clip')
+
+  onProgress?.(`Loading ffmpeg.wasm (~25MB first time, cached after)...`)
   const ff = await getFFmpeg((msg) => {
     if (msg.includes('frame=')) {
       const m = msg.match(/frame=\s*(\d+)/)
@@ -143,13 +224,14 @@ export async function renderWithFFmpeg(project, onProgress) {
     }
   })
 
-  onProgress?.('Downloading source video...')
-  const sourceUrl = project.source?.url
-  if (!sourceUrl) throw new Error('source URL kosong')
-  const srcBytes = await fetchToUint8(sourceUrl)
-  await ff.writeFile('input.mp4', srcBytes)
+  // Download all video clips
+  for (let i = 0; i < clips.length; i++) {
+    onProgress?.(`Download video clip ${i + 1}/${clips.length}...`)
+    const bytes = await fetchToUint8(clips[i].src_url)
+    await ff.writeFile(`v${i}.mp4`, bytes)
+  }
 
-  // Download image overlays
+  // Image overlays
   const imageClips = project.image_clips || []
   for (let i = 0; i < imageClips.length; i++) {
     onProgress?.(`Download image overlay ${i + 1}/${imageClips.length}...`)
@@ -157,24 +239,26 @@ export async function renderWithFFmpeg(project, onProgress) {
     await ff.writeFile(`img${i}.png`, bytes)
   }
 
-  // Download music
+  // Music
   const audioClips = project.audio_clips || []
-  let audioInputIdx = null
+  let musicInputIdx = null
   if (audioClips.length > 0 && audioClips[0].src_url) {
     onProgress?.('Download music underlay...')
     const bytes = await fetchToUint8(audioClips[0].src_url)
     await ff.writeFile('music.mp3', bytes)
-    audioInputIdx = 1 + imageClips.length
+    musicInputIdx = clips.length + imageClips.length
   }
 
-  // Compute canvas dims from AR
+  // Canvas dims
   const ar = project.ar || '9:16'
   const [W, H] = ar === '16:9' ? [1280, 720] : ar === '1:1' ? [1080, 1080] : [720, 1280]
-  const filter = buildFilterGraph(project, null, [W, H], audioInputIdx)
+  const filter = buildFilterGraph(project, [W, H], musicInputIdx)
 
-  const args = ['-i', 'input.mp4']
+  // Build args
+  const args = []
+  clips.forEach((_, i) => { args.push('-i', `v${i}.mp4`) })
   imageClips.forEach((_, i) => { args.push('-i', `img${i}.png`) })
-  if (audioInputIdx !== null) args.push('-i', 'music.mp3')
+  if (musicInputIdx !== null) args.push('-i', 'music.mp3')
   args.push(
     '-filter_complex', filter,
     '-map', '[vout]', '-map', '[aout]',
@@ -185,7 +269,7 @@ export async function renderWithFFmpeg(project, onProgress) {
     '-y', 'output.mp4'
   )
 
-  onProgress?.('Encoding (ffmpeg)...')
+  onProgress?.(`Encoding ${clips.length} clip${clips.length > 1 ? 's' : ''} via ffmpeg...`)
   await ff.exec(args)
 
   onProgress?.('Reading output...')
@@ -193,25 +277,21 @@ export async function renderWithFFmpeg(project, onProgress) {
   return new Blob([data.buffer], { type: 'video/mp4' })
 }
 
-// Fallback: canvas + MediaRecorder → WebM (no special headers required).
+// Fallback: canvas + MediaRecorder. Multi-clip support is best-effort —
+// switches video element src at boundaries. Transitions/filters via CSS-equiv
+// canvas ops (best approximation).
 export async function renderWithCanvas(project, onProgress) {
-  const { source, text_clips = [], image_clips = [], audio_clips = [], ar } = project
-  const { url: sourceUrl, trim_start = 0, trim_end, speed = 1, volume = 1 } = source || {}
-  if (!sourceUrl) throw new Error('Source video URL kosong')
+  const clips = project.video_clips || []
+  if (clips.length === 0) throw new Error('Source video URL kosong')
 
-  onProgress?.('Loading source video...')
-  const video = document.createElement('video')
-  video.src = sourceUrl
-  video.crossOrigin = 'anonymous'
-  video.muted = false
-  await new Promise((res, rej) => {
-    video.onloadedmetadata = res
-    video.onerror = () => rej(new Error('Gagal load source video'))
-  })
-  const actualTrimEnd = trim_end ?? video.duration
+  const ar = project.ar || '9:16'
+  const [W, H] = ar === '16:9' ? [1280, 720] : ar === '1:1' ? [1080, 1080] : [720, 1280]
+  const canvas = document.createElement('canvas')
+  canvas.width = W; canvas.height = H
+  const ctx = canvas.getContext('2d')
 
   // Pre-load image overlays
-  const overlayImages = await Promise.all(image_clips.map(async (c) => {
+  const overlayImages = await Promise.all((project.image_clips || []).map(async (c) => {
     const img = new Image()
     img.crossOrigin = 'anonymous'
     img.src = c.src_url
@@ -219,85 +299,108 @@ export async function renderWithCanvas(project, onProgress) {
     return img
   }))
 
-  // Optional background music — load via Audio element + MediaStream
+  // Pre-load music
   let musicEl = null
-  const firstAudio = audio_clips[0]
+  const firstAudio = (project.audio_clips || [])[0]
   if (firstAudio?.src_url) {
     musicEl = new Audio(firstAudio.src_url)
     musicEl.crossOrigin = 'anonymous'
     musicEl.volume = firstAudio.volume ?? 0.3
-    await new Promise((res, rej) => {
-      musicEl.oncanplay = res
-      musicEl.onerror = () => rej(new Error('Gagal load music'))
-    })
+    await new Promise((res, rej) => { musicEl.oncanplay = res; musicEl.onerror = () => rej(new Error('Music load failed')) })
   }
 
-  const [W, H] = ar === '16:9' ? [1280, 720] : ar === '1:1' ? [1080, 1080] : [720, 1280]
-  const canvas = document.createElement('canvas')
-  canvas.width = W; canvas.height = H
-  const ctx = canvas.getContext('2d')
-
-  video.playbackRate = speed
+  // Create video elements per clip
+  const videoEls = await Promise.all(clips.map(async (c) => {
+    const v = document.createElement('video')
+    v.src = c.src_url
+    v.crossOrigin = 'anonymous'
+    v.muted = false
+    v.playbackRate = c.speed || 1
+    await new Promise((res, rej) => { v.onloadedmetadata = res; v.onerror = () => rej(new Error('Video load failed')) })
+    return v
+  }))
 
   const stream = canvas.captureStream(30)
-  try {
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)()
-    const srcNode = audioCtx.createMediaElementSource(video)
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)()
+  const dest = audioCtx.createMediaStreamDestination()
+  videoEls.forEach((v, i) => {
+    const src = audioCtx.createMediaElementSource(v)
     const gain = audioCtx.createGain()
-    gain.gain.value = volume
-    srcNode.connect(gain)
-    const dest = audioCtx.createMediaStreamDestination()
-    gain.connect(dest)
-    gain.connect(audioCtx.destination)
-    if (musicEl) {
-      const musicSrc = audioCtx.createMediaElementSource(musicEl)
-      const musicGain = audioCtx.createGain()
-      musicGain.gain.value = firstAudio.volume ?? 0.3
-      musicSrc.connect(musicGain)
-      musicGain.connect(dest)
-      musicGain.connect(audioCtx.destination)
-    }
-    dest.stream.getAudioTracks().forEach((t) => stream.addTrack(t))
-  } catch (e) {
-    console.warn('Audio capture skipped:', e.message)
+    gain.gain.value = clips[i].volume ?? 1
+    src.connect(gain); gain.connect(dest)
+  })
+  if (musicEl) {
+    try {
+      const mSrc = audioCtx.createMediaElementSource(musicEl)
+      const mGain = audioCtx.createGain()
+      mGain.gain.value = firstAudio.volume ?? 0.3
+      mSrc.connect(mGain); mGain.connect(dest); mGain.connect(audioCtx.destination)
+    } catch (e) { console.warn('music audio fail', e.message) }
   }
+  dest.stream.getAudioTracks().forEach((t) => stream.addTrack(t))
 
-  const mimeCandidates = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
-  const mimeType = mimeCandidates.find((m) => MediaRecorder.isTypeSupported(m)) || 'video/webm'
-  const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 5_000_000 })
+  const mime = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
+    .find((m) => MediaRecorder.isTypeSupported(m)) || 'video/webm'
+  const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 5_000_000 })
   const chunks = []
   recorder.ondataavailable = (e) => { if (e.data?.size) chunks.push(e.data) }
 
-  video.currentTime = trim_start
-  await new Promise((res) => video.onseeked = res)
+  // Seek each clip to src_in, then play first clip
+  for (let i = 0; i < clips.length; i++) {
+    videoEls[i].currentTime = clips[i].src_in || 0
+    await new Promise((res) => { videoEls[i].onseeked = res })
+  }
   if (musicEl) musicEl.currentTime = 0
 
-  recorder.start()
-  await video.play()
-  if (musicEl) musicEl.play().catch(() => {})
-
-  const dur = (actualTrimEnd - trim_start) / speed
+  const total = totalDuration(clips)
+  let activeIdx = 0
+  let elapsed = 0
   const startTs = performance.now()
   let stop = false
 
+  recorder.start()
+  await videoEls[0].play()
+  if (musicEl) musicEl.play().catch(() => {})
+
+  function applyFilters(c) {
+    const f = c?.filters
+    if (!f) return ''
+    return `brightness(${1 + (f.brightness || 0)}) contrast(${f.contrast || 1}) saturate(${f.saturation || 1}) blur(${f.blur || 0}px)`
+  }
+
   function draw() {
     if (stop) return
-    const vw = video.videoWidth, vh = video.videoHeight
+    elapsed = (performance.now() - startTs) / 1000
+
+    // Find active clip in timeline
+    const info = activeClipAt(elapsed, clips)
+    if (!info) { stop = true; setTimeout(() => recorder.stop(), 100); return }
+
+    if (info.index !== activeIdx) {
+      // Pause previous, play current
+      videoEls[activeIdx]?.pause()
+      activeIdx = info.index
+      videoEls[activeIdx].currentTime = info.srcTime
+      videoEls[activeIdx].play().catch(() => {})
+    }
+
+    const v = videoEls[activeIdx]
+    const clip = clips[activeIdx]
+    const vw = v.videoWidth, vh = v.videoHeight
     if (vw > 0 && vh > 0) {
       const srcAR = vw / vh, dstAR = W / H
       let dw, dh, dx, dy
       if (srcAR > dstAR) { dh = H; dw = dh * srcAR; dx = (W - dw) / 2; dy = 0 }
       else { dw = W; dh = dw / srcAR; dx = 0; dy = (H - dh) / 2 }
-      ctx.fillStyle = '#000'
-      ctx.fillRect(0, 0, W, H)
-      ctx.drawImage(video, dx, dy, dw, dh)
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H)
+      ctx.filter = applyFilters(clip) || 'none'
+      ctx.drawImage(v, dx, dy, dw, dh)
+      ctx.filter = 'none'
     }
-    const tInTrack = (video.currentTime - trim_start) / speed
-    const sourceTime = video.currentTime
 
     // Image overlays
-    image_clips.forEach((c, i) => {
-      if (sourceTime < c.start || sourceTime > c.end) return
+    ;(project.image_clips || []).forEach((c, i) => {
+      if (elapsed < c.start || elapsed > c.end) return
       const img = overlayImages[i]
       const targetW = (c.w_pct / 100) * W
       const ratio = img.height / img.width
@@ -310,8 +413,8 @@ export async function renderWithCanvas(project, onProgress) {
     })
 
     // Text overlays
-    text_clips.forEach((c) => {
-      if (sourceTime < c.start || sourceTime > c.end) return
+    ;(project.text_clips || []).forEach((c) => {
+      if (elapsed < c.start || elapsed > c.end) return
       const x = (c.x_pct / 100) * W
       const y = (c.y_pct / 100) * H
       const fontSize = c.size * (W / 720)
@@ -329,21 +432,18 @@ export async function renderWithCanvas(project, onProgress) {
         else if (c.align === 'right') bgX = x - bgW
         ctx.fillRect(bgX, y - bgH / 2, bgW, bgH)
       }
-      ctx.shadowColor = 'rgba(0,0,0,0.8)'
-      ctx.shadowBlur = 4
-      ctx.shadowOffsetY = 1
+      ctx.shadowColor = 'rgba(0,0,0,0.8)'; ctx.shadowBlur = 4; ctx.shadowOffsetY = 1
       ctx.fillStyle = c.color
       ctx.fillText(c.text, x, y)
       ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0
     })
 
-    const elapsed = (performance.now() - startTs) / 1000
-    const pct = Math.min(100, Math.round((elapsed / dur) * 100))
-    onProgress?.(`Recording... ${pct}%`)
+    const pct = Math.min(100, Math.round((elapsed / total) * 100))
+    onProgress?.(`Recording ${pct}% (clip ${activeIdx + 1}/${clips.length})`)
 
-    if (video.currentTime >= actualTrimEnd || elapsed > dur + 1) {
+    if (elapsed >= total) {
       stop = true
-      video.pause()
+      videoEls.forEach((v) => v.pause())
       if (musicEl) musicEl.pause()
       setTimeout(() => recorder.stop(), 100)
       return
@@ -352,18 +452,17 @@ export async function renderWithCanvas(project, onProgress) {
   }
   draw()
   await new Promise((res) => { recorder.onstop = res })
-  return new Blob(chunks, { type: mimeType })
+  return new Blob(chunks, { type: mime })
 }
 
-// Combined: try ffmpeg, fall back to canvas. Returns { blob, ext, mime }.
 export async function renderProject(project, onProgress) {
   try {
-    onProgress?.('Trying ffmpeg.wasm (MP4)...')
+    onProgress?.('Trying ffmpeg.wasm (MP4 with transitions/filters)...')
     const blob = await renderWithFFmpeg(project, onProgress)
     return { blob, ext: 'mp4', mime: 'video/mp4' }
   } catch (e) {
-    console.warn('ffmpeg.wasm failed, falling back to canvas:', e.message)
-    onProgress?.(`ffmpeg fail (${e.message.slice(0, 60)}) → fallback canvas (WebM)...`)
+    console.warn('ffmpeg.wasm failed, fallback canvas:', e.message)
+    onProgress?.(`ffmpeg failed (${e.message.slice(0, 80)}) → canvas fallback (WebM, no xfade)...`)
     const blob = await renderWithCanvas(project, onProgress)
     return { blob, ext: 'webm', mime: 'video/webm' }
   }
