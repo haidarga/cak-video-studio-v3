@@ -143,6 +143,61 @@ export default function EditorClient({ workspaceId, userId, results, projects })
     setSelected({ kind: 'text', id: c.id })
   }
 
+  const [transcribing, setTranscribing] = useState(false)
+  const [transcribeProgress, setTranscribeProgress] = useState('')
+  async function autoSubtitle() {
+    if (project.video_clips.length === 0) { setErr('Tambah video clip dulu'); return }
+    setTranscribing(true); setTranscribeProgress('Transcribing via Gemini (kirim video ke STT)...'); setErr('')
+    try {
+      // Transcribe first clip only (simpler). Multi-clip subtitle would need
+      // per-clip transcribe + offset accumulation; future iteration.
+      const firstClip = project.video_clips[0]
+      const res = await fetch('/api/transcribe', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: firstClip.src_url }),
+      })
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error)
+      if (!data.segments || data.segments.length === 0) {
+        setTranscribeProgress('Gak ada speech ke-detect di video. Coba video yang ada dialog/VO.')
+        setTranscribing(false)
+        return
+      }
+
+      // Convert segments → TikTok-viral style text clips
+      // Bottom-center, large bold white text, black pill background
+      const offset = clipInTrack(project.video_clips, 0) // 0 untuk first clip
+      const newClips = data.segments.map((s) => ({
+        id: uid(), kind: 'text',
+        text: s.text.toUpperCase(),
+        start: offset + s.start,
+        end: offset + s.end,
+        x_pct: 50, y_pct: 75,
+        size: 56, color: '#ffffff', weight: 900,
+        bg: 'rgba(0,0,0,0.85)',
+        align: 'center',
+      }))
+      patch((p) => ({ ...p, text_clips: [...p.text_clips, ...newClips] }))
+      setTranscribeProgress(`✓ Generated ${newClips.length} subtitle clips dari clip 1 (${data.language || 'auto'})`)
+    } catch (e) {
+      setErr(`Auto-subtitle gagal: ${e.message}`)
+      setTranscribeProgress('')
+    }
+    setTranscribing(false)
+  }
+
+  function applyTikTokStyle() {
+    // Quick preset: re-style all existing text clips to TikTok-viral look
+    patch((p) => ({
+      ...p,
+      text_clips: p.text_clips.map((c) => ({
+        ...c, text: c.text.toUpperCase(), size: 56, weight: 900,
+        color: '#ffffff', bg: 'rgba(0,0,0,0.85)', align: 'center',
+        x_pct: 50, y_pct: 75,
+      })),
+    }))
+  }
+
   async function onImageFile(e) {
     const f = e.target.files?.[0]; if (!f) return; e.target.value = ''
     if (!f.type.startsWith('image/')) { setErr('File harus image'); return }
@@ -349,6 +404,11 @@ export default function EditorClient({ workspaceId, userId, results, projects })
       {!exporting && exportProgress.startsWith('✓') && (
         <div className="text-xs text-green-400 bg-green-900/20 border border-green-700/40 p-3 rounded">{exportProgress}</div>
       )}
+      {transcribeProgress && (
+        <div className={`text-xs p-3 rounded border ${transcribeProgress.startsWith('✓') ? 'text-green-400 bg-green-900/20 border-green-700/40' : 'text-pink-300 bg-pink-900/20 border-pink-700/40'}`}>
+          {transcribing ? '⏳ ' : ''}{transcribeProgress}
+        </div>
+      )}
 
       <div className="grid grid-cols-[230px_1fr_310px] gap-3" style={{ minHeight: 650 }}>
         {/* LEFT */}
@@ -374,7 +434,15 @@ export default function EditorClient({ workspaceId, userId, results, projects })
 
           <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-2 space-y-1">
             <div className="text-[10px] uppercase font-semibold text-[var(--muted)] mb-1">+ Overlay & audio</div>
-            <button onClick={addTextClip} disabled={!project.video_clips.length} className="w-full text-xs px-2 py-1.5 rounded bg-purple-500/20 border border-purple-500/40 hover:bg-purple-500/30 text-purple-200 disabled:opacity-50">📝 Text overlay</button>
+            <button onClick={autoSubtitle} disabled={transcribing || !project.video_clips.length}
+              className="w-full text-xs px-2 py-1.5 rounded bg-gradient-to-r from-pink-500 to-purple-500 hover:opacity-90 text-white font-bold disabled:opacity-50">
+              {transcribing ? '⏳ Transcribing...' : '✨ Auto-subtitle (Gemini)'}
+            </button>
+            <button onClick={applyTikTokStyle} disabled={!project.text_clips.length}
+              className="w-full text-xs px-2 py-1.5 rounded bg-pink-500/20 border border-pink-500/40 hover:bg-pink-500/30 text-pink-200 disabled:opacity-50">
+              🔥 Apply TikTok style ke {project.text_clips.length} text
+            </button>
+            <button onClick={addTextClip} disabled={!project.video_clips.length} className="w-full text-xs px-2 py-1.5 rounded bg-purple-500/20 border border-purple-500/40 hover:bg-purple-500/30 text-purple-200 disabled:opacity-50">📝 + Text overlay</button>
             <button onClick={() => imageInputRef.current?.click()} disabled={!project.video_clips.length} className="w-full text-xs px-2 py-1.5 rounded bg-blue-500/20 border border-blue-500/40 hover:bg-blue-500/30 text-blue-200 disabled:opacity-50">🖼 Image / Logo</button>
             <button onClick={() => audioInputRef.current?.click()} disabled={!project.video_clips.length} className="w-full text-xs px-2 py-1.5 rounded bg-orange-500/20 border border-orange-500/40 hover:bg-orange-500/30 text-orange-200 disabled:opacity-50">🎵 Music underlay</button>
             <input ref={imageInputRef} type="file" accept="image/*" className="hidden" onChange={onImageFile} />
