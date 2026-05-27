@@ -26,9 +26,12 @@ export async function POST(req) {
     .eq('id', scheduled_post_id).single()
   if (error || !sp) return NextResponse.json({ ok: false, error: 'scheduled post not found' }, { status: 404 })
 
-  const channelId = sp.personas?.postiz_channel_id
+  // Mirror upload: prefer target_channel_id (per-row override) atas persona's
+  // default postiz_channel_id. Sama untuk platform.
+  const channelId = sp.target_channel_id || sp.personas?.postiz_channel_id
+  const platform = sp.target_platform || sp.personas?.postiz_platform || null
   if (!channelId) {
-    return NextResponse.json({ ok: false, error: `Persona "${sp.personas?.name || ''}" belum link ke Postiz channel. Set di /posting atau /personas.` }, { status: 400 })
+    return NextResponse.json({ ok: false, error: `Belum ada target channel. Pilih channel di Schedule modal atau link persona ke channel di /posting.` }, { status: 400 })
   }
   const mediaUrl = sp.results?.url
   if (!mediaUrl) {
@@ -46,7 +49,7 @@ export async function POST(req) {
       content,
       mediaUrl,
       scheduledFor: sp.scheduled_for,
-      platform: sp.personas?.postiz_platform || null,
+      platform,
     })
 
     // Try to extract a returned id (Postiz response shape varies by version)

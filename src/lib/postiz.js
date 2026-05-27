@@ -78,6 +78,24 @@ function pickUsername(c) {
   )
 }
 
+// Fetch a single post by id - to check actual state (QUEUE/PUBLISHED/ERROR)
+// and grab releaseURL once platform finishes processing.
+export async function getPostizPost(postId) {
+  return postizJsonFallback(
+    [`/public/v1/posts/${postId}`, `/api/public/v1/posts/${postId}`, `/api/v1/posts/${postId}`],
+    { method: 'GET' }
+  )
+}
+
+// Fetch a single integration to see its ACTUAL providerIdentifier - useful
+// kalo sync return integration list tanpa platform field.
+export async function getPostizIntegration(integrationId) {
+  return postizJsonFallback(
+    [`/public/v1/integrations/${integrationId}`, `/api/public/v1/integrations/${integrationId}`, `/api/v1/integrations/${integrationId}`],
+    { method: 'GET' }
+  )
+}
+
 export async function fetchPostizChannels() {
   const data = await postizJsonFallback(
     ['/public/v1/integrations', '/api/public/v1/integrations', '/api/v1/integrations/list', '/api/v1/integrations'],

@@ -2,6 +2,18 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 
+function platformIcon(p) {
+  const x = (p || '').toLowerCase()
+  if (x.includes('tiktok')) return '🎵'
+  if (x.includes('instagram')) return '📷'
+  if (x.includes('youtube')) return '▶️'
+  if (x.includes('facebook') || x === 'fb') return '👤'
+  if (x === 'x' || x.includes('twitter')) return '𝕏'
+  if (x.includes('linkedin')) return '💼'
+  if (x.includes('thread')) return '🧵'
+  return '🌐'
+}
+
 const STATUS_COLORS = {
   pending:   'text-blue-300 border-blue-500/40 bg-blue-500/10',
   scheduled: 'text-blue-400 border-blue-500/40 bg-blue-500/10',
@@ -16,6 +28,20 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
   const [scheduled, setScheduled] = useState(initialScheduled)
   const [picking, setPicking] = useState(null) // approved result -> picking schedule time
   const [err, setErr] = useState('')
+  const [channels, setChannels] = useState(null)
+  const [channelsLoading, setChannelsLoading] = useState(false)
+
+  // Fetch Postiz channels sekali untuk mirror picker. Cached at component level.
+  useEffect(() => {
+    let alive = true
+    setChannelsLoading(true)
+    fetch('/api/postiz/channels').then((r) => r.json()).then((d) => {
+      if (alive && d.ok) setChannels(d.channels)
+      else if (alive) setErr(`Sync channels: ${d.error}`)
+    }).catch((e) => { if (alive) setErr(`Sync channels: ${e.message}`) })
+      .finally(() => { if (alive) setChannelsLoading(false) })
+    return () => { alive = false }
+  }, [])
 
   useEffect(() => {
     const ch = supabase.channel('sched-' + workspaceId)
@@ -36,36 +62,39 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
     return () => { supabase.removeChannel(ch) }
   }, [supabase, workspaceId])
 
-  async function schedule(result, scheduledFor, caption) {
-    if (!result.personas?.postiz_channel_id) {
-      setErr(`${result.personas?.name || 'Persona'} belum konek ke Postiz channel — set di /posting`)
+  // Mirror upload: schedule a result ke N target channels sekaligus.
+  // targets = [{ id, platform, name }] -- list of channels to post to.
+  async function schedule(result, scheduledFor, caption, targets) {
+    setErr('')
+    if (!targets || targets.length === 0) {
+      setErr('Pilih minimal 1 channel buat di-post')
       return
     }
-    // 1. Insert DB row. Use status='posting' (already in enum) as initial —
-    // /api/postiz/post takes over within ms and transitions to posted/scheduled/failed.
-    // (Earlier draft used 'pending' which needed an enum migration; skipped.)
-    const { data: sp, error } = await supabase.from('scheduled_posts').insert({
-      workspace_id: workspaceId,
-      result_id: result.id,
-      persona_id: result.personas.id,
-      scheduled_for: scheduledFor || null,
-      status: 'posting',
-      caption: caption || null,
-      created_by: userId,
-    }).select('id').single()
-    if (error) { setErr(error.message); return }
     setPicking(null)
 
-    // 2. Push to Postiz (now OR scheduled — Postiz handles its own scheduling)
-    try {
-      const res = await fetch('/api/postiz/post', {
+    // Insert N rows + fire N concurrent Postiz pushes
+    for (const target of targets) {
+      const { data: sp, error } = await supabase.from('scheduled_posts').insert({
+        workspace_id: workspaceId,
+        result_id: result.id,
+        persona_id: result.personas?.id || null,
+        scheduled_for: scheduledFor || null,
+        status: 'posting',
+        caption: caption || null,
+        created_by: userId,
+        target_channel_id: String(target.id),
+        target_platform: target.platform || null,
+      }).select('id').single()
+      if (error) { setErr(`Insert (${target.name || target.id}): ${error.message}`); continue }
+
+      // Fire-and-forget push; status di-update via realtime sub
+      fetch('/api/postiz/post', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scheduled_post_id: sp.id }),
-      })
-      const data = await res.json()
-      if (!data.ok) throw new Error(data.error)
-    } catch (e) {
-      setErr(`Push ke Postiz gagal: ${e.message}. Row tersimpan sbg 'failed' — bisa retry di list.`)
+      }).then(async (res) => {
+        const data = await res.json()
+        if (!data.ok) console.error('Postiz push gagal:', data.error)
+      }).catch((e) => console.error('Postiz push error:', e))
     }
   }
 
@@ -160,7 +189,8 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
 
       {picking && (
         <ScheduleModal result={picking} onClose={() => setPicking(null)}
-          onSubmit={(t, c) => schedule(picking, t, c)} />
+          channels={channels} channelsLoading={channelsLoading}
+          onSubmit={(t, c, targets) => schedule(picking, t, c, targets)} />
       )}
     </div>
   )
@@ -171,9 +201,8 @@ function ScheduleRow({ sp, onCancel, onDelete, onRetry }) {
   const p = sp.personas
   const [showRaw, setShowRaw] = useState(false)
 
-  // Detect platform/media mismatch — TikTok cuma terima video, kalau image yg
-  // dikirim, Postiz queue tapi TikTok bakal reject silent.
-  const platformLower = (p?.postiz_platform || '').toLowerCase()
+  // For mirror posts, target_platform di-set per-row. Fallback ke persona default.
+  const platformLower = (sp.target_platform || p?.postiz_platform || '').toLowerCase()
   const mismatch =
     (platformLower.includes('tiktok') && r?.type === 'image') ||
     (platformLower.includes('youtube') && r?.type === 'image')
@@ -194,9 +223,17 @@ function ScheduleRow({ sp, onCancel, onDelete, onRetry }) {
           : r?.url && <img src={r.url} alt="" className="w-full h-full object-cover" />}
       </div>
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-semibold truncate">{r?.label || 'result'}</div>
+        <div className="text-sm font-semibold truncate flex items-center gap-2">
+          {r?.label || 'result'}
+          {platformLower && (
+            <span className="text-[9px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-[var(--surface2)] border border-[var(--border)]">
+              {platformIcon(platformLower)} {platformLower.split('-')[0]}
+            </span>
+          )}
+        </div>
         <div className="text-xs text-[var(--muted)] flex items-center gap-2">
-          {p?.name && <>→ <strong>{p.name}</strong> @{p.username} {p.postiz_platform && <span className="uppercase text-[9px]">· {p.postiz_platform}</span>}</>}
+          {p?.name && <>→ <strong>{p.name}</strong> {p.username && <>@{p.username}</>}</>}
+          {sp.target_channel_id && <span className="text-[9px] text-[var(--muted2)]">· ch {sp.target_channel_id.slice(0, 8)}…</span>}
         </div>
         {sp.caption && <div className="text-[10px] text-[var(--muted)] mt-1 line-clamp-1">📝 {sp.caption}</div>}
 
@@ -249,15 +286,58 @@ function ScheduleRow({ sp, onCancel, onDelete, onRetry }) {
   )
 }
 
-function ScheduleModal({ result, onClose, onSubmit }) {
+function ScheduleModal({ result, onClose, onSubmit, channels, channelsLoading }) {
   const [drafting, setDrafting] = useState(false)
   const [draftErr, setDraftErr] = useState('')
 
-  // Warning kalau image dikirim ke platform yg cuma terima video
-  const platformLower = (result.personas?.postiz_platform || '').toLowerCase()
-  const mediaMismatch =
-    (platformLower.includes('tiktok') && result.type === 'image') ||
-    (platformLower.includes('youtube') && result.type === 'image')
+  // Selected target channels (default = persona's primary channel kalau ada)
+  const [selectedIds, setSelectedIds] = useState(() => {
+    const init = new Set()
+    if (result.personas?.postiz_channel_id) init.add(String(result.personas.postiz_channel_id))
+    return init
+  })
+  function toggleChannel(id) {
+    setSelectedIds((s) => {
+      const n = new Set(s)
+      n.has(String(id)) ? n.delete(String(id)) : n.add(String(id))
+      return n
+    })
+  }
+  function toggleGroup(platformChannels) {
+    const allSelected = platformChannels.every((c) => selectedIds.has(String(c.id)))
+    setSelectedIds((s) => {
+      const n = new Set(s)
+      platformChannels.forEach((c) => { allSelected ? n.delete(String(c.id)) : n.add(String(c.id)) })
+      return n
+    })
+  }
+
+  // Group channels by platform
+  const grouped = useMemo(() => {
+    if (!channels) return {}
+    const m = {}
+    channels.forEach((c) => {
+      const key = (c.platform || 'unknown').toUpperCase()
+      if (!m[key]) m[key] = []
+      m[key].push(c)
+    })
+    return m
+  }, [channels])
+  const platformOrder = ['TIKTOK', 'INSTAGRAM', 'INSTAGRAM-STANDALONE', 'YOUTUBE', 'YOUTUBE-STANDALONE', 'FACEBOOK', 'X', 'LINKEDIN', 'THREADS', 'UNKNOWN']
+  const platformKeys = Object.keys(grouped).sort((a, b) => {
+    const ai = platformOrder.indexOf(a); const bi = platformOrder.indexOf(b)
+    return (ai < 0 ? 999 : ai) - (bi < 0 ? 999 : bi)
+  })
+
+  // Mismatch warning per selected channel (image -> video-only platform)
+  const mismatchedSelections = useMemo(() => {
+    if (!channels) return []
+    return channels.filter((c) => {
+      if (!selectedIds.has(String(c.id))) return false
+      const p = (c.platform || '').toLowerCase()
+      return result.type === 'image' && (p.includes('tiktok') || p.includes('youtube'))
+    })
+  }, [channels, selectedIds, result.type])
 
   async function aiDraftCaption() {
     setDrafting(true); setDraftErr('')
@@ -281,16 +361,16 @@ function ScheduleModal({ result, onClose, onSubmit }) {
   })
   const [caption, setCaption] = useState(result.label || '')
   const [busy, setBusy] = useState(false)
-  const channelOK = !!result.personas?.postiz_channel_id
+  const canSubmit = selectedIds.size > 0
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="w-full max-w-lg bg-[var(--surface)] rounded-xl border border-[var(--border)]">
-        <div className="px-6 py-4 border-b border-[var(--border)] flex items-center justify-between">
-          <h2 className="text-lg font-bold">📅 Schedule Post</h2>
+      <div className="w-full max-w-2xl bg-[var(--surface)] rounded-xl border border-[var(--border)] max-h-[90vh] flex flex-col">
+        <div className="px-6 py-4 border-b border-[var(--border)] flex items-center justify-between flex-shrink-0">
+          <h2 className="text-lg font-bold">🪞 Mirror Post — sekali upload, banyak channel</h2>
           <button onClick={onClose} className="text-[var(--muted)] hover:text-white">✕</button>
         </div>
-        <div className="p-6 space-y-4">
+        <div className="p-6 space-y-4 overflow-y-auto flex-1">
           <div className="flex gap-3">
             <div className="w-24 aspect-[9/16] rounded overflow-hidden bg-black">
               {result.type === 'video'
@@ -299,16 +379,72 @@ function ScheduleModal({ result, onClose, onSubmit }) {
             </div>
             <div className="flex-1">
               <div className="text-sm font-semibold">{result.label}</div>
-              <div className="text-xs text-[var(--muted)]">→ <strong>{result.personas?.name}</strong> @{result.personas?.username}</div>
-              {!channelOK && (
-                <div className="text-xs text-red-400 mt-2">⚠ Persona ini belum konek Postiz channel. Set Postiz Integration ID di /personas dulu.</div>
-              )}
-              {mediaMismatch && (
-                <div className="text-xs text-yellow-400 mt-2 bg-yellow-900/20 border border-yellow-700/40 px-2 py-1.5 rounded">
-                  ⚠ <strong>Mismatch:</strong> lu kirim <code>{result.type}</code> ke platform <code>{platformLower}</code> yang cuma terima video. Postiz bakal queue tapi {platformLower} reject silent — gak bakal nongol di feed. Generate VIDEO dari grid dulu di /generate.
-                </div>
+              <div className="text-xs text-[var(--muted)]">Source persona: <strong>{result.personas?.name || '—'}</strong> {result.personas?.username && <>@{result.personas.username}</>}</div>
+              <div className="text-[10px] text-[var(--muted2)] mt-1">Tipe media: {result.type === 'video' ? '🎬 video' : '🖼 image'}</div>
+            </div>
+          </div>
+
+          {/* MIRROR CHANNELS */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-[10px] uppercase text-[var(--muted)] font-semibold">
+                🪞 Mirror to channels ({selectedIds.size} selected)
+              </label>
+              {channels && channels.length > 0 && (
+                <button onClick={() => setSelectedIds(new Set(channels.map((c) => String(c.id))))} type="button"
+                  className="text-[10px] text-[var(--muted)] underline hover:text-white">
+                  Select all
+                </button>
               )}
             </div>
+            {channelsLoading ? (
+              <div className="text-xs text-[var(--muted)] p-4 border border-dashed border-[var(--border)] rounded">⏳ Loading Postiz channels...</div>
+            ) : !channels || channels.length === 0 ? (
+              <div className="text-xs text-[var(--muted)] p-4 border border-dashed border-[var(--border)] rounded">
+                Belum ada channel. Buka <a href="/posting" className="underline text-[var(--accent)]">/posting</a> → 🔄 Sync Channels dulu.
+              </div>
+            ) : (
+              <div className="border border-[var(--border)] rounded bg-[var(--surface2)]/30 p-2 space-y-3 max-h-72 overflow-auto">
+                {platformKeys.map((plat) => {
+                  const chs = grouped[plat]
+                  const allSelected = chs.every((c) => selectedIds.has(String(c.id)))
+                  return (
+                    <div key={plat}>
+                      <div className="flex items-center justify-between text-[10px] uppercase font-bold tracking-wider text-[var(--muted)] mb-1.5">
+                        <span>{plat} ({chs.length})</span>
+                        <button onClick={() => toggleGroup(chs)} type="button"
+                          className="text-[9px] underline hover:text-white">
+                          {allSelected ? 'Unselect all' : `Select all ${plat.toLowerCase()}`}
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
+                        {chs.map((c) => {
+                          const on = selectedIds.has(String(c.id))
+                          return (
+                            <label key={c.id} className={`flex items-center gap-2 p-1.5 rounded cursor-pointer text-xs ${on ? 'bg-[var(--accent)]/20 border border-[var(--accent)]/50' : 'bg-[var(--surface)] border border-transparent hover:border-[var(--border)]'}`}>
+                              <input type="checkbox" checked={on} onChange={() => toggleChannel(c.id)} className="flex-shrink-0" />
+                              {c.avatar
+                                ? <img src={c.avatar} alt="" className="w-6 h-6 rounded-full object-cover flex-shrink-0" />
+                                : <div className="w-6 h-6 rounded-full bg-[var(--surface2)] flex-shrink-0" />}
+                              <div className="min-w-0 flex-1">
+                                <div className="font-semibold truncate">{c.name}</div>
+                                {c.username && <div className="text-[9px] text-[var(--muted)] truncate">@{c.username}</div>}
+                              </div>
+                            </label>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            {mismatchedSelections.length > 0 && (
+              <div className="text-[10px] text-yellow-400 mt-2 bg-yellow-900/20 border border-yellow-700/40 px-2 py-1.5 rounded">
+                ⚠ <strong>{mismatchedSelections.length} channel mismatch:</strong> lu kirim <code>image</code> ke platform yang cuma terima video ({mismatchedSelections.map((c) => c.platform).filter((v, i, a) => a.indexOf(v) === i).join(', ')}). Postiz queue tapi platform bakal reject silent. Generate VIDEO dulu di /generate.
+              </div>
+            )}
           </div>
 
           <div>
@@ -339,14 +475,17 @@ function ScheduleModal({ result, onClose, onSubmit }) {
             {draftErr && <div className="text-[10px] text-red-400 mt-1">⚠ {draftErr}</div>}
           </div>
         </div>
-        <div className="px-6 py-4 border-t border-[var(--border)] flex justify-end gap-3">
+        <div className="px-6 py-4 border-t border-[var(--border)] flex justify-end gap-3 flex-shrink-0">
           <button onClick={onClose} className="px-4 py-2 rounded text-sm">Batal</button>
-          <button disabled={busy || !channelOK} onClick={async () => {
+          <button disabled={busy || !canSubmit} onClick={async () => {
             setBusy(true)
-            await onSubmit(when === 'later' ? new Date(datetime).toISOString() : null, caption.trim() || null)
+            const targets = channels?.filter((c) => selectedIds.has(String(c.id))).map((c) => ({
+              id: c.id, platform: c.platform, name: c.name,
+            })) || []
+            await onSubmit(when === 'later' ? new Date(datetime).toISOString() : null, caption.trim() || null, targets)
             setBusy(false)
           }} className="px-5 py-2 rounded bg-[var(--accent)] text-white text-sm font-semibold disabled:opacity-50">
-            {busy ? '...' : (when === 'now' ? '🚀 Post Now' : '📅 Schedule')}
+            {busy ? '...' : (when === 'now' ? `🚀 Post Now ke ${selectedIds.size} channel` : `📅 Schedule ke ${selectedIds.size} channel`)}
           </button>
         </div>
       </div>
