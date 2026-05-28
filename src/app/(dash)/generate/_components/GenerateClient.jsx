@@ -103,6 +103,10 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
   }
   const [stateByPersona, setStateByPersona] = useState({})
   const [err, setErr] = useState('')
+  // UI compactness — settings panels collapse by default to reduce visual noise.
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [showConfigDetails, setShowConfigDetails] = useState(false)
+  const [showPersonaPicker, setShowPersonaPicker] = useState(true) // collapses after first selection
 
   function togglePersona(id) {
     setSelectedIds((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -132,39 +136,8 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
 
       {err && <div className="text-xs text-red-400 bg-red-900/20 border border-red-900/40 p-3 rounded">⚠ {err}</div>}
 
-      <section className="bg-[var(--surface)] border border-[var(--border)] rounded-lg p-4">
-        <h2 className="text-[10px] uppercase font-semibold tracking-wider text-[var(--muted)] mb-3">Global Config</h2>
-
-        {/* Style preset grid — affects PROMPT only. Model dipilih independent. */}
-        <div className="mb-3">
-          <div className="flex items-center justify-between mb-1.5">
-            <label className="block text-[10px] uppercase text-[var(--muted)] tracking-wider font-semibold">🎨 Style / Genre — affects prompt only</label>
-            {globalConfig.style && globalConfig.style !== 'none' && (
-              <button onClick={() => setGlobalConfig({ ...globalConfig, style: 'none' })} className="text-[10px] text-[var(--muted)] underline hover:text-white">
-                Clear style
-              </button>
-            )}
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-            {Object.entries(STYLE_PRESETS).map(([key, preset]) => {
-              const on = globalConfig.style === key
-              return (
-                <button key={key} onClick={() => pickStyle(key)}
-                  className={`text-left p-2 rounded border transition-all ${on ? 'border-[var(--accent)] bg-[var(--accent)]/10 ring-1 ring-[var(--accent)]' : 'border-[var(--border)] bg-[var(--surface2)] hover:border-[var(--muted)]'}`}>
-                  <div className="text-xs font-semibold">{preset.label}</div>
-                  <div className="text-[10px] text-[var(--muted)] mt-0.5 line-clamp-2">{preset.description}</div>
-                  <div className="text-[9px] text-[var(--muted2)] mt-1">💡 Suggest: {preset.recommended_img_model?.split('/').pop()}</div>
-                </button>
-              )
-            })}
-          </div>
-          <div className="text-[10px] text-[var(--muted2)] mt-1.5">
-            Style cuma inject ke prompt (prefix + suffix + negative + boosters). Model dipilih manual di bawah — fleksibel.
-          </div>
-        </div>
-
-        {/* Camera Preset — Visual Compiler L1 (first-priority tokens).
-            Drives the entire aesthetic. Built-ins + workspace customs merged. */}
+      <section className="bg-[var(--surface)] border border-[var(--border)] rounded-lg p-4 space-y-3">
+        {/* Camera Preset — primary control. Always visible. */}
         <CameraPresetPicker
           workspaceId={workspaceId}
           value={globalConfig.cameraPreset}
@@ -176,78 +149,149 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
             }).catch(() => {})
           }} />
 
-        {/* Style References — upload mood board images buat consistent look */}
-        <StyleRefsPicker workspaceId={workspaceId} userId={userId}
-          selectedIds={globalConfig.styleRefIds || new Set()}
-          onChange={(ids) => setGlobalConfig({ ...globalConfig, styleRefIds: ids })} />
-
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-          <Sel label="Mode" value={globalConfig.mode} onChange={(v) => setGlobalConfig({ ...globalConfig, mode: v })}
-            options={[['shots', '🎬 Per-Shot (5-8 cut)'], ['storyboard', '🗂 Storyboard 3×3 (~15s)']]} />
-          <Sel label="Aspect Ratio" value={globalConfig.ar} onChange={(v) => setGlobalConfig({ ...globalConfig, ar: v })}
-            options={[['9:16', '9:16 vertical'], ['16:9', '16:9 horizontal'], ['1:1', '1:1 square']]} />
-          <Sel label="Bahasa Dialog" value={globalConfig.lang} onChange={(v) => setGlobalConfig({ ...globalConfig, lang: v })}
-            options={[['Indonesian', 'Indonesian'], ['English', 'English'], ['Javanese', 'Javanese'], ['Sundanese', 'Sundanese'], ['Balinese', 'Balinese']]} />
-          <Sel label="Image Model" value={globalConfig.imgModel} onChange={(v) => setGlobalConfig({ ...globalConfig, imgModel: v })}
-            options={IMAGE_MODELS.map((m) => [m.v, m.l])} />
-          <Sel label="Video Model" value={globalConfig.vidModel} onChange={(v) => setGlobalConfig({ ...globalConfig, vidModel: v })}
-            options={VIDEO_MODELS.map((m) => [m.v, m.l])} />
-        </div>
-
-        {/* Output constraint toggles — overrides default parser/prompt behavior.
-            Especially relevant for storyboard mode where default = 9 multi-cut. */}
-        <div className="mt-3 pt-3 border-t border-[var(--border)]">
-          <div className="text-[10px] uppercase text-[var(--muted)] tracking-wider font-semibold mb-2">🎛 Output Constraints (untuk override default parser)</div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-            <ToggleCard label="🎬 Continuous shot" sub="Video 1 take, no cuts (storyboard mode)" on={!!globalConfig.continuousShot}
-              onClick={() => setGlobalConfig({ ...globalConfig, continuousShot: !globalConfig.continuousShot })} />
-            <ToggleCard label="🔇 Skip dialog/VO" sub="No spoken lines in video" on={!!globalConfig.skipDialog}
-              onClick={() => setGlobalConfig({ ...globalConfig, skipDialog: !globalConfig.skipDialog })} />
-            <ToggleCard label="📝 Skip onscreen text" sub="No subtitle/caption overlay" on={!!globalConfig.skipOnscreen}
-              onClick={() => setGlobalConfig({ ...globalConfig, skipOnscreen: !globalConfig.skipOnscreen })} />
-            <ToggleCard label="🚫 Skip product" sub="No brand product in CTA panel" on={!!globalConfig.skipProduct}
-              onClick={() => setGlobalConfig({ ...globalConfig, skipProduct: !globalConfig.skipProduct })} />
-          </div>
-
-          {/* Wardrobe FALLBACK — parser auto-extracts wardrobe dari naskah.
-              Field ini cuma fallback kalau naskah lu gak nyebut outfit.
-              Parser-extracted (per persona shot) > manual fallback. */}
-          <div className="mt-3">
-            <label className="block text-[10px] uppercase text-[var(--muted)] tracking-wider font-semibold mb-1.5">
-              👕 Wardrobe Fallback <span className="text-[9px] font-normal text-[var(--muted2)]">(opsional — auto-extract dari naskah, ini cadangan kalau naskah gak nyebut)</span>
-            </label>
-            <textarea rows={2} value={globalConfig.wardrobeOverride || ''}
-              onChange={(e) => setGlobalConfig({ ...globalConfig, wardrobeOverride: e.target.value })}
-              placeholder='Cukup tulis di naskah aja! Contoh naskah: "Emma pake oversized t-shirt putih jalan di taman..." → parser otomatis detect. Field ini cuma cadangan.'
-              className="w-full text-xs px-3 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] resize-y" />
-            <div className="text-[9px] text-[var(--muted2)] mt-1 leading-relaxed">
-              💡 <strong>Cara recommend</strong>: tulis outfit langsung di naskah lu (e.g. <em>"Emma pake kemeja batik..."</em>). Parser auto-detect + inject ke prompt. Lebih fleksibel — beda naskah bisa beda outfit. Field manual ini cuma di-pakai kalau naskah lu gak nyebut outfit sama sekali.
+        {/* Compact summary bar — shows current mode/AR/lang/models in 1 line.
+            Click to expand the dropdowns when user wants to change. */}
+        <div>
+          <button onClick={() => setShowConfigDetails((s) => !s)} type="button"
+            className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] hover:border-[var(--muted)] text-xs">
+            <div className="flex items-center gap-2 flex-wrap text-left">
+              <span className="text-[var(--muted)]">⚙</span>
+              <span className="font-semibold">
+                {globalConfig.mode === 'storyboard' ? '🗂 Storyboard' : '🎬 Per-Shot'} · {globalConfig.ar} · {globalConfig.lang}
+              </span>
+              <span className="text-[var(--muted2)]">·</span>
+              <span className="text-[var(--muted)]">{globalConfig.imgModel.split('/').pop()?.replace(/-/g, ' ')}</span>
+              <span className="text-[var(--muted2)]">→</span>
+              <span className="text-[var(--muted)]">{globalConfig.vidModel.split('/').pop()?.replace(/-/g, ' ')}</span>
             </div>
-          </div>
-
-          {/* Hint: continuous mode butuh ref-to-video model */}
-          {globalConfig.continuousShot && !globalConfig.vidModel.includes('reference-to-video') && !globalConfig.vidModel.includes('ref-to-video') && (
-            <div className="mt-3 p-2.5 rounded border border-yellow-500/40 bg-yellow-500/10">
-              <div className="text-[10px] font-bold text-yellow-300 mb-0.5">💡 Tips buat hasil tanpa morphing</div>
-              <div className="text-[10px] text-yellow-200/80 leading-relaxed">
-                Lu pake <strong>image-to-video</strong> + storyboard 3×3 = video gen lihat grid sebagai 9 keyframes → morph. Switch ke <strong>🎭 Kling 2.5 Pro Ref-to-Video</strong> atau <strong>🎭 Seedance Ref-to-Video</strong> di Video Model di atas — model itu ignore grid sebagai start frame, pakai persona refs untuk identity. Grid tetep ke-render buat planning visual, video gen-nya jadi clean continuous take.
-              </div>
+            <span className="text-[var(--muted)] text-[10px]">{showConfigDetails ? '▲ tutup' : '▼ edit'}</span>
+          </button>
+          {showConfigDetails && (
+            <div className="mt-2 grid grid-cols-2 md:grid-cols-3 gap-3">
+              <Sel label="Mode" value={globalConfig.mode} onChange={(v) => setGlobalConfig({ ...globalConfig, mode: v })}
+                options={[['shots', '🎬 Per-Shot (5-8 cut)'], ['storyboard', '🗂 Storyboard 3×3 (~15s)']]} />
+              <Sel label="Aspect Ratio" value={globalConfig.ar} onChange={(v) => setGlobalConfig({ ...globalConfig, ar: v })}
+                options={[['9:16', '9:16 vertical'], ['16:9', '16:9 horizontal'], ['1:1', '1:1 square']]} />
+              <Sel label="Bahasa Dialog" value={globalConfig.lang} onChange={(v) => setGlobalConfig({ ...globalConfig, lang: v })}
+                options={[['Indonesian', 'Indonesian'], ['English', 'English'], ['Javanese', 'Javanese'], ['Sundanese', 'Sundanese'], ['Balinese', 'Balinese']]} />
+              <Sel label="Image Model" value={globalConfig.imgModel} onChange={(v) => setGlobalConfig({ ...globalConfig, imgModel: v })}
+                options={IMAGE_MODELS.map((m) => [m.v, m.l])} />
+              <Sel label="Video Model" value={globalConfig.vidModel} onChange={(v) => setGlobalConfig({ ...globalConfig, vidModel: v })}
+                options={VIDEO_MODELS.map((m) => [m.v, m.l])} />
             </div>
           )}
         </div>
+
+        {/* Output Constraints — compact chip strip. 4 toggles in 1 row. */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-[10px] text-[var(--muted)] uppercase font-semibold mr-1">Constraints:</span>
+          <ChipToggle label="🎬 No cuts" on={!!globalConfig.continuousShot}
+            onClick={() => setGlobalConfig({ ...globalConfig, continuousShot: !globalConfig.continuousShot })} />
+          <ChipToggle label="🔇 No dialog" on={!!globalConfig.skipDialog}
+            onClick={() => setGlobalConfig({ ...globalConfig, skipDialog: !globalConfig.skipDialog })} />
+          <ChipToggle label="📝 No text" on={!!globalConfig.skipOnscreen}
+            onClick={() => setGlobalConfig({ ...globalConfig, skipOnscreen: !globalConfig.skipOnscreen })} />
+          <ChipToggle label="🚫 No product" on={!!globalConfig.skipProduct}
+            onClick={() => setGlobalConfig({ ...globalConfig, skipProduct: !globalConfig.skipProduct })} />
+          <button onClick={() => setShowAdvanced((s) => !s)} type="button"
+            className="ml-auto text-[10px] text-[var(--muted)] hover:text-[var(--accent)] underline">
+            {showAdvanced ? '▲ Hide advanced' : '▼ Advanced'}
+          </button>
+        </div>
+
+        {/* Advanced section — collapsed by default. Style preset / style refs /
+            wardrobe / continuous-shot hint live here. */}
+        {showAdvanced && (
+          <div className="space-y-3 pt-2 border-t border-[var(--border)]">
+            {/* Legacy Style preset — kept for back-compat, but Camera Preset
+                supersedes. Hidden behind Advanced because most users won't need it. */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-[10px] uppercase text-[var(--muted)] tracking-wider font-semibold">
+                  🎨 Style / Genre <span className="text-[9px] font-normal text-[var(--muted2)]">(legacy — Camera Preset di atas udah supersede ini)</span>
+                </label>
+                {globalConfig.style && globalConfig.style !== 'none' && (
+                  <button onClick={() => setGlobalConfig({ ...globalConfig, style: 'none' })} className="text-[10px] text-[var(--muted)] underline hover:text-white">Clear</button>
+                )}
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-1.5">
+                {Object.entries(STYLE_PRESETS).map(([key, preset]) => {
+                  const on = globalConfig.style === key
+                  return (
+                    <button key={key} onClick={() => pickStyle(key)}
+                      className={`text-left p-1.5 rounded border text-[10px] ${on ? 'border-[var(--accent)] bg-[var(--accent)]/10' : 'border-[var(--border)] bg-[var(--surface2)] hover:border-[var(--muted)]'}`}>
+                      <div className="text-xs font-semibold">{preset.label}</div>
+                      <div className="text-[9px] text-[var(--muted)] mt-0.5 line-clamp-1">{preset.description}</div>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <StyleRefsPicker workspaceId={workspaceId} userId={userId}
+              selectedIds={globalConfig.styleRefIds || new Set()}
+              onChange={(ids) => setGlobalConfig({ ...globalConfig, styleRefIds: ids })} />
+
+            <div>
+              <label className="block text-[10px] uppercase text-[var(--muted)] tracking-wider font-semibold mb-1.5">
+                👕 Wardrobe Fallback <span className="text-[9px] font-normal text-[var(--muted2)]">(opsional — naskah carry outfit auto)</span>
+              </label>
+              <textarea rows={2} value={globalConfig.wardrobeOverride || ''}
+                onChange={(e) => setGlobalConfig({ ...globalConfig, wardrobeOverride: e.target.value })}
+                placeholder='Tulis outfit di naskah aja. Field ini cuma cadangan.'
+                className="w-full text-xs px-3 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] resize-y" />
+            </div>
+
+            {globalConfig.continuousShot && !globalConfig.vidModel.includes('reference-to-video') && !globalConfig.vidModel.includes('ref-to-video') && (
+              <div className="p-2 rounded border border-yellow-500/40 bg-yellow-500/10 text-[10px] text-yellow-200/90 leading-relaxed">
+                💡 <strong>Tips no-morph</strong>: continuous + image-to-video = morph. Switch ke <strong>🎭 Ref-to-Video model</strong> di Video Model — model itu ignore grid sebagai start frame.
+              </div>
+            )}
+          </div>
+        )}
       </section>
 
       <section>
-        <div className="flex items-center justify-between mb-2">
-          <h2 className="text-[10px] uppercase font-semibold tracking-wider text-[var(--muted)]">
-            Pilih Persona ({selectedIds.size}/{personas.length})
-          </h2>
-          {personas.length > 0 && (
-            <button onClick={selectAll} className="text-[10px] text-[var(--muted)] underline hover:text-white">
-              {selectedIds.size === personas.length ? 'Unselect all' : 'Select all'}
+        {/* Compact bar when persona already selected — toggle to re-expand. */}
+        {selectedIds.size > 0 && !showPersonaPicker ? (
+          <div className="flex items-center gap-2 px-3 py-2 rounded bg-[var(--surface)] border border-[var(--border)]">
+            <span className="text-[10px] text-[var(--muted)] uppercase font-semibold mr-1">Persona:</span>
+            <div className="flex items-center gap-1.5 flex-1 flex-wrap">
+              {selectedPersonas.slice(0, 4).map((p) => (
+                <span key={p.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[var(--accent)]/15 border border-[var(--accent)]/40 text-xs">
+                  {p.avatar_url
+                    ? <img src={p.avatar_url} alt="" className="w-4 h-4 rounded-full object-cover" />
+                    : <span className="w-4 h-4 rounded-full bg-[var(--surface2)] flex items-center justify-center text-[9px] font-bold">{(p.name || '?').slice(0, 1).toUpperCase()}</span>}
+                  <span className="font-semibold">{p.name}</span>
+                </span>
+              ))}
+              {selectedPersonas.length > 4 && (
+                <span className="text-[10px] text-[var(--muted)]">+{selectedPersonas.length - 4} more</span>
+              )}
+            </div>
+            <button onClick={() => setShowPersonaPicker(true)} className="text-[10px] text-[var(--accent)] hover:underline whitespace-nowrap">
+              ✎ Change
             </button>
-          )}
-        </div>
+          </div>
+        ) : (
+          <>
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-[10px] uppercase font-semibold tracking-wider text-[var(--muted)]">
+                Pilih Persona ({selectedIds.size}/{personas.length})
+              </h2>
+              <div className="flex items-center gap-2">
+                {personas.length > 0 && (
+                  <button onClick={selectAll} className="text-[10px] text-[var(--muted)] underline hover:text-white">
+                    {selectedIds.size === personas.length ? 'Unselect all' : 'Select all'}
+                  </button>
+                )}
+                {selectedIds.size > 0 && (
+                  <button onClick={() => setShowPersonaPicker(false)} className="text-[10px] text-[var(--accent)] hover:underline">
+                    ✓ Done · Collapse
+                  </button>
+                )}
+              </div>
+            </div>
         {personas.length === 0 ? (
           <div className="text-xs text-[var(--muted)] p-4 border border-dashed border-[var(--border)] rounded">
             Belum ada persona. <a href="/personas" className="underline text-[var(--accent)]">Bikin persona dulu</a>.
@@ -276,6 +320,8 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
               )
             })}
           </div>
+        )}
+          </>
         )}
       </section>
 
@@ -1474,6 +1520,20 @@ function Sel({ label, value, onChange, options }) {
         {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
       </select>
     </div>
+  )
+}
+
+// Compact chip toggle — used for Output Constraints (4 in a row).
+// One-line, just icon+label. ToggleCard below is the bigger card version
+// (no longer used since UI compactification — kept for back-compat).
+function ChipToggle({ label, on, onClick }) {
+  return (
+    <button onClick={onClick} type="button"
+      className={`text-[10px] px-2 py-1 rounded-full border font-semibold whitespace-nowrap ${on
+        ? 'bg-[var(--accent)]/15 border-[var(--accent)]/60 text-[var(--accent)]'
+        : 'bg-[var(--surface2)] border-[var(--border)] text-[var(--muted)] hover:border-[var(--muted)]'}`}>
+      {on ? '✓ ' : '○ '}{label}
+    </button>
   )
 }
 
