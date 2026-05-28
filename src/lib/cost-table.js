@@ -17,10 +17,13 @@ export const IMAGE_COSTS = {
 // Per-second cost untuk video gen — multiply by duration
 export const VIDEO_COSTS_PER_SECOND = {
   'fal-ai/kling-video/v3/standard/image-to-video': 0.08,
+  'fal-ai/kling-video/o3/standard/image-to-video': 0.11,
   'fal-ai/kling-video/v2.5-turbo/pro/image-to-video': 0.12,
   'fal-ai/kling-video/v2.5-turbo/pro/ref-to-video': 0.12,
+  'alibaba/happy-horse/image-to-video': 0.14,
   'fal-ai/bytedance/seedance/v1/lite/reference-to-video': 0.16,
   'fal-ai/bytedance/seedance/v1/lite/image-to-video': 0.16,
+  'bytedance/seedance-2.0/fast/image-to-video': 0.24,
   'fal-ai/bytedance/seedance/v1/pro/image-to-video': 0.25,
   'fal-ai/veo3/fast': 0.20,
   'fal-ai/veo3': 0.50,
