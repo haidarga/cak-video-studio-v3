@@ -1,6 +1,7 @@
 // POST /api/parse — parse naskah pake Gemini, return shot list or storyboard panels.
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { callGeminiJSON } from '@/lib/gemini-server'
 
 export async function POST(req) {
   const { naskah, lang = 'Indonesian', mode = 'shots', ar = '9:16', refLabels = [], brand = null } = await req.json()
@@ -9,9 +10,6 @@ export async function POST(req) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
-
-  const geminiKey = process.env.GEMINI_KEY
-  if (!geminiKey) return NextResponse.json({ ok: false, error: 'GEMINI_KEY belum di-set di Vercel env vars' }, { status: 500 })
 
   const refHint = refLabels.length
     ? `\nAvailable reference labels (use exact names in chars_in_shot when applicable): ${refLabels.join(', ')}`
@@ -48,28 +46,13 @@ Script:
 ${naskah}`
 
   try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.7, maxOutputTokens: 16384, responseMimeType: 'application/json' },
-        }),
-      }
-    )
-    const data = await res.json()
-    if (data.error) throw new Error(data.error.message)
-    if (!data.candidates?.length) throw new Error('Gemini blocked (safety?)')
-    let text = data.candidates[0].content.parts[0].text || ''
-    text = text.replace(/```json|```/g, '').trim()
-    const first = text.indexOf('{')
-    const last = text.lastIndexOf('}')
-    if (first >= 0 && last > first) text = text.slice(first, last + 1)
-    const parsed = JSON.parse(text)
+    const parsed = await callGeminiJSON({
+      contents: [{ parts: [{ text: prompt }] }],
+      temperature: 0.7,
+      maxOutputTokens: 16384,
+    })
     return NextResponse.json({ ok: true, parsed })
   } catch (e) {
-    return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: 500 })
+    return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: e?.status || 500 })
   }
 }

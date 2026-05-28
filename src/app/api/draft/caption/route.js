@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { callGemini } from '@/lib/gemini-server'
 
 // POST /api/draft/caption — auto-draft a social media caption for a result
 // using brand + persona + content context (storyboard concept, dialogs, etc).
@@ -7,9 +8,6 @@ export async function POST(req) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
-
-  const geminiKey = process.env.GEMINI_KEY
-  if (!geminiKey) return NextResponse.json({ ok: false, error: 'GEMINI_KEY belum di-set di Vercel env' }, { status: 500 })
 
   const { result_id } = await req.json()
   if (!result_id) return NextResponse.json({ ok: false, error: 'result_id required' }, { status: 400 })
@@ -74,28 +72,13 @@ OUTPUT (JSON only):
 }`
 
   try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.85, maxOutputTokens: 2048, responseMimeType: 'application/json' },
-        }),
-      }
-    )
-    const data = await res.json()
-    if (data.error) throw new Error(data.error.message)
-    if (!data.candidates?.length) {
-      const reason = data.promptFeedback?.blockReason || 'unknown'
-      throw new Error(`Gemini ngeblock (${reason}) — coba brand notes / persona prompt yang lebih netral.`)
-    }
-    const rawText = data.candidates[0].content?.parts?.[0]?.text || ''
-    if (!rawText.trim()) throw new Error('Gemini balik kosong — finishReason: ' + (data.candidates[0].finishReason || '?'))
+    const rawText = await callGemini({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.85, maxOutputTokens: 2048, responseMimeType: 'application/json' },
+    })
+    if (!rawText.trim()) throw new Error('Gemini balik kosong')
 
-    // Try strict JSON parse first; fall back to regex extraction so a corrupt
-    // JSON (unterminated string, etc) still yields a usable caption.
+    // Custom JSON repair — handles unterminated strings + trailing commas etc.
     const parsed = parseCaptionJson(rawText)
     if (!parsed.caption) throw new Error('Gemini gak ngasih caption — output: ' + rawText.slice(0, 200))
 
@@ -107,7 +90,7 @@ OUTPUT (JSON only):
     const full = parsed.caption.trim() + (tags ? `\n\n${tags}` : '')
     return NextResponse.json({ ok: true, caption: full, hashtags: parsed.hashtags || [] })
   } catch (e) {
-    return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: 500 })
+    return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: e?.status || 500 })
   }
 }
 

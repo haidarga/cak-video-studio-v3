@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { getActiveWorkspace } from '@/lib/workspace'
 import { assertBudget } from '@/lib/budget-gate'
 import { GEMINI_COSTS } from '@/lib/cost-table'
+import { callGeminiJSON } from '@/lib/gemini-server'
 
 // Vercel: butuh waktu buat download video + transcribe
 export const maxDuration = 60
@@ -65,39 +66,16 @@ ATURAN:
 - Kalau gak ada dialog sama sekali, return { "segments": [] }
 - Pakai casing natural (gak ALL CAPS)`
 
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{
-            parts: [
-              { text: prompt },
-              { inline_data: { mime_type: mimeType, data: b64 } },
-            ],
-          }],
-          generationConfig: { temperature: 0.2, maxOutputTokens: 4096, responseMimeType: 'application/json' },
-        }),
-      }
-    )
-    const data = await res.json()
-    if (data.error) throw new Error(data.error.message)
-    if (!data.candidates?.length) {
-      const reason = data.promptFeedback?.blockReason || 'unknown'
-      throw new Error(`Gemini blocked (${reason})`)
-    }
-    let text = data.candidates[0].content?.parts?.[0]?.text || ''
-    text = text.replace(/```json|```/g, '').trim()
-    const first = text.indexOf('{')
-    const last = text.lastIndexOf('}')
-    if (first >= 0 && last > first) text = text.slice(first, last + 1)
-
-    let parsed
-    try { parsed = JSON.parse(text) }
-    catch (e) {
-      throw new Error(`Gemini JSON parse fail: ${e.message}. Raw: ${text.slice(0, 200)}`)
-    }
+    const parsed = await callGeminiJSON({
+      contents: [{
+        parts: [
+          { text: prompt },
+          { inline_data: { mime_type: mimeType, data: b64 } },
+        ],
+      }],
+      temperature: 0.2,
+      maxOutputTokens: 4096,
+    })
     const segments = (parsed.segments || []).filter((s) => s && s.text)
     return NextResponse.json({ ok: true, segments, language: parsed.language || null, count: segments.length })
   } catch (e) {
