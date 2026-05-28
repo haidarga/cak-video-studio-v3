@@ -124,6 +124,13 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
   }
   const baseVideoRef = useRef(null) // single video element for base track
   const overlayRefs = useRef(new Map()) // clip.id -> HTMLVideoElement
+  // Cloned-voice audio elements — clip.id -> HTMLAudioElement.
+  // When a clip with use_cloned_voice is active, the base/overlay video gets
+  // muted and the cloned audio plays in sync with the video's srcTime.
+  const clonedAudioRefs = useRef(new Map())
+  // Single BGM element (project.audio_clips[0]). Volume drops to bgm_duck when
+  // any cloned voice is currently playing.
+  const bgmAudioRef = useRef(null)
   const imageInputRef = useRef(null)
   const audioInputRef = useRef(null)
   const videoInputRef = useRef(null)
@@ -444,16 +451,31 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
     setExporting(false)
   }
 
-  // Sync base video element when active base clip changes
+  // Sync base video element when active base clip changes.
+  // When the active clip has use_cloned_voice, mute the video and play the
+  // cloned audio in sync at the same srcTime.
   useEffect(() => {
     const v = baseVideoRef.current
     if (!v || !baseInfo) return
     if (v.src !== baseInfo.clip.src_url) { v.src = baseInfo.clip.src_url; v.load() }
     if (Math.abs(v.currentTime - baseInfo.srcTime) > 0.3) v.currentTime = baseInfo.srcTime
     v.playbackRate = baseInfo.clip.speed || 1
+    const usesCloned = baseInfo.clip.cloned_audio_url && baseInfo.clip.use_cloned_voice !== false
+    v.muted = !!usesCloned
     v.volume = Math.min(1, baseInfo.clip.volume ?? 1)
+    // Pause any cloned audio that isn't the active one
+    clonedAudioRefs.current.forEach((el, cid) => {
+      if (cid !== baseInfo.clip.id && el && !el.paused) el.pause()
+    })
+    if (usesCloned) {
+      const cv = clonedAudioRefs.current.get(baseInfo.clip.id)
+      if (cv) {
+        if (Math.abs(cv.currentTime - baseInfo.srcTime) > 0.3) cv.currentTime = baseInfo.srcTime
+        if (playing && cv.paused) cv.play().catch(() => {})
+      }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseInfo?.clip?.id])
+  }, [baseInfo?.clip?.id, playing])
 
   // Keyboard shortcuts: Delete = delete selected clip; Space = play/pause
   useEffect(() => {
@@ -481,19 +503,45 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, playing])
 
-  // Sync overlay video elements
+  // Sync overlay video elements + their cloned-voice audio (if any).
   useEffect(() => {
     overlayList.forEach((c) => {
       const v = overlayRefs.current.get(c.id)
       if (!v) return
       const isActive = currentTime >= (c.in_track || 0) && currentTime < (c.in_track || 0) + clipDuration(c)
-      if (!isActive) { if (!v.paused) v.pause(); return }
+      const cv = clonedAudioRefs.current.get(c.id)
+      if (!isActive) {
+        if (!v.paused) v.pause()
+        if (cv && !cv.paused) cv.pause()
+        return
+      }
       const desired = (c.src_in || 0) + (currentTime - (c.in_track || 0)) * (c.speed || 1)
       if (Math.abs(v.currentTime - desired) > 0.5) v.currentTime = desired
       v.playbackRate = c.speed || 1
+      const usesCloned = c.cloned_audio_url && c.use_cloned_voice !== false
+      v.muted = !!usesCloned
       v.volume = Math.min(1, c.volume ?? 0.5)
+      if (usesCloned && cv) {
+        const cvDesired = currentTime - (c.in_track || 0)
+        if (Math.abs(cv.currentTime - cvDesired) > 0.5) cv.currentTime = cvDesired
+      }
     })
   }, [currentTime, overlayList])
+
+  // BGM auto-duck: when any cloned voice is currently playing, drop BGM vol.
+  useEffect(() => {
+    const el = bgmAudioRef.current
+    if (!el || !project.audio_clips?.[0]) return
+    const a = project.audio_clips[0]
+    const baseVol = a.volume ?? 0.3
+    const duck = a.bgm_duck ?? 0.25
+    const voiced = project.video_clips.filter((c) => c.cloned_audio_url && c.use_cloned_voice !== false)
+    const ducking = voiced.some((c) => {
+      const s = c.in_track || 0
+      return currentTime >= s && currentTime < s + clipDuration(c)
+    })
+    el.volume = Math.min(1, baseVol * (ducking ? duck : 1))
+  }, [currentTime, project.audio_clips, project.video_clips])
 
   function startPlayback() {
     if (project.video_clips.length === 0) return
@@ -501,6 +549,12 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
     const startWall = performance.now()
     const startT = currentTime >= totalDur ? 0 : currentTime
     if (currentTime >= totalDur) setCurrentTime(0)
+    // BGM starts too
+    if (bgmAudioRef.current && project.audio_clips?.[0]?.src_url) {
+      const a = project.audio_clips[0]
+      bgmAudioRef.current.currentTime = (a.start || 0) + startT
+      bgmAudioRef.current.play().catch(() => {})
+    }
     function loop() {
       const elapsed = (performance.now() - startWall) / 1000
       const t = Math.min(totalDur, startT + elapsed)
@@ -513,15 +567,28 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
         if (v.src !== bi.clip.src_url) { v.src = bi.clip.src_url; v.load() }
         if (Math.abs(v.currentTime - bi.srcTime) > 0.5) v.currentTime = bi.srcTime
         if (v.paused) v.play().catch(() => {})
+        // Cloned voice for base clip
+        const usesCloned = bi.clip.cloned_audio_url && bi.clip.use_cloned_voice !== false
+        const cv = clonedAudioRefs.current.get(bi.clip.id)
+        if (usesCloned && cv) {
+          if (Math.abs(cv.currentTime - bi.srcTime) > 0.5) cv.currentTime = bi.srcTime
+          if (cv.paused) cv.play().catch(() => {})
+        }
       }
-      // Sync overlay videos
+      // Sync overlay videos + their cloned audio
       project.video_clips.forEach((c) => {
         if ((c.track_idx || 0) === 0) return
         const v = overlayRefs.current.get(c.id)
         if (!v) return
         const isActive = t >= (c.in_track || 0) && t < (c.in_track || 0) + clipDuration(c)
-        if (!isActive) { if (!v.paused) v.pause(); return }
+        const cv = clonedAudioRefs.current.get(c.id)
+        if (!isActive) {
+          if (!v.paused) v.pause()
+          if (cv && !cv.paused) cv.pause()
+          return
+        }
         if (v.paused) v.play().catch(() => {})
+        if (cv && c.cloned_audio_url && c.use_cloned_voice !== false && cv.paused) cv.play().catch(() => {})
       })
       playRafRef.current = requestAnimationFrame(loop)
     }
@@ -532,6 +599,8 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
     if (playRafRef.current) { cancelAnimationFrame(playRafRef.current); playRafRef.current = null }
     if (baseVideoRef.current) baseVideoRef.current.pause()
     overlayList.forEach((c) => { const v = overlayRefs.current.get(c.id); if (v) v.pause() })
+    clonedAudioRefs.current.forEach((el) => { if (el && !el.paused) el.pause() })
+    if (bgmAudioRef.current && !bgmAudioRef.current.paused) bgmAudioRef.current.pause()
   }
   function togglePlay() { playing ? stopPlayback() : startPlayback() }
   function seekTo(t) {
@@ -703,6 +772,18 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                 {/* Base video */}
                 <video ref={baseVideoRef} className="w-full h-full object-contain" playsInline crossOrigin="anonymous" muted={false}
                   style={{ filter: baseFilter }} />
+
+                {/* Hidden audio elements — one per clip with cloned voice, plus BGM.
+                    The render/preview engines reach these by ref to swap native
+                    audio for the persona's cloned voice (lip-sync preserved). */}
+                {project.video_clips.filter((c) => c.cloned_audio_url).map((c) => (
+                  <audio key={'cv-' + c.id} src={c.cloned_audio_url} preload="auto" crossOrigin="anonymous"
+                    ref={(el) => { if (el) clonedAudioRefs.current.set(c.id, el); else clonedAudioRefs.current.delete(c.id) }} />
+                ))}
+                {project.audio_clips?.[0]?.src_url && (
+                  <audio ref={bgmAudioRef} src={project.audio_clips[0].src_url} preload="auto" crossOrigin="anonymous"
+                    loop={false} />
+                )}
 
                 {/* Overlay videos (B-roll) */}
                 {overlayList.map((c) => {
@@ -1319,6 +1400,10 @@ function AudioPanel({ clip, duration, onUpdate, onDelete }) {
       <div className="text-[9px] text-[var(--muted)] truncate">{clip.src_name}</div>
       <Field label={`Mulai di: ${clip.start.toFixed(2)}s`}><input type="range" min={0} max={duration} step={0.1} value={clip.start} onChange={(e) => onUpdate({ start: parseFloat(e.target.value) })} className="w-full" /></Field>
       <Field label={`Volume: ${Math.round(clip.volume * 100)}%`}><input type="range" min={0} max={1.5} step={0.05} value={clip.volume} onChange={(e) => onUpdate({ volume: parseFloat(e.target.value) })} className="w-full" /></Field>
+      <Field label={`BGM duck saat 🎙 voice main: ${Math.round((clip.bgm_duck ?? 0.25) * 100)}%`}>
+        <input type="range" min={0} max={1} step={0.05} value={clip.bgm_duck ?? 0.25} onChange={(e) => onUpdate({ bgm_duck: parseFloat(e.target.value) })} className="w-full" />
+        <div className="text-[9px] text-[var(--muted2)] mt-0.5">Volume BGM otomatis turun ke level ini saat clip yang pakai cloned voice lagi main.</div>
+      </Field>
     </div>
   )
 }
