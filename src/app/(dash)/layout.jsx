@@ -5,6 +5,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import SignOutButton from './_components/SignOutButton'
 import ActiveBrandWidget from './_components/ActiveBrandWidget'
 import CostWidget from './_components/CostWidget'
+import GlobalSearch from './_components/GlobalSearch'
 
 export default async function DashLayout({ children }) {
   const supabase = await createClient()
@@ -91,6 +92,7 @@ export default async function DashLayout({ children }) {
         </div>
       </aside>
       <main className="flex-1 p-8 overflow-y-auto">{children}</main>
+      <GlobalSearch workspaceId={activeWs.id} />
     </div>
   )
 }

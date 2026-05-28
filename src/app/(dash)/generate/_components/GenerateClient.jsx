@@ -302,6 +302,15 @@ function PersonaSection({ persona, workspaceRefs, state, onPatch, globalConfig, 
 
   async function genAllImages() {
     if (!state.shots.length) { onErr(`${persona.name}: parse dulu`); return }
+    const pending = state.shots.filter((s) => !s.image?.url).length
+    const estCost = pending * imageCost(globalConfig.imgModel)
+    // Confirmation modal kalau cost > $0.20 (kecil banget threshold biar
+    // user aware setiap kali). Skip for trivial cost.
+    if (estCost > 0.20 && !confirm(
+      `Generate ${pending} image dengan ${globalConfig.imgModel.split('/').pop()}?\n\n` +
+      `Estimated cost: ${fmtCost(estCost)}\n` +
+      `Tap OK = jalanin, Cancel = batal.`
+    )) return
     onPatch({ busy: true }); onErr('')
     for (let i = 0; i < state.shots.length; i++) {
       if (state.shots[i].image?.url) continue
@@ -315,6 +324,15 @@ function PersonaSection({ persona, workspaceRefs, state, onPatch, globalConfig, 
       .map((s, i) => (s.approved && s.image?.url && s.video?.status !== 'done' ? i : -1))
       .filter((i) => i >= 0)
     if (!approvedIdx.length) { onErr(`${persona.name}: gak ada shot ter-approve yang udah ada image`); return }
+    const estCost = approvedIdx.reduce((sum, i) => sum + videoCost(globalConfig.vidModel, state.shots[i].raw.duration || 5), 0)
+    // Always confirm video gen — it's the expensive one
+    if (!confirm(
+      `Generate ${approvedIdx.length} video dengan ${globalConfig.vidModel.split('/').pop()}?\n\n` +
+      `Estimated cost: ${fmtCost(estCost)}\n` +
+      `Total duration: ${approvedIdx.reduce((s, i) => s + (state.shots[i].raw.duration || 5), 0)} detik\n\n` +
+      `⚠ Video generation mahal & lama. Pastikan shot udah final.\n` +
+      `Tap OK = jalanin, Cancel = batal.`
+    )) return
     onPatch({ busy: true }); onErr('')
     for (const i of approvedIdx) await genVideoForShot(i)
     onPatch({ busy: false })

@@ -95,6 +95,32 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
   const [transcribing, setTranscribing] = useState(false)
   const [transcribeProgress, setTranscribeProgress] = useState('')
   const playRafRef = useRef(null)
+  // Undo/redo history stack — snapshots of project (max 50)
+  const historyRef = useRef({ past: [], future: [] })
+  function pushHistory(prevProject) {
+    historyRef.current.past.push(JSON.stringify(prevProject))
+    if (historyRef.current.past.length > 50) historyRef.current.past.shift()
+    historyRef.current.future = [] // wipe redo on new action
+  }
+  function undo() {
+    const h = historyRef.current
+    if (h.past.length === 0) return
+    h.future.push(JSON.stringify(project))
+    const prev = h.past.pop()
+    setProject(JSON.parse(prev))
+  }
+  function redo() {
+    const h = historyRef.current
+    if (h.future.length === 0) return
+    h.past.push(JSON.stringify(project))
+    const next = h.future.pop()
+    setProject(JSON.parse(next))
+  }
+  // Wrapped patch that captures history snapshot first
+  function patchWithHistory(p) {
+    pushHistory(project)
+    setProject((cur) => ({ ...cur, ...(typeof p === 'function' ? p(cur) : p) }))
+  }
   const baseVideoRef = useRef(null) // single video element for base track
   const overlayRefs = useRef(new Map()) // clip.id -> HTMLVideoElement
   const imageInputRef = useRef(null)
@@ -298,7 +324,56 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
     setProject(normalizeProject(data.config))
     setProjectId(data.id); setSelected(null); setCurrentTime(0)
   }
-  function newProject() { setProject(DEFAULT_PROJECT); setProjectId(null); setSelected(null); setCurrentTime(0) }
+  function newProject() {
+    pushHistory(project)
+    setProject(DEFAULT_PROJECT); setProjectId(null); setSelected(null); setCurrentTime(0)
+  }
+
+  // Clone current project
+  async function cloneProject() {
+    setErr('')
+    try {
+      const { data, error } = await supabase.from('editor_projects')
+        .insert({ workspace_id: workspaceId, name: project.name + ' (copy)', config: project, created_by: userId })
+        .select('id').single()
+      if (error) throw error
+      setProjectId(data.id)
+      setProject({ ...project, name: project.name + ' (copy)' })
+      alert('Project cloned. Saved sebagai "' + project.name + ' (copy)"')
+    } catch (e) { setErr('Clone gagal: ' + e.message) }
+  }
+
+  // Split selected video clip at currentTime
+  function splitClipAtPlayhead() {
+    if (!selected || selected.kind !== 'video') {
+      setErr('Pilih video clip dulu buat split (S key)')
+      return
+    }
+    const clip = project.video_clips.find((c) => c.id === selected.id)
+    if (!clip) return
+    const cStart = clip.in_track || 0
+    const cEnd = cStart + clipDuration(clip)
+    if (currentTime <= cStart + 0.1 || currentTime >= cEnd - 0.1) {
+      setErr('Playhead harus di tengah clip buat split (gak di ujung-ujung)')
+      return
+    }
+    const speed = clip.speed || 1
+    const offsetInTrack = currentTime - cStart // seconds dari clip start
+    const offsetInSrc = offsetInTrack * speed
+    const splitSrcTime = (clip.src_in || 0) + offsetInSrc
+
+    pushHistory(project)
+    // Clip pertama: src_in..splitSrcTime, in_track sama
+    const clipA = { ...clip, src_out: splitSrcTime }
+    // Clip kedua: splitSrcTime..src_out, in_track = currentTime
+    const clipB = { ...clip, id: uid(), src_in: splitSrcTime, in_track: currentTime, transition_in: { type: 'cut', duration: 0 } }
+    setProject((p) => ({
+      ...p,
+      video_clips: p.video_clips.flatMap((c) => c.id === clip.id ? [clipA, clipB] : [c]),
+    }))
+    setSelected({ kind: 'video', id: clipA.id })
+    setErr('')
+  }
 
   async function exportVideo() {
     if (project.video_clips.length === 0) { setErr('Belum ada video clip'); return }
@@ -342,16 +417,22 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
   // Keyboard shortcuts: Delete = delete selected clip; Space = play/pause
   useEffect(() => {
     function onKey(e) {
-      // Ignore when typing in text inputs
       const tag = e.target?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable) return
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
+      const isMac = navigator.platform.includes('Mac')
+      const cmd = isMac ? e.metaKey : e.ctrlKey
+      if (cmd && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+        e.preventDefault(); undo()
+      } else if (cmd && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) {
+        e.preventDefault(); redo()
+      } else if (e.key.toLowerCase() === 's' && !cmd) {
+        e.preventDefault(); splitClipAtPlayhead()
+      } else if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
         e.preventDefault()
         if (selected.kind === 'video') removeVideoClip(selected.id)
         else deleteClip(selected.kind, selected.id)
       } else if (e.key === ' ') {
-        e.preventDefault()
-        togglePlay()
+        e.preventDefault(); togglePlay()
       }
     }
     window.addEventListener('keydown', onKey)
@@ -447,7 +528,11 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
               <option key={p.id} value={p.id}>{p.name} {p.username ? `(@${p.username})` : ''}</option>
             ))}
           </select>
+          <button onClick={undo} disabled={historyRef.current.past.length === 0} title="Undo (Ctrl+Z)" className="px-2 py-1.5 text-xs rounded bg-[var(--surface)] border border-[var(--border)] hover:bg-[var(--surface2)] disabled:opacity-30">↶</button>
+          <button onClick={redo} disabled={historyRef.current.future.length === 0} title="Redo (Ctrl+Y / Ctrl+Shift+Z)" className="px-2 py-1.5 text-xs rounded bg-[var(--surface)] border border-[var(--border)] hover:bg-[var(--surface2)] disabled:opacity-30">↷</button>
+          <button onClick={splitClipAtPlayhead} disabled={!selected || selected.kind !== 'video'} title="Split clip at playhead (S)" className="px-2 py-1.5 text-xs rounded bg-[var(--surface)] border border-[var(--border)] hover:bg-[var(--surface2)] disabled:opacity-30">✂ Split</button>
           <button onClick={newProject} className="px-3 py-1.5 text-xs rounded bg-[var(--surface)] border border-[var(--border)] hover:bg-[var(--surface2)]">+ New</button>
+          <button onClick={cloneProject} disabled={project.video_clips.length === 0} title="Clone project as copy" className="px-3 py-1.5 text-xs rounded bg-[var(--surface)] border border-[var(--border)] hover:bg-[var(--surface2)] disabled:opacity-50">📋 Clone</button>
           <button onClick={saveProject} disabled={saving || project.video_clips.length === 0} className="px-3 py-1.5 text-xs rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)] disabled:opacity-50">
             {saving ? '⏳ Save...' : '💾 Save'}
           </button>
@@ -553,7 +638,16 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
         {/* CENTER */}
         <div className="space-y-3 min-w-0">
           <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-3">
-            <div className="relative mx-auto bg-black rounded overflow-hidden" style={{ maxWidth: 360 }}>
+            <div className="relative mx-auto bg-black rounded overflow-hidden" style={{ maxWidth: 360 }}
+              onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy' }}
+              onDrop={(e) => {
+                e.preventDefault()
+                const file = e.dataTransfer.files?.[0]
+                if (!file) return
+                // Inject ke video file input handler
+                const synthetic = { target: { files: [file], value: '' } }
+                onVideoFile(synthetic)
+              }}>
               <div className={`${aspectClass} relative w-full`}>
                 {/* Base video */}
                 <video ref={baseVideoRef} className="w-full h-full object-contain" playsInline crossOrigin="anonymous" muted={false}

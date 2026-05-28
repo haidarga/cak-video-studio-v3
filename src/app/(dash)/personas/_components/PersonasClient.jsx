@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Modal, Field, Input, Textarea } from '../../brands/_components/BrandsClient'
+import { PERSONA_TEMPLATES } from '@/lib/persona-templates'
 
 const EMOTIONAL_ANGLES = ['Happy', 'Concerned', 'Curious', 'Skeptical', 'Excited', 'Confident', 'Empathetic', 'Aspirational']
 
@@ -11,6 +12,22 @@ export default function PersonasClient({ workspaceId, userId, activeBrandName, i
   const [editing, setEditing] = useState(null)
   const [selected, setSelected] = useState(new Set())
   const [err, setErr] = useState('')
+  const [showTemplates, setShowTemplates] = useState(false)
+
+  async function importFromTemplate(tpl) {
+    setErr('')
+    const { error } = await supabase.from('personas').insert({
+      workspace_id: workspaceId,
+      name: tpl.name,
+      role_label: tpl.role_label,
+      character_prompt: tpl.character_prompt,
+      emotional_angle: tpl.emotional_angle,
+      username: tpl.name.toLowerCase().replace(/\s+/g, ''),
+      created_by: userId,
+    })
+    if (error) setErr(error.message)
+    else setShowTemplates(false)
+  }
 
   useEffect(() => {
     const ch = supabase.channel('personas-' + workspaceId)
@@ -55,10 +72,16 @@ export default function PersonasClient({ workspaceId, userId, activeBrandName, i
           <h1 className="text-3xl font-bold mt-1">Personas</h1>
           <p className="text-sm text-[var(--muted)] mt-1">Tiap persona = 1 akun TikTok/IG. Upload foto refs → otomatis dipakai pas generate.</p>
         </div>
-        <button onClick={() => setEditing({ isNew: true })}
-          className="px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-semibold hover:opacity-90">
-          + Tambah Persona
-        </button>
+        <div className="flex gap-2">
+          <button onClick={() => setShowTemplates(true)}
+            className="px-4 py-2 rounded-lg bg-purple-500/30 border border-purple-500/50 text-purple-200 text-sm font-semibold hover:bg-purple-500/50">
+            📚 Templates
+          </button>
+          <button onClick={() => setEditing({ isNew: true })}
+            className="px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-semibold hover:opacity-90">
+            + Tambah Persona
+          </button>
+        </div>
       </div>
 
       {err && <div className="mt-3 text-xs text-red-400">⚠ {err}</div>}
@@ -87,6 +110,29 @@ export default function PersonasClient({ workspaceId, userId, activeBrandName, i
       {editing && (
         <PersonaEditor persona={editing.isNew ? null : editing} workspaceId={workspaceId} userId={userId}
           onClose={() => setEditing(null)} onError={setErr} />
+      )}
+
+      {showTemplates && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6" onClick={() => setShowTemplates(false)}>
+          <div className="w-full max-w-3xl bg-[var(--surface)] rounded-xl border border-[var(--border)] max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 py-4 border-b border-[var(--border)] flex items-center justify-between">
+              <h2 className="text-lg font-bold">📚 Persona Templates</h2>
+              <button onClick={() => setShowTemplates(false)} className="text-[var(--muted)] hover:text-white">✕</button>
+            </div>
+            <div className="p-4 text-xs text-[var(--muted)]">Pilih archetype buat quick-start. Bisa di-edit setelah dibuat.</div>
+            <div className="px-6 pb-6 grid grid-cols-1 md:grid-cols-2 gap-3">
+              {PERSONA_TEMPLATES.map((tpl, i) => (
+                <button key={i} onClick={() => importFromTemplate(tpl)}
+                  className="text-left bg-[var(--surface2)] border border-[var(--border)] hover:border-[var(--accent)] rounded p-3">
+                  <div className="text-sm font-bold mb-1">{tpl.label}</div>
+                  <div className="text-[10px] text-[var(--muted)] mb-2 line-clamp-2">{tpl.role_label}</div>
+                  <div className="text-[10px] text-[var(--muted2)] line-clamp-3">{tpl.character_prompt}</div>
+                  <div className="text-[10px] text-[var(--accent)] mt-1.5">💭 {tpl.emotional_angle.split('.')[0]}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
