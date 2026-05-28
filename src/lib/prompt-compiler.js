@@ -195,8 +195,17 @@ export function compilePrompt(spec) {
     ? `Avoid: ${cam.negatives.join(', ')}.`
     : ''
 
-  const layers = [L1_camera, L1b_grid, L2_identity, L3_wardrobe, L4_environment, L5_action, L6_brand, L7_format, L8_continuity, L9_quality, L10_negatives]
+  const layers = [L1_camera, L1b_grid, L2_identity, L3_wardrobe, L4_environment, L5_action, L6_brand, L7_format, L8_continuity, L9_quality]
+  // BUG FIX: L10_negatives intentionally NOT sanitized.
+  // Sanitizer's job is to drop "cinematic / professional / sharp focus / 8K"
+  // from POSITIVE directives when phone-cam preset wins. But those EXACT words
+  // also appear inside the camera's `negatives` list — that's the whole point,
+  // we tell the model to AVOID them. If we sanitize the negatives layer too,
+  // it strips "cinematic" → output becomes "Avoid:. professional studio,
+  // glossy., photography. 8K" (broken fragments). Negatives layer pass-through
+  // raw so the Avoid: clause stays intact.
   const cleaned = layers.map((l) => sanitize(l, ctx)).filter(Boolean)
+  if (L10_negatives) cleaned.push(L10_negatives)
   return cleaned.join('\n')
 }
 

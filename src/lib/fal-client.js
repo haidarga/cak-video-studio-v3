@@ -134,8 +134,14 @@ export function buildStoryboardGridPrompt(panels = [], ar = '9:16', concept = ''
   const productRule = constraints.skipProduct
     ? 'No product or brand packaging in any cell — lifestyle moments only.'
     : 'Product appears in cells marked Product Shot only.'
-  const header = `Storyboard sheet layout: ${ar} canvas, 3x3 grid (3 rows × 3 columns), thin grey lines, scene-number badge + time range per cell, one still per cell, concise text block under each still.`
-  return `${header}\n${conceptLine}\n${productRule}\n\nCELLS:\n${cells}`
+  // Slim layout — match ChatGPT-style raw-photo grid (NOT ad-agency table sheet).
+  // Pre-refactor this asked for 'thin grey lines + scene-number badge + time
+  // range per cell + concise text block under each still' which produced an
+  // ad-agency presentation board with text labels. ChatGPT-image output was
+  // just 9 raw photos in 3x3 with small corner numbers, no text below — that's
+  // what users actually want.
+  const header = `Single composite image, ${ar} canvas, 3x3 grid layout (3 rows × 3 columns) of 9 sequential photographic stills. Tiny scene number (1-9) in top-left corner of each cell. NO text labels, NO captions, NO time stamps under the photos — clean raw photos only.`
+  return `${header}\n${conceptLine}\n${productRule}\n\nThe 9 stills, in order (left-to-right, top-to-bottom):\n${cells}`
 }
 
 export function productDirective(notes) {
