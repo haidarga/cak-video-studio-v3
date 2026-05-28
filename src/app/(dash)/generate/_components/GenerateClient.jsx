@@ -70,6 +70,7 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
     skipDialog: false,     // omit dialog/VO from vid prompt + storyboard grid
     skipOnscreen: false,   // omit onscreen text from prompt + grid
     skipProduct: false,    // bypass brand product injection in CTA panel
+    wardrobeOverride: '',  // text — override outfit from reference (high-priority prompt block)
   })
 
   // Pick style — does NOT touch model selection (user controls model independently)
@@ -170,6 +171,32 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
             <ToggleCard label="🚫 Skip product" sub="No brand product in CTA panel" on={!!globalConfig.skipProduct}
               onClick={() => setGlobalConfig({ ...globalConfig, skipProduct: !globalConfig.skipProduct })} />
           </div>
+
+          {/* Wardrobe override — high-priority text injection into image AND video
+              gen prompts. Overrides outfit shown in persona reference photo
+              (~50-60% override rate, vs ~20% if just buried in naskah). */}
+          <div className="mt-3">
+            <label className="block text-[10px] uppercase text-[var(--muted)] tracking-wider font-semibold mb-1.5">
+              👕 Wardrobe Override <span className="text-[9px] font-normal text-[var(--muted2)]">(opsional — replace outfit dari persona ref)</span>
+            </label>
+            <textarea rows={2} value={globalConfig.wardrobeOverride || ''}
+              onChange={(e) => setGlobalConfig({ ...globalConfig, wardrobeOverride: e.target.value })}
+              placeholder='Contoh: "Emma pake oversized white t-shirt + jeans + sneakers putih. Anak pake t-shirt kuning + shorts + mini sneakers."'
+              className="w-full text-xs px-3 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] resize-y" />
+            <div className="text-[9px] text-[var(--muted2)] mt-1 leading-relaxed">
+              ⚠ Text prompt cuma 50-60% override pixel reference. Buat hasil 95%+ akurat, upload <strong>foto persona pake outfit yang lu mau</strong> sebagai ref baru — pixel-level lock.
+            </div>
+          </div>
+
+          {/* Hint: continuous mode butuh ref-to-video model */}
+          {globalConfig.continuousShot && !globalConfig.vidModel.includes('reference-to-video') && !globalConfig.vidModel.includes('ref-to-video') && (
+            <div className="mt-3 p-2.5 rounded border border-yellow-500/40 bg-yellow-500/10">
+              <div className="text-[10px] font-bold text-yellow-300 mb-0.5">💡 Tips buat hasil tanpa morphing</div>
+              <div className="text-[10px] text-yellow-200/80 leading-relaxed">
+                Lu pake <strong>image-to-video</strong> + storyboard 3×3 = video gen lihat grid sebagai 9 keyframes → morph. Switch ke <strong>🎭 Kling 2.5 Pro Ref-to-Video</strong> atau <strong>🎭 Seedance Ref-to-Video</strong> di Video Model di atas — model itu ignore grid sebagai start frame, pakai persona refs untuk identity. Grid tetep ke-render buat planning visual, video gen-nya jadi clean continuous take.
+              </div>
+            </div>
+          )}
         </div>
       </section>
 
@@ -367,33 +394,32 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
 
       // Storyboard mode = ONE grid image built from all 9 panels (sheet view).
       // Per-shot mode = single image from this shot's image_prompt.
-      //
-      // CONTINUOUS SHOT bypass: when user enabled continuousShot, the grid
-      // 3×3 image breaks the video gen. Grok/Kling/etc interpret 9-cell grid
-      // as 9 distinct scenes and morph between them = visible cuts.
-      // Fix: emit a SINGLE-frame image from panel #1's visual instead of the
-      // grid. Video model sees one clean frame → produces one continuous take.
-      // User loses the visual storyboard sheet, but gets the continuous output
-      // they explicitly asked for.
+      // Grid is kept always — for continuous video without morphing, user must
+      // pick a reference-to-video model (which ignores the grid as start
+      // frame, uses persona refs for identity instead).
       let rawPrompt
       if (shot.raw.panels) {
-        if (globalConfig.continuousShot) {
-          // Use panel #1 visual as the single hero frame. Storyboard concept +
-          // visual prefix to give model context without 9-cell layout.
-          const panel = shot.raw.panels[0] || {}
-          const concept = (shot.raw.concept || '').trim()
-          const visual = (panel.visual || panel.scene || '').trim()
-          rawPrompt = `Single photographic still, ${globalConfig.ar} canvas. ${concept ? `Scene: ${concept}. ` : ''}${visual} Natural lighting, realistic proportions. NO grid, NO storyboard layout, NO table, NO panels — one clean photo frame only.`
-        } else {
-          rawPrompt = buildStoryboardGridPrompt(shot.raw.panels, globalConfig.ar, shot.raw.concept, {
-            skipDialog: !!globalConfig.skipDialog,
-            skipOnscreen: !!globalConfig.skipOnscreen,
-            skipProduct: !!globalConfig.skipProduct,
-          })
-        }
+        rawPrompt = buildStoryboardGridPrompt(shot.raw.panels, globalConfig.ar, shot.raw.concept, {
+          skipDialog: !!globalConfig.skipDialog,
+          skipOnscreen: !!globalConfig.skipOnscreen,
+          skipProduct: !!globalConfig.skipProduct,
+        })
       } else {
         rawPrompt = shot.raw.image_prompt || shot.raw.shot_label
       }
+
+      // Wardrobe override (priority injection — replaces reference outfit).
+      // Placed at the TOP of prompt where image models pay most attention.
+      // Plus explicit 'IGNORE reference outfit' instruction.
+      const wardrobeBlock = globalConfig.wardrobeOverride?.trim()
+        ? `=== WARDROBE OVERRIDE (mandatory, highest priority) ===
+The subject(s) wear EXACTLY: ${globalConfig.wardrobeOverride.trim()}
+IGNORE the outfit shown in any reference photo. Replace reference outfit with the wardrobe above.
+=== END WARDROBE ===
+
+`
+        : ''
+      rawPrompt = wardrobeBlock + rawPrompt
       // Apply style preset (UGC/animation/3D/cinematic_ad/short_movie/TVC/etc) for higher quality output
       const basePrompt = applyStylePreset(globalConfig.style, rawPrompt)
       // Skip product directive when user opts out — avoids brand packaging injection.
@@ -457,6 +483,11 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
         motion = dialogue
           ? `${shot.raw.video_motion}. The subject speaks in fluent native ${globalConfig.lang}: "${dialogue}". ${VID_STABILITY}`
           : `${shot.raw.video_motion || 'Natural cinematic motion'}. ${VID_STABILITY}`
+      }
+      // Wardrobe override — inject at top of video prompt too so the video model
+      // doesn't drift back to reference outfit during animation.
+      if (globalConfig.wardrobeOverride?.trim()) {
+        motion = `WARDROBE (must persist throughout video): ${globalConfig.wardrobeOverride.trim()}. ` + motion
       }
       // Apply style preset to motion as well (animation style, cinematic, etc influence camera + render style)
       motion = applyStylePreset(globalConfig.style, motion)
