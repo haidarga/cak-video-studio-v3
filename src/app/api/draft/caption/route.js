@@ -90,7 +90,8 @@ OUTPUT (JSON only):
     const full = parsed.caption.trim() + (tags ? `\n\n${tags}` : '')
     return NextResponse.json({ ok: true, caption: full, hashtags: parsed.hashtags || [] })
   } catch (e) {
-    return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: e?.status || 500 })
+    const httpStatus = e?.transient ? 200 : (e?.status || 500)
+    return NextResponse.json({ ok: false, error: String(e?.message || e), transient: !!e?.transient }, { status: httpStatus })
   }
 }
 

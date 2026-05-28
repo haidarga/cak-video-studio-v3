@@ -82,6 +82,9 @@ export async function callGemini({ contents, generationConfig = {}, maxRetries =
     // Final failure — humanize the message for the UI.
     if (isTransientError(e) || isTransientError(lastErr)) {
       const friendly = new Error('Gemini lagi sibuk — udah retry 3x + fallback model, semuanya gagal. Coba lagi 1-2 menit. Kalau persistent, cek status.cloud.google.com.')
+      // Mark as transient so API routes can return HTTP 200 with ok:false
+      // instead of 503 — keeps browser console clean (no scary red errors).
+      friendly.transient = true
       friendly.status = 503
       friendly.cause = e
       throw friendly

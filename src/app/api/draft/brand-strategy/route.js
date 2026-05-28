@@ -40,6 +40,7 @@ PENTING:
     })
     return NextResponse.json({ ok: true, draft })
   } catch (e) {
-    return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: e?.status || 500 })
+    const httpStatus = e?.transient ? 200 : (e?.status || 500)
+    return NextResponse.json({ ok: false, error: String(e?.message || e), transient: !!e?.transient }, { status: httpStatus })
   }
 }

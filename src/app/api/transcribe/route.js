@@ -79,6 +79,7 @@ ATURAN:
     const segments = (parsed.segments || []).filter((s) => s && s.text)
     return NextResponse.json({ ok: true, segments, language: parsed.language || null, count: segments.length })
   } catch (e) {
-    return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: 500 })
+    const httpStatus = e?.transient ? 200 : (e?.status || 500)
+    return NextResponse.json({ ok: false, error: String(e?.message || e), transient: !!e?.transient }, { status: httpStatus })
   }
 }

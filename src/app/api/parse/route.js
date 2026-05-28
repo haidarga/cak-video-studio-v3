@@ -53,6 +53,9 @@ ${naskah}`
     })
     return NextResponse.json({ ok: true, parsed })
   } catch (e) {
-    return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: e?.status || 500 })
+    // Transient Gemini errors (overload, rate limit) return 200 with ok:false
+    // so the browser doesn't log a scary 503/429. UI handles ok:false soft.
+    const httpStatus = e?.transient ? 200 : (e?.status || 500)
+    return NextResponse.json({ ok: false, error: String(e?.message || e), transient: !!e?.transient }, { status: httpStatus })
   }
 }
