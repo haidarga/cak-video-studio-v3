@@ -159,8 +159,8 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
                 className="text-left bg-[var(--surface)] border border-[var(--border)] hover:border-[var(--accent)] rounded overflow-hidden">
                 <div className="aspect-[9/16] bg-black">
                   {r.type === 'video'
-                    ? <video src={r.url} muted loop className="w-full h-full object-cover" />
-                    : <img src={r.url} alt="" className="w-full h-full object-cover" />}
+                    ? <video src={r.url} muted loop preload="none" className="w-full h-full object-cover" />
+                    : <img src={r.url} alt="" loading="lazy" className="w-full h-full object-cover" />}
                 </div>
                 <div className="p-1.5">
                   <div className="text-[10px] font-semibold truncate">{r.label}</div>

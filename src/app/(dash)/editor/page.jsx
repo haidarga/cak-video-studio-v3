@@ -18,16 +18,19 @@ export default async function EditorPage() {
   const ws = ms?.[0]?.workspaces
   if (!ws) redirect('/')
 
+  // Don't ship `meta` jsonb in the list query — it can contain cloned audio
+  // URLs, clip arrays, etc. The editor only needs meta for the active project,
+  // not the picker. Loaded on-demand when user selects a result.
   const [{ data: results }, { data: projects }, { data: personas }] = await Promise.all([
     supabase.from('results')
-      .select('id, type, url, label, ar, qc_status, group_label, created_at, meta, personas(id, name, username, avatar_url)')
+      .select('id, type, url, label, ar, qc_status, group_label, created_at, persona_id, personas(id, name, username, avatar_url)')
       .eq('workspace_id', ws.id).order('created_at', { ascending: false }).limit(120),
     supabase.from('editor_projects')
       .select('id, name, source_result_id, updated_at')
       .eq('workspace_id', ws.id).order('updated_at', { ascending: false }).limit(20),
     supabase.from('personas')
       .select('id, name, username, avatar_url')
-      .eq('workspace_id', ws.id).order('name'),
+      .eq('workspace_id', ws.id).order('name').limit(100),
   ])
 
   return (

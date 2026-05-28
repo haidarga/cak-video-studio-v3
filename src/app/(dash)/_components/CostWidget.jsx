@@ -17,12 +17,16 @@ export default function CostWidget({ workspaceId }) {
     const now = new Date()
     const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
+    // Cap at 500 — even at 30 paid gens/day this covers the whole month.
+    // Old limit 5000 was shipping ~100KB to every page nav (sidebar mounts
+    // each route change).
     const { data: monthRows } = await supabase
       .from('usage_log')
       .select('kind, cost_usd, created_at')
       .eq('workspace_id', workspaceId)
       .gte('created_at', startOfMonth)
-      .limit(5000)
+      .order('created_at', { ascending: false })
+      .limit(500)
     const m = (monthRows || []).reduce((s, r) => s + parseFloat(r.cost_usd || 0), 0)
     const t = (monthRows || [])
       .filter((r) => r.created_at >= startOfDay)

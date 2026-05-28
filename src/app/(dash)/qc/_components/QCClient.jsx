@@ -334,9 +334,10 @@ function QCCard({ result: r, onSetStatus, onRemove, onOpenNote, onRename, onDele
     <div className={`bg-[var(--surface2)] border rounded overflow-hidden ${selected ? 'border-[var(--accent)] ring-2 ring-[var(--accent)]/50' : 'border-[var(--border)]'}`}>
       <div className="relative aspect-[9/16] bg-black">
         {r.type === 'video'
-          ? <video src={r.url} muted loop playsInline className="w-full h-full object-cover"
-              onMouseEnter={(e) => e.target.play().catch(()=>{})} onMouseLeave={(e) => e.target.pause()} />
-          : <img src={r.url} alt={r.label} className="w-full h-full object-cover" />}
+          ? <video src={r.url} muted loop playsInline preload="none" className="w-full h-full object-cover"
+              onMouseEnter={(e) => { e.target.preload = 'auto'; e.target.play().catch(()=>{}) }}
+              onMouseLeave={(e) => e.target.pause()} />
+          : <img src={r.url} alt={r.label} loading="lazy" className="w-full h-full object-cover" />}
         {/* Multi-select checkbox top-left, status badge top-right */}
         {onToggleSelect && (
           <label onClick={(e) => e.stopPropagation()} className="absolute top-1.5 left-1.5 cursor-pointer">

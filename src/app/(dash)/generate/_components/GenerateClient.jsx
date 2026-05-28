@@ -579,9 +579,9 @@ function ShotEditor({ shot, idx, onChangeRaw, onGenImage, onGenVideo, onApprove,
         <div className="w-32 flex-shrink-0">
           <div className="aspect-[9/16] bg-black rounded overflow-hidden border border-[var(--border)] relative">
             {shot.video?.url ? (
-              <video src={shot.video.url} controls muted loop playsInline className="w-full h-full object-cover" />
+              <video src={shot.video.url} controls muted loop playsInline preload="none" className="w-full h-full object-cover" />
             ) : shot.image?.url ? (
-              <img src={shot.image.url} alt="" className="w-full h-full object-cover" />
+              <img src={shot.image.url} alt="" loading="lazy" className="w-full h-full object-cover" />
             ) : (
               <div className="w-full h-full flex items-center justify-center text-[10px] text-[var(--muted)] text-center p-2">
                 {imgStatus === 'idle' ? 'no image yet' : imgStatus}
@@ -720,9 +720,9 @@ function StoryboardEditor({ shot, idx, ar, onChangeRaw, onChangePanel, onGenImag
         <div>
           <div className={`${aspectClass} bg-black rounded overflow-hidden border border-[var(--border)] relative`}>
             {shot.video?.url ? (
-              <video src={shot.video.url} controls muted loop playsInline className="w-full h-full object-cover" />
+              <video src={shot.video.url} controls muted loop playsInline preload="none" className="w-full h-full object-cover" />
             ) : shot.image?.url ? (
-              <img src={shot.image.url} alt="" className="w-full h-full object-cover" />
+              <img src={shot.image.url} alt="" loading="lazy" className="w-full h-full object-cover" />
             ) : (
               <div className="w-full h-full flex items-center justify-center text-[10px] text-[var(--muted)] text-center p-2">
                 {imgStatus === 'idle' ? 'no grid yet — klik 🖼 Gen Grid' : imgStatus}
