@@ -232,17 +232,7 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
               selectedIds={globalConfig.styleRefIds || new Set()}
               onChange={(ids) => setGlobalConfig({ ...globalConfig, styleRefIds: ids })} />
 
-            <div>
-              <label className="block text-[10px] uppercase text-[var(--muted)] tracking-wider font-semibold mb-1.5">
-                👕 Wardrobe Fallback <span className="text-[9px] font-normal text-[var(--muted2)]">(opsional — naskah carry outfit auto)</span>
-              </label>
-              <textarea rows={2} value={globalConfig.wardrobeOverride || ''}
-                onChange={(e) => setGlobalConfig({ ...globalConfig, wardrobeOverride: e.target.value })}
-                placeholder='Tulis outfit di naskah aja. Field ini cuma cadangan.'
-                className="w-full text-xs px-3 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] resize-y" />
-            </div>
-
-            {globalConfig.continuousShot && !globalConfig.vidModel.includes('reference-to-video') && !globalConfig.vidModel.includes('ref-to-video') && (
+{globalConfig.continuousShot && !globalConfig.vidModel.includes('reference-to-video') && !globalConfig.vidModel.includes('ref-to-video') && (
               <div className="p-2 rounded border border-yellow-500/40 bg-yellow-500/10 text-[10px] text-yellow-200/90 leading-relaxed">
                 💡 <strong>Tips no-morph</strong>: continuous + image-to-video = morph. Switch ke <strong>🎭 Ref-to-Video model</strong> di Video Model — model itu ignore grid sebagai start frame.
               </div>
@@ -508,10 +498,10 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
         ? productNotesShort(productKnowledge || activeBrand?.notes)
         : null
 
-      // Wardrobe resolution: parser-extracted (from naskah) takes precedence
-      // over the manual override field. If user wrote outfit in naskah, that
-      // wins. Manual override is only used when naskah is silent on outfit.
-      const wardrobe = (shot.raw.wardrobe?.trim()) || (globalConfig.wardrobeOverride?.trim()) || null
+      // Wardrobe = parser-extracted from naskah, period. Single source of
+      // truth. If user wrote outfit in naskah, parser picks it up; if not,
+      // reference photo handles outfit. No more dual-source confusion.
+      const wardrobe = shot.raw.wardrobe?.trim() || null
 
       // Visual Compiler — owns ordering, sanitization, style-aware quality.
       const fullPrompt = compilePrompt({
@@ -576,7 +566,7 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
         ? productNotesShort(productKnowledge2 || activeBrand?.notes)
         : null
 
-      const wardrobe = (shot.raw.wardrobe?.trim()) || (globalConfig.wardrobeOverride?.trim()) || null
+      const wardrobe = shot.raw.wardrobe?.trim() || null
       const motion = compileVideoPrompt({
         camera: globalConfig.cameraPreset || DEFAULT_CAMERA,
         identity,

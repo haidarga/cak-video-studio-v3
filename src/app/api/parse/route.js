@@ -69,7 +69,7 @@ export async function POST(req) {
     'NEVER describe faces in detail (eye color, exact features, hair texture). Character identity is locked by reference photos.',
     'Use VISUAL TOKENS — concrete actions, camera angles, props. Avoid aesthetic adjectives ("beautiful", "cinematic", "professional", "stunning") — those create contradictions downstream.',
     'Set extras (lighting, time-of-day, backdrop) go in the shared `environment` field. Per-panel `visual` is just ACTION + framing.',
-    'OUTFIT EXTRACTION: scan the naskah for any wardrobe/clothing description (oversized t-shirt, kemeja batik, casual celana, etc). Put it in the shared `wardrobe` field. If the naskah does NOT mention outfit, set wardrobe to empty string — do NOT invent one. The reference photo handles outfit when wardrobe is empty.',
+    'OUTFIT EXTRACTION (strict — single source of truth): scan ONLY the naskah text for explicit clothing words (oversized t-shirt, kemeja batik, daster, jeans, gamis, kerudung, sneakers, etc). Put it in the shared `wardrobe` field. STRICT RULES: (1) If the naskah text does NOT contain explicit clothing words, set wardrobe to empty string ""; (2) NEVER infer outfit from persona name, persona description, or reference photo context; (3) NEVER guess or default to "blazer", "shirt", or any generic clothing — empty string is correct when naskah is silent. The reference photo handles outfit when wardrobe is empty.',
     refLabels.length ? `Character names MUST come from this list (use exact names in chars_in_shot): ${refLabels.join(', ')}` : null,
   ].filter(Boolean).map((r) => `- ${r}`).join('\n')
 
