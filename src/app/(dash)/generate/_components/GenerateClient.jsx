@@ -209,19 +209,19 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
               onClick={() => setGlobalConfig({ ...globalConfig, skipProduct: !globalConfig.skipProduct })} />
           </div>
 
-          {/* Wardrobe override — high-priority text injection into image AND video
-              gen prompts. Overrides outfit shown in persona reference photo
-              (~50-60% override rate, vs ~20% if just buried in naskah). */}
+          {/* Wardrobe FALLBACK — parser auto-extracts wardrobe dari naskah.
+              Field ini cuma fallback kalau naskah lu gak nyebut outfit.
+              Parser-extracted (per persona shot) > manual fallback. */}
           <div className="mt-3">
             <label className="block text-[10px] uppercase text-[var(--muted)] tracking-wider font-semibold mb-1.5">
-              👕 Wardrobe Override <span className="text-[9px] font-normal text-[var(--muted2)]">(opsional — replace outfit dari persona ref)</span>
+              👕 Wardrobe Fallback <span className="text-[9px] font-normal text-[var(--muted2)]">(opsional — auto-extract dari naskah, ini cadangan kalau naskah gak nyebut)</span>
             </label>
             <textarea rows={2} value={globalConfig.wardrobeOverride || ''}
               onChange={(e) => setGlobalConfig({ ...globalConfig, wardrobeOverride: e.target.value })}
-              placeholder='Contoh: "Emma pake oversized white t-shirt + jeans + sneakers putih. Anak pake t-shirt kuning + shorts + mini sneakers."'
+              placeholder='Cukup tulis di naskah aja! Contoh naskah: "Emma pake oversized t-shirt putih jalan di taman..." → parser otomatis detect. Field ini cuma cadangan.'
               className="w-full text-xs px-3 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] resize-y" />
             <div className="text-[9px] text-[var(--muted2)] mt-1 leading-relaxed">
-              ⚠ Text prompt cuma 50-60% override pixel reference. Buat hasil 95%+ akurat, upload <strong>foto persona pake outfit yang lu mau</strong> sebagai ref baru — pixel-level lock.
+              💡 <strong>Cara recommend</strong>: tulis outfit langsung di naskah lu (e.g. <em>"Emma pake kemeja batik..."</em>). Parser auto-detect + inject ke prompt. Lebih fleksibel — beda naskah bisa beda outfit. Field manual ini cuma di-pakai kalau naskah lu gak nyebut outfit sama sekali.
             </div>
           </div>
 
@@ -381,9 +381,12 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
           id: `${persona.id}-storyboard-${Date.now()}`,
           raw: {
             concept: data.parsed.concept || '',
-            // NEW: parser now extracts shared environment + sequence motion.
-            // Falls back to empty so compiler picks mode-aware defaults.
+            // NEW: parser now extracts shared environment + wardrobe (auto-
+            // detected from naskah) + sequence motion. Compiler picks parsed
+            // wardrobe first, falls back to globalConfig.wardrobeOverride only
+            // if parser didn't extract any.
             environment: data.parsed.environment || '',
+            wardrobe: data.parsed.wardrobe || '',
             video_motion: data.parsed.video_motion || '',
             panels: panels.map((p) => ({
               n: p.n, title: p.title || '', visual: p.visual || p.scene || '',
@@ -403,6 +406,7 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
       } else {
         const items = data.parsed.shots || []
         const sharedEnv = data.parsed.environment || ''
+        const sharedWardrobe = data.parsed.wardrobe || ''
         shotsInit = items.map((it, i) => ({
           id: `${persona.id}-${i}-${Date.now()}`,
           raw: {
@@ -410,6 +414,7 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
             video_motion: it.video_motion || '',
             dialogue: it.dialogue || '',
             environment: sharedEnv,
+            wardrobe: sharedWardrobe,
             chars_in_shot: it.chars_in_shot || [],
             duration: it.duration || 5,
             shot_label: `Shot ${it.shot}`,
@@ -456,14 +461,17 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
         ? productNotesShort(productKnowledge || activeBrand?.notes)
         : null
 
+      // Wardrobe resolution: parser-extracted (from naskah) takes precedence
+      // over the manual override field. If user wrote outfit in naskah, that
+      // wins. Manual override is only used when naskah is silent on outfit.
+      const wardrobe = (shot.raw.wardrobe?.trim()) || (globalConfig.wardrobeOverride?.trim()) || null
+
       // Visual Compiler — owns ordering, sanitization, style-aware quality.
-      // Replaces the old style-preset + IMG_QUALITY + productDirective + wardrobe
-      // soup that produced 11 documented contradictions per gen.
       const fullPrompt = compilePrompt({
         media: 'image',
         camera: globalConfig.cameraPreset || DEFAULT_CAMERA,
         identity,
-        wardrobe: globalConfig.wardrobeOverride || null,
+        wardrobe,
         environment: shot.raw.environment || null,
         action,
         brand,
@@ -521,10 +529,11 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
         ? productNotesShort(productKnowledge2 || activeBrand?.notes)
         : null
 
+      const wardrobe = (shot.raw.wardrobe?.trim()) || (globalConfig.wardrobeOverride?.trim()) || null
       const motion = compileVideoPrompt({
         camera: globalConfig.cameraPreset || DEFAULT_CAMERA,
         identity,
-        wardrobe: globalConfig.wardrobeOverride || null,
+        wardrobe,
         environment: shot.raw.environment || null,
         action,
         brand,

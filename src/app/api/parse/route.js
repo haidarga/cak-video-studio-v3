@@ -39,26 +39,28 @@ export async function POST(req) {
     : 'Close Up|Medium Shot|Wide Shot|Product Shot'
 
   // Visual abstraction layer — parser now extracts VISUAL TOKENS not screenplay
-  // prose. Storyboard schema gains a shared `environment` field (one-line set
-  // + lighting + time-of-day) so every panel anchors to the same backdrop, and
-  // a top-level `video_motion` for the whole sequence (replaces the hardcoded
-  // 'Smooth camera transitions through 9 scenes' that ignored user intent).
+  // prose. Storyboard schema gains:
+  //   - shared `environment` field (set + lighting + time-of-day)
+  //   - shared `wardrobe` field (outfit per character, extracted from naskah)
+  //   - top-level `video_motion` for the whole sequence
   const schema = isStory
     ? `{
   "concept": "one-line creative concept (English)",
-  "environment": "one-line setting + lighting + time-of-day shared across all panels (English visual tokens, e.g. 'small neighborhood park, late afternoon golden light, scattered passersby in background')",
+  "environment": "one-line setting + lighting + time-of-day shared across all panels (English, e.g. 'small neighborhood park, late afternoon golden light, scattered passersby')",
+  "wardrobe": "outfit description for the subjects, extracted from the naskah if mentioned. Format: 'Character1 wears X. Character2 wears Y.' Empty string if naskah doesn't specify outfits — DO NOT invent.",
   "video_motion": "one-line camera-movement description for the whole sequence (English, max 20 words). If user toggled continuousShot, describe a single fluid take with no cuts.",
   "characters": ["Name1"],
   "panels": [
-    {"n":1,"title":"HOOK","visual":"English ACTION + camera angle only — do NOT describe faces, identity is locked by reference photos","dialog":"${constraints.skipDialog ? '' : `line in ${lang}`}","onscreen":"${constraints.skipOnscreen ? '' : `short ${lang} caption`}","shot_type":"${shotTypes}","seconds":2,"chars_in_shot":["Name1"]}
-    // 9 panels total. Each panel.visual is just the action + framing — no aesthetic words ('cinematic', 'beautiful', 'professional'), no lighting words (that's in environment), no face details.
+    {"n":1,"title":"HOOK","visual":"English ACTION + camera angle only — do NOT describe faces or outfit (those are locked)","dialog":"${constraints.skipDialog ? '' : `line in ${lang}`}","onscreen":"${constraints.skipOnscreen ? '' : `short ${lang} caption`}","shot_type":"${shotTypes}","seconds":2,"chars_in_shot":["Name1"]}
+    // 9 panels total. Each panel.visual is just the action + framing — no aesthetic words, no lighting words (env handles that), no face/outfit details.
   ]
 }`
     : `{
   "characters": ["Name1"],
   "environment": "one-line setting + lighting + time-of-day shared across all shots",
+  "wardrobe": "outfit description per character, extracted from naskah if mentioned. Empty string if not specified.",
   "shots": [
-    {"shot":1,"duration":5,"image_prompt":"English ACTION + camera angle only — do NOT describe faces","video_motion":"English motion max 20 words","dialogue":"${constraints.skipDialog ? '' : `line in ${lang}`}","chars_in_shot":["Name1"]}
+    {"shot":1,"duration":5,"image_prompt":"English ACTION + camera angle only — do NOT describe faces or outfit","video_motion":"English motion max 20 words","dialogue":"${constraints.skipDialog ? '' : `line in ${lang}`}","chars_in_shot":["Name1"]}
   ]
 }`
 
@@ -67,6 +69,7 @@ export async function POST(req) {
     'NEVER describe faces in detail (eye color, exact features, hair texture). Character identity is locked by reference photos.',
     'Use VISUAL TOKENS — concrete actions, camera angles, props. Avoid aesthetic adjectives ("beautiful", "cinematic", "professional", "stunning") — those create contradictions downstream.',
     'Set extras (lighting, time-of-day, backdrop) go in the shared `environment` field. Per-panel `visual` is just ACTION + framing.',
+    'OUTFIT EXTRACTION: scan the naskah for any wardrobe/clothing description (oversized t-shirt, kemeja batik, casual celana, etc). Put it in the shared `wardrobe` field. If the naskah does NOT mention outfit, set wardrobe to empty string — do NOT invent one. The reference photo handles outfit when wardrobe is empty.',
     refLabels.length ? `Character names MUST come from this list (use exact names in chars_in_shot): ${refLabels.join(', ')}` : null,
   ].filter(Boolean).map((r) => `- ${r}`).join('\n')
 
