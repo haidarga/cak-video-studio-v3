@@ -191,7 +191,24 @@ function videoClipFilter(c, label) {
   if (f.saturation != null && f.saturation !== 1) eqParts.push(`saturation=${f.saturation.toFixed(3)}`)
   const eq = eqParts.length ? `,eq=${eqParts.join(':')}` : ''
   const blur = (f.blur && f.blur > 0) ? `,boxblur=${f.blur}:${f.blur}` : ''
-  return `${trimSrc}${eq}${blur},setsar=1${label}`
+
+  // Zoom + Pan: crop a smaller window from the source then it'll be scaled
+  // back up to canvas size. zoom=1 (no zoom) skips the crop entirely.
+  // pan_x_pct / pan_y_pct = 0..100, where the focus point lies on each axis.
+  // The crop window size = source / zoom; offset positions the window so the
+  // pan point sits at the window's center (clamped to source bounds).
+  let zoomCrop = ''
+  const zoom = parseFloat(c.zoom)
+  if (zoom && zoom > 1) {
+    const px = Math.max(0, Math.min(100, c.pan_x_pct ?? 50)) / 100
+    const py = Math.max(0, Math.min(100, c.pan_y_pct ?? 50)) / 100
+    // FFmpeg expressions reference iw/ih = input dimensions at crop time.
+    // Window = iw/zoom × ih/zoom; offset so pan_x/y points at center.
+    const z = zoom.toFixed(3)
+    zoomCrop = `,crop=iw/${z}:ih/${z}:(iw-iw/${z})*${px.toFixed(3)}:(ih-ih/${z})*${py.toFixed(3)}`
+  }
+
+  return `${trimSrc}${zoomCrop}${eq}${blur},setsar=1${label}`
 }
 
 function audioClipFilter(c, label) {
@@ -674,7 +691,19 @@ export async function renderWithCanvas(project, onProgress) {
         else { dw = W; dh = dw / srcAR; dx = 0; dy = (H - dh) / 2 }
         ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H)
         ctx.filter = applyFilters(baseInfo.clip) || 'none'
-        ctx.drawImage(v, dx, dy, dw, dh)
+        // Zoom + Pan via drawImage source rect — same crop math as ffmpeg's
+        // crop filter. sw=vw/zoom, source offset positions pan inside source.
+        const zoom = baseInfo.clip.zoom || 1
+        if (zoom > 1) {
+          const px = Math.max(0, Math.min(100, baseInfo.clip.pan_x_pct ?? 50)) / 100
+          const py = Math.max(0, Math.min(100, baseInfo.clip.pan_y_pct ?? 50)) / 100
+          const sw = vw / zoom, sh = vh / zoom
+          const sx = (vw - sw) * px
+          const sy = (vh - sh) * py
+          ctx.drawImage(v, sx, sy, sw, sh, dx, dy, dw, dh)
+        } else {
+          ctx.drawImage(v, dx, dy, dw, dh)
+        }
         ctx.filter = 'none'
       }
     }

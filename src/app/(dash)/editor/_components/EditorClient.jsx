@@ -632,6 +632,14 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
     return `brightness(${1 + (f.brightness || 0)}) contrast(${f.contrast || 1}) saturate(${f.saturation || 1}) blur(${f.blur || 0}px)`
   }, [baseInfo?.clip?.filters?.brightness, baseInfo?.clip?.filters?.contrast, baseInfo?.clip?.filters?.saturation, baseInfo?.clip?.filters?.blur])
 
+  // Zoom + Pan: CSS transform on base video. zoom=1 / no clip = no transform
+  // (lets browser skip the GPU compositing pass entirely).
+  const baseZoom = baseInfo?.clip?.zoom || 1
+  const basePanX = baseInfo?.clip?.pan_x_pct ?? 50
+  const basePanY = baseInfo?.clip?.pan_y_pct ?? 50
+  const baseTransform = baseZoom > 1 ? `scale(${baseZoom})` : undefined
+  const baseTransformOrigin = baseZoom > 1 ? `${basePanX}% ${basePanY}%` : undefined
+
   // Cache overlay filter strings the same way — `filter: none` everywhere by
   // default keeps the composite cheap.
   function overlayFilter(c) {
@@ -796,9 +804,15 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                 onVideoFile(synthetic)
               }}>
               <div className={`${aspectClass} relative w-full`}>
-                {/* Base video */}
+                {/* Base video — transform = zoom + pan, applied via inline style.
+                    Inline so onDrag callbacks (trim, zoom, pan) can mutate
+                    directly via ref without setState. */}
                 <video ref={baseVideoRef} className="w-full h-full object-contain" playsInline crossOrigin="anonymous" muted={false}
-                  style={{ filter: baseFilter }} />
+                  style={{
+                    filter: baseFilter,
+                    transform: baseTransform,
+                    transformOrigin: baseTransformOrigin,
+                  }} />
 
                 {/* Hidden audio elements — one per clip with cloned voice, plus BGM.
                     The render/preview engines reach these by ref to swap native
@@ -934,6 +948,14 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                 // video frame follows the slider live during drag.
                 const v = baseVideoRef.current
                 if (v) v.currentTime = Math.max(0, srcTime)
+              }}
+              previewTransform={(zoom, panX, panY) => {
+                // Direct style mutation for live zoom/pan preview during slider
+                // drag. Bypasses React render entirely.
+                const v = baseVideoRef.current
+                if (!v) return
+                v.style.transform = zoom > 1 ? `scale(${zoom})` : ''
+                v.style.transformOrigin = zoom > 1 ? `${panX}% ${panY}%` : ''
               }} />
           ) : selected?.kind === 'text' ? (
             <TextPanel clip={project.text_clips.find((c) => c.id === selected.id)} duration={totalDur}
@@ -1183,11 +1205,18 @@ function Timeline({ project, baseClips, overlayList, overlayTrackIdxs, totalDur,
   )
 }
 
-function VideoClipPanel({ clip, isBase, isFirst, totalDur, onUpdate, onDelete, previewSeek }) {
+function VideoClipPanel({ clip, isBase, isFirst, totalDur, onUpdate, onDelete, previewSeek, previewTransform }) {
   if (!clip) return null
   const updFilter = (k, v) => onUpdate({ filters: { ...clip.filters, [k]: v } })
   const updTrans = (k, v) => onUpdate({ transition_in: { ...clip.transition_in, [k]: v } })
   const updPos = (k, v) => onUpdate({ position: { ...clip.position, [k]: v } })
+  const zoom = clip.zoom ?? 1
+  const panX = clip.pan_x_pct ?? 50
+  const panY = clip.pan_y_pct ?? 50
+  // For onDrag callbacks — directly mutate preview without setState.
+  function dragZoom(v) { previewTransform?.(v, panX, panY) }
+  function dragPanX(v) { previewTransform?.(zoom, v, panY) }
+  function dragPanY(v) { previewTransform?.(zoom, panX, v) }
   return (
     <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-3 space-y-2 text-xs max-h-[80vh] overflow-y-auto">
       <div className="flex items-center justify-between">
@@ -1205,6 +1234,15 @@ function VideoClipPanel({ clip, isBase, isFirst, totalDur, onUpdate, onDelete, p
         </Field>
       )}
 
+      <div className="flex items-center justify-between">
+        <div className="text-[10px] uppercase font-semibold text-[var(--muted)]">✂️ Trim</div>
+        {(clip.src_in !== 0 || clip.src_out !== clip.src_duration) && (
+          <button onClick={() => onUpdate({ src_in: 0, src_out: clip.src_duration })}
+            className="text-[10px] text-[var(--accent)] hover:underline" title="Reset to full clip">
+            ↺ Reset trim
+          </button>
+        )}
+      </div>
       <Field label={`Trim in: ${(clip.src_in || 0).toFixed(2)}s`}>
         <LiveRange min={0} max={clip.src_duration} step={0.05} value={clip.src_in}
           onDrag={isBase ? (v) => previewSeek?.(v) : undefined}
@@ -1232,6 +1270,53 @@ function VideoClipPanel({ clip, isBase, isFirst, totalDur, onUpdate, onDelete, p
       <Field label={`Volume: ${Math.round(clip.volume * 100)}%`}>
         <LiveRange min={0} max={1.5} step={0.05} value={clip.volume} onCommit={(v) => onUpdate({ volume: v })} />
       </Field>
+
+      {/* Zoom + Pan — base clip only. Crop a window from source, scale back to
+          canvas. Pan X/Y = focus point inside the source (0% = left/top,
+          100% = right/bottom, 50% = center). */}
+      {isBase && (
+        <div className="pt-2 border-t border-[var(--border)]">
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="text-[10px] uppercase font-semibold text-cyan-400">🔍 Zoom + Pan</div>
+            {(zoom !== 1 || panX !== 50 || panY !== 50) && (
+              <button onClick={() => { onUpdate({ zoom: 1, pan_x_pct: 50, pan_y_pct: 50 }); previewTransform?.(1, 50, 50) }}
+                className="text-[10px] text-[var(--accent)] hover:underline">↺ Reset</button>
+            )}
+          </div>
+          <Field label={`Zoom: ${zoom.toFixed(2)}x`}>
+            <LiveRange min={1} max={4} step={0.05} value={zoom}
+              onDrag={dragZoom}
+              onCommit={(v) => onUpdate({ zoom: v })} />
+          </Field>
+          {zoom > 1 && (
+            <div className="grid grid-cols-2 gap-2">
+              <Field label={`Pan X: ${Math.round(panX)}%`}>
+                <LiveRange min={0} max={100} step={1} value={panX}
+                  onDrag={dragPanX}
+                  onCommit={(v) => onUpdate({ pan_x_pct: Math.round(v) })} />
+              </Field>
+              <Field label={`Pan Y: ${Math.round(panY)}%`}>
+                <LiveRange min={0} max={100} step={1} value={panY}
+                  onDrag={dragPanY}
+                  onCommit={(v) => onUpdate({ pan_y_pct: Math.round(v) })} />
+              </Field>
+            </div>
+          )}
+          {zoom > 1 && (
+            <div className="grid grid-cols-3 gap-1 mt-1.5">
+              <button onClick={() => { onUpdate({ pan_x_pct: 25, pan_y_pct: 25 }); previewTransform?.(zoom, 25, 25) }} className="text-[9px] px-1 py-1 rounded bg-[var(--surface2)] hover:bg-[var(--border)]">↖ TL</button>
+              <button onClick={() => { onUpdate({ pan_x_pct: 50, pan_y_pct: 25 }); previewTransform?.(zoom, 50, 25) }} className="text-[9px] px-1 py-1 rounded bg-[var(--surface2)] hover:bg-[var(--border)]">↑ Top</button>
+              <button onClick={() => { onUpdate({ pan_x_pct: 75, pan_y_pct: 25 }); previewTransform?.(zoom, 75, 25) }} className="text-[9px] px-1 py-1 rounded bg-[var(--surface2)] hover:bg-[var(--border)]">↗ TR</button>
+              <button onClick={() => { onUpdate({ pan_x_pct: 25, pan_y_pct: 50 }); previewTransform?.(zoom, 25, 50) }} className="text-[9px] px-1 py-1 rounded bg-[var(--surface2)] hover:bg-[var(--border)]">← Left</button>
+              <button onClick={() => { onUpdate({ pan_x_pct: 50, pan_y_pct: 50 }); previewTransform?.(zoom, 50, 50) }} className="text-[9px] px-1 py-1 rounded bg-[var(--surface2)] hover:bg-[var(--border)]">⊙ Center</button>
+              <button onClick={() => { onUpdate({ pan_x_pct: 75, pan_y_pct: 50 }); previewTransform?.(zoom, 75, 50) }} className="text-[9px] px-1 py-1 rounded bg-[var(--surface2)] hover:bg-[var(--border)]">→ Right</button>
+              <button onClick={() => { onUpdate({ pan_x_pct: 25, pan_y_pct: 75 }); previewTransform?.(zoom, 25, 75) }} className="text-[9px] px-1 py-1 rounded bg-[var(--surface2)] hover:bg-[var(--border)]">↙ BL</button>
+              <button onClick={() => { onUpdate({ pan_x_pct: 50, pan_y_pct: 75 }); previewTransform?.(zoom, 50, 75) }} className="text-[9px] px-1 py-1 rounded bg-[var(--surface2)] hover:bg-[var(--border)]">↓ Btm</button>
+              <button onClick={() => { onUpdate({ pan_x_pct: 75, pan_y_pct: 75 }); previewTransform?.(zoom, 75, 75) }} className="text-[9px] px-1 py-1 rounded bg-[var(--surface2)] hover:bg-[var(--border)]">↘ BR</button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Cloned voice — present when result has cloned_audio_url. Lets user
           swap native AI audio for the persona's voice (timing preserved). */}
