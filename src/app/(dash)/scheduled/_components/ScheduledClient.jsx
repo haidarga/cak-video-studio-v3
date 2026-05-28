@@ -81,7 +81,8 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
         persona_id: result.personas?.id || null,
         scheduled_for: scheduledFor || null,
         status: 'posting',
-        caption: caption || null,
+        // Per-channel caption override if set, else fall back to global caption
+        caption: target.caption || caption || null,
         created_by: userId,
         target_channel_id: String(target.id),
         target_platform: target.platform || null,
@@ -382,6 +383,17 @@ function ScheduleModal({ result, onClose, onSubmit, channels, channelsLoading })
     if (result.personas?.postiz_channel_id) init.add(String(result.personas.postiz_channel_id))
     return init
   })
+  // Per-channel caption override map: { channelId: customCaption }
+  const [captionOverrides, setCaptionOverrides] = useState({})
+  const [overrideOpenFor, setOverrideOpenFor] = useState(null)
+  function setOverride(chId, text) {
+    setCaptionOverrides((s) => {
+      const n = { ...s }
+      if (text) n[String(chId)] = text
+      else delete n[String(chId)]
+      return n
+    })
+  }
   function toggleChannel(id) {
     setSelectedIds((s) => {
       const n = new Set(s)
@@ -506,17 +518,35 @@ function ScheduleModal({ result, onClose, onSubmit, channels, channelsLoading })
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
                         {chs.map((c) => {
                           const on = selectedIds.has(String(c.id))
+                          const hasOverride = !!captionOverrides[String(c.id)]
                           return (
-                            <label key={c.id} className={`flex items-center gap-2 p-1.5 rounded cursor-pointer text-xs ${on ? 'bg-[var(--accent)]/20 border border-[var(--accent)]/50' : 'bg-[var(--surface)] border border-transparent hover:border-[var(--border)]'}`}>
-                              <input type="checkbox" checked={on} onChange={() => toggleChannel(c.id)} className="flex-shrink-0" />
-                              {c.avatar
-                                ? <img src={c.avatar} alt="" className="w-6 h-6 rounded-full object-cover flex-shrink-0" />
-                                : <div className="w-6 h-6 rounded-full bg-[var(--surface2)] flex-shrink-0" />}
-                              <div className="min-w-0 flex-1">
-                                <div className="font-semibold truncate">{c.name}</div>
-                                {c.username && <div className="text-[9px] text-[var(--muted)] truncate">@{c.username}</div>}
-                              </div>
-                            </label>
+                            <div key={c.id} className={`p-1.5 rounded text-xs ${on ? 'bg-[var(--accent)]/20 border border-[var(--accent)]/50' : 'bg-[var(--surface)] border border-transparent hover:border-[var(--border)]'}`}>
+                              <label className="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" checked={on} onChange={() => toggleChannel(c.id)} className="flex-shrink-0" />
+                                {c.avatar
+                                  ? <img src={c.avatar} alt="" className="w-6 h-6 rounded-full object-cover flex-shrink-0" />
+                                  : <div className="w-6 h-6 rounded-full bg-[var(--surface2)] flex-shrink-0" />}
+                                <div className="min-w-0 flex-1">
+                                  <div className="font-semibold truncate">{c.name}</div>
+                                  {c.username && <div className="text-[9px] text-[var(--muted)] truncate">@{c.username}</div>}
+                                </div>
+                                {on && (
+                                  <button onClick={(e) => { e.stopPropagation(); e.preventDefault(); setOverrideOpenFor(overrideOpenFor === c.id ? null : c.id) }} type="button"
+                                    title={hasOverride ? 'Custom caption set' : 'Set custom caption for this channel'}
+                                    className={`text-[10px] px-1.5 py-0.5 rounded ${hasOverride ? 'bg-yellow-500/40 text-yellow-200' : 'bg-[var(--surface2)] text-[var(--muted)] hover:text-white'}`}>
+                                    {hasOverride ? '✓ caption' : '✎ caption'}
+                                  </button>
+                                )}
+                              </label>
+                              {overrideOpenFor === c.id && (
+                                <div className="mt-1.5 pl-7">
+                                  <textarea value={captionOverrides[String(c.id)] || ''} onChange={(e) => setOverride(c.id, e.target.value)} rows={2}
+                                    placeholder={`Override caption khusus ${c.platform || 'channel'} ini (kosongin buat pakai caption umum)`}
+                                    className="w-full text-[10px] px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] resize-y" />
+                                  <div className="text-[9px] text-[var(--muted2)] mt-0.5">Hashtag TikTok vs IG vs LinkedIn beda — pakai ini buat tweak.</div>
+                                </div>
+                              )}
+                            </div>
                           )
                         })}
                       </div>
@@ -567,6 +597,8 @@ function ScheduleModal({ result, onClose, onSubmit, channels, channelsLoading })
             setBusy(true)
             const targets = channels?.filter((c) => selectedIds.has(String(c.id))).map((c) => ({
               id: c.id, platform: c.platform, name: c.name,
+              // Per-channel caption override if user customized via captionOverrides state
+              caption: captionOverrides[String(c.id)] || null,
             })) || []
             await onSubmit(when === 'later' ? new Date(datetime).toISOString() : null, caption.trim() || null, targets)
             setBusy(false)

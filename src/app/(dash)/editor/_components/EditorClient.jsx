@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { renderProject, totalDuration, clipDuration, activeBaseClipAt, activeOverlaysAt } from '@/lib/editor-render'
+import AudioWaveform from './AudioWaveform'
 
 // Editor v4 — multi-track stacking (base + B-roll overlays).
 // Video clips have track_idx (0=base sequential, 1+ = overlay PiP) +
@@ -839,11 +840,33 @@ function Timeline({ project, baseClips, overlayList, overlayTrackIdxs, totalDur,
       const t = pctToTime(pct)
       if (kind === 'clipMove' && clipKind === 'video') {
         const c = startClip
-        if ((c.track_idx || 0) === 0) return // base sequential, no drag-move
         const dur = clipDuration(c)
         const dx = (ev.clientX - origin.x) / rect.width * totalDur
-        const ns = Math.max(0, Math.min(totalDur - dur, (c.in_track || 0) + dx))
-        onUpdateClip(clipKind, clipId, { in_track: ns })
+        const ns = Math.max(0, Math.min(Math.max(0, totalDur - dur), (c.in_track || 0) + dx))
+        // VERTICAL drag — change track_idx based on cursor Y over track rows
+        const dy = ev.clientY - rect.top
+        const TRACK_H = 32 // approx per-row height
+        const totalOverlayRows = (project.video_clips || []).filter((x) => (x.track_idx || 0) > 0).reduce((s, x) => Math.max(s, x.track_idx || 0), 0)
+        // Row layout: 0 = top overlay, increasing down; base is below overlays.
+        // For simplicity: top half of timeline = overlay (track 1+), bottom = base (track 0)
+        const baseRowY = (totalOverlayRows + 0.5) * TRACK_H + 8
+        let newTrackIdx = c.track_idx || 0
+        if (dy > baseRowY) newTrackIdx = 0
+        else {
+          // overlay row index from top
+          const overlayRowIdx = Math.max(1, Math.min(totalOverlayRows + 1, Math.ceil((dy - 4) / TRACK_H)))
+          newTrackIdx = totalOverlayRows + 1 - overlayRowIdx + 1 // top row = highest track_idx
+          if (totalOverlayRows === 0) newTrackIdx = 1
+        }
+        const updates = { in_track: ns }
+        if (newTrackIdx !== (c.track_idx || 0)) {
+          updates.track_idx = newTrackIdx
+          // If converting base -> overlay, ensure position exists with default
+          if ((c.track_idx || 0) === 0 && newTrackIdx > 0) {
+            updates.position = { x_pct: 75, y_pct: 25, w_pct: 35, opacity: 1 }
+          }
+        }
+        onUpdateClip(clipKind, clipId, updates)
       } else if (kind === 'clipStart' && clipKind === 'video') {
         // Trim video clip in source — drag left edge changes src_in
         const c = startClip
@@ -938,10 +961,11 @@ function Timeline({ project, baseClips, overlayList, overlayTrackIdxs, totalDur,
               const hasTrans = i > 0 && c.transition_in && c.transition_in.type !== 'cut'
               return (
                 <div key={c.id}
+                  onMouseDown={(e) => { startDrag(e, 'clipMove', 'video', c.id); onSelect({ kind: 'video', id: c.id }) }}
                   onClick={(e) => { e.stopPropagation(); onSelect({ kind: 'video', id: c.id }) }}
-                  className={`absolute top-0.5 bottom-0.5 rounded text-[9px] text-white font-semibold flex items-center px-1.5 cursor-pointer bg-[var(--accent)] ${isSel ? 'ring-2 ring-white' : ''}`}
+                  className={`absolute top-0.5 bottom-0.5 rounded text-[9px] text-white font-semibold flex items-center px-1.5 cursor-grab bg-[var(--accent)] ${isSel ? 'ring-2 ring-white' : ''}`}
                   style={{ left: `${timeToPct(start)}%`, width: `${Math.max(2, timeToPct(dur))}%` }}
-                  title={c.src_label}>
+                  title={`${c.src_label} — drag vertically to move between tracks`}>
                   {hasTrans && <div className="absolute -left-2 top-1/2 -translate-y-1/2 w-3 h-3 bg-yellow-400 rounded-full text-black text-[8px] flex items-center justify-center font-bold" title={`${c.transition_in.type} ${c.transition_in.duration}s`}>×</div>}
                   <div onMouseDown={(e) => startDrag(e, 'clipStart', 'video', c.id)} className="absolute left-0 top-0 bottom-0 w-1.5 bg-white/30 cursor-ew-resize rounded-l" title="Drag = trim start" />
                   <div onMouseDown={(e) => startDrag(e, 'clipEnd', 'video', c.id)} className="absolute right-0 top-0 bottom-0 w-1.5 bg-white/30 cursor-ew-resize rounded-r" title="Drag = trim end" />
@@ -973,11 +997,17 @@ function Timeline({ project, baseClips, overlayList, overlayTrackIdxs, totalDur,
                     <div key={c.id}
                       onMouseDown={(e) => { startDrag(e, 'clipMove', trk.kind, c.id); onSelect({ kind: trk.kind, id: c.id }) }}
                       onClick={(e) => { e.stopPropagation(); onSelect({ kind: trk.kind, id: c.id }) }}
-                      className={`absolute top-0.5 bottom-0.5 rounded text-[9px] text-white font-semibold flex items-center px-1.5 cursor-grab ${trk.pillBg} ${isSel ? 'ring-2 ring-white' : ''}`}
+                      className={`absolute top-0.5 bottom-0.5 rounded text-[9px] text-white font-semibold flex items-center px-1.5 cursor-grab overflow-hidden ${trk.pillBg} ${isSel ? 'ring-2 ring-white' : ''}`}
                       style={{ left: `${timeToPct(c.start)}%`, width: `${Math.max(2, timeToPct(c.end - c.start))}%` }}>
-                      <div onMouseDown={(e) => startDrag(e, 'clipStart', trk.kind, c.id)} className="absolute left-0 top-0 bottom-0 w-1.5 bg-white/30 cursor-ew-resize rounded-l" />
-                      <div onMouseDown={(e) => startDrag(e, 'clipEnd', trk.kind, c.id)} className="absolute right-0 top-0 bottom-0 w-1.5 bg-white/30 cursor-ew-resize rounded-r" />
-                      <span className="truncate px-1">{trk.kind === 'text' ? `📝 ${c.text?.slice(0, 10)}` : trk.kind === 'image' ? `🖼 ${c.src_name?.slice(0, 10)}` : `🎵 ${c.src_name?.slice(0, 10)}`}</span>
+                      {/* Audio: render waveform in background */}
+                      {trk.kind === 'audio' && c.src_url && (
+                        <div className="absolute inset-0 opacity-50 pointer-events-none">
+                          <AudioWaveform url={c.src_url} color="rgba(255,255,255,0.7)" />
+                        </div>
+                      )}
+                      <div onMouseDown={(e) => startDrag(e, 'clipStart', trk.kind, c.id)} className="absolute left-0 top-0 bottom-0 w-1.5 bg-white/30 cursor-ew-resize rounded-l z-10" />
+                      <div onMouseDown={(e) => startDrag(e, 'clipEnd', trk.kind, c.id)} className="absolute right-0 top-0 bottom-0 w-1.5 bg-white/30 cursor-ew-resize rounded-r z-10" />
+                      <span className="truncate px-1 relative z-10">{trk.kind === 'text' ? `📝 ${c.text?.slice(0, 10)}` : trk.kind === 'image' ? `🖼 ${c.src_name?.slice(0, 10)}` : `🎵 ${c.src_name?.slice(0, 10)}`}</span>
                     </div>
                   )
                 })}

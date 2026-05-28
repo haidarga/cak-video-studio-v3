@@ -5,6 +5,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import SignOutButton from './_components/SignOutButton'
 import ActiveBrandWidget from './_components/ActiveBrandWidget'
 import CostWidget from './_components/CostWidget'
+import OnboardingChecklist from './_components/OnboardingChecklist'
 import GlobalSearch from './_components/GlobalSearch'
 import HelpModal from './_components/HelpModal'
 
@@ -71,8 +72,11 @@ export default async function DashLayout({ children }) {
             brands={brands || []}
           />
         </div>
-        <div className="mb-4">
+        <div className="mb-3">
           <CostWidget workspaceId={activeWs.id} />
+        </div>
+        <div className="mb-4">
+          <OnboardingChecklist />
         </div>
         <NavLink href="/generate" label="⚡ Generate" />
         <NavLink href="/qc" label="🧪 QC" />
