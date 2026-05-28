@@ -57,13 +57,11 @@ export default function PostingClient({ workspaceId, initialPersonas }) {
     })
   }, [personas, channels])
 
-  // Channel IDs already linked to ANY persona — used to disable in dropdown
-  // (still allow re-use if user wants, just visual hint).
-  const takenChannelIds = useMemo(() => {
-    const s = new Set()
-    personas.forEach((p) => (p.persona_channels || []).forEach((pc) => s.add(String(pc.channel_id))))
-    return s
-  }, [personas])
+  // Removed global takenChannelIds — was preventing assigning channels that
+  // were already linked to a DIFFERENT persona. Schema allows
+  // unique(persona_id, channel_id), so same channel can serve multiple
+  // personas (e.g. family account shared between mom + dad). Per-persona
+  // duplicate check happens inline via channelLinks.find.
 
   // Add a new channel link to a persona.
   async function addChannelLink(persona, channel) {
@@ -183,7 +181,7 @@ export default function PostingClient({ workspaceId, initialPersonas }) {
             </div>
             {filtered.map((p) => (
               <PersonaRow key={p.id} persona={p}
-                channels={channels} takenChannelIds={takenChannelIds}
+                channels={channels}
                 onAddChannel={(ch) => addChannelLink(p, ch)}
                 onRemoveChannel={(linkId) => removeChannelLink(linkId)}
                 onSetDefault={(linkId) => setDefaultChannel(p, linkId)} />
@@ -301,8 +299,12 @@ function PlatformOverride({ personaId, current, onSet }) {
   )
 }
 
-function PersonaRow({ persona: p, channels, takenChannelIds, onAddChannel, onRemoveChannel, onSetDefault }) {
+function PersonaRow({ persona: p, channels, onAddChannel, onRemoveChannel, onSetDefault }) {
   const links = p.channelLinks || []
+  // Per-persona check — only disable channels THIS persona already has.
+  // Channels owned by OTHER personas are still selectable (schema allows
+  // many-to-many; unique constraint is per (persona_id, channel_id)).
+  const ownChannelIds = useMemo(() => new Set(links.map((l) => String(l.channel_id))), [links])
   return (
     <div className="grid grid-cols-[2fr_1fr_1fr_3fr] gap-3 px-5 py-3 items-start text-sm border-b border-[var(--border)]">
       <div className="flex items-center gap-3 min-w-0 pt-1">
@@ -390,10 +392,10 @@ function PersonaRow({ persona: p, channels, takenChannelIds, onAddChannel, onRem
               return sorted.map((plat) => (
                 <optgroup key={plat} label={`${platformEmoji(plat)}  ${plat} (${groups[plat].length})`}>
                   {groups[plat].map((c) => {
-                    const taken = takenChannelIds.has(String(c.id))
+                    const alreadyLinked = ownChannelIds.has(String(c.id))
                     return (
-                      <option key={c.id} value={String(c.id)} disabled={taken}>
-                        {c.name} (@{c.username || '—'}){c.account_label ? ` · ${c.account_label}` : ''}{taken ? ' [taken]' : ''}
+                      <option key={c.id} value={String(c.id)} disabled={alreadyLinked}>
+                        {c.name} (@{c.username || '—'}){c.account_label ? ` · ${c.account_label}` : ''}{alreadyLinked ? ' [already linked]' : ''}
                       </option>
                     )
                   })}
