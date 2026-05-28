@@ -14,9 +14,16 @@ export default async function PostingPage() {
   const ws = memberships?.[0]?.workspaces
   if (!ws) return <div className="p-4 text-sm text-[var(--muted)]">No workspace</div>
 
+  // Load personas with their N linked channels (persona_channels join). The
+  // singular postiz_channel_id columns are kept as fallback but new UI uses
+  // persona_channels for multi-link support.
   const { data: personas } = await supabase
     .from('personas')
-    .select('id, name, username, role_label, avatar_url, postiz_channel_id, postiz_channel_label, postiz_platform')
+    .select(`
+      id, name, username, role_label, avatar_url,
+      postiz_channel_id, postiz_channel_label, postiz_platform, postiz_account_id,
+      persona_channels(id, channel_id, channel_label, platform, username, is_default, postiz_account_id)
+    `)
     .eq('workspace_id', ws.id)
     .order('created_at', { ascending: false })
 

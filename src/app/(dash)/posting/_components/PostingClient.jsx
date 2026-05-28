@@ -12,17 +12,25 @@ export default function PostingClient({ workspaceId, initialPersonas }) {
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all') // all | connected | unconnected
 
+  async function reloadPersonas() {
+    const { data } = await supabase
+      .from('personas')
+      .select(`
+        id, name, username, role_label, avatar_url,
+        postiz_channel_id, postiz_channel_label, postiz_platform, postiz_account_id,
+        persona_channels(id, channel_id, channel_label, platform, username, is_default, postiz_account_id)
+      `)
+      .eq('workspace_id', workspaceId).order('created_at', { ascending: false })
+    if (data) setPersonas(data)
+  }
+
   useEffect(() => {
     const ch = supabase.channel('posting-personas-' + workspaceId)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'personas', filter: `workspace_id=eq.${workspaceId}` }, async () => {
-        const { data } = await supabase
-          .from('personas')
-          .select('id, name, username, role_label, avatar_url, postiz_channel_id, postiz_channel_label, postiz_platform')
-          .eq('workspace_id', workspaceId).order('created_at', { ascending: false })
-        if (data) setPersonas(data)
-      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'personas', filter: `workspace_id=eq.${workspaceId}` }, reloadPersonas)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'persona_channels' }, reloadPersonas)
       .subscribe()
     return () => { supabase.removeChannel(ch) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabase, workspaceId])
 
   async function syncChannels() {
@@ -37,36 +45,62 @@ export default function PostingClient({ workspaceId, initialPersonas }) {
     setSyncing(false)
   }
 
-  // Match each persona's postiz_channel_id to a synced channel
+  // Each persona can have N linked channels via persona_channels.
   const personaList = useMemo(() => {
     return personas.map((p) => {
-      const matched = channels?.find((c) => String(c.id) === String(p.postiz_channel_id))
-      return { ...p, matchedChannel: matched, isConnected: !!matched || !!p.postiz_channel_id }
+      const links = (p.persona_channels || []).map((pc) => ({
+        ...pc,
+        // Match synced channel info (avatar, latest name) when available
+        synced: channels?.find((c) => String(c.id) === String(pc.channel_id)),
+      }))
+      return { ...p, channelLinks: links, isConnected: links.length > 0 }
     })
   }, [personas, channels])
 
-  // Channel IDs already taken by other personas (so we don't double-assign)
+  // Channel IDs already linked to ANY persona — used to disable in dropdown
+  // (still allow re-use if user wants, just visual hint).
   const takenChannelIds = useMemo(() => {
-    return new Set(personas.map((p) => p.postiz_channel_id).filter(Boolean).map(String))
+    const s = new Set()
+    personas.forEach((p) => (p.persona_channels || []).forEach((pc) => s.add(String(pc.channel_id))))
+    return s
   }, [personas])
 
-  // Link / unlink a Postiz channel to a persona. Also persists postiz_account_id
-  // so the post route knows WHICH Postiz instance to send through (multi-acct).
-  async function assignChannel(persona, channel) {
+  // Add a new channel link to a persona.
+  async function addChannelLink(persona, channel) {
     setErr('')
-    const patch = channel ? {
-      postiz_channel_id: String(channel.id),
-      postiz_channel_label: channel.name,
-      postiz_platform: channel.platform,
+    if (!channel?.id) return
+    const { error } = await supabase.from('persona_channels').insert({
+      persona_id: persona.id,
       postiz_account_id: channel.account_id || null,
-    } : {
-      postiz_channel_id: null,
-      postiz_channel_label: null,
-      postiz_platform: null,
-      postiz_account_id: null,
-    }
-    const { error } = await supabase.from('personas').update(patch).eq('id', persona.id)
+      channel_id: String(channel.id),
+      channel_label: channel.name,
+      platform: channel.platform,
+      username: channel.username,
+      is_default: persona.channelLinks.length === 0, // first link auto-default
+    })
     if (error) setErr(error.message)
+  }
+
+  // Remove a single channel link.
+  async function removeChannelLink(linkId) {
+    setErr('')
+    const { error } = await supabase.from('persona_channels').delete().eq('id', linkId)
+    if (error) setErr(error.message)
+  }
+
+  // Set one channel as default (unsets others for the same persona).
+  async function setDefaultChannel(persona, linkId) {
+    setErr('')
+    const personaLinkIds = (persona.channelLinks || []).map((l) => l.id)
+    // Unset all then set the chosen one
+    if (personaLinkIds.length > 0) {
+      const { error: e1 } = await supabase.from('persona_channels')
+        .update({ is_default: false }).in('id', personaLinkIds)
+      if (e1) { setErr(e1.message); return }
+    }
+    const { error: e2 } = await supabase.from('persona_channels')
+      .update({ is_default: true }).eq('id', linkId)
+    if (e2) setErr(e2.message)
   }
 
   const filtered = useMemo(() => {
@@ -150,7 +184,9 @@ export default function PostingClient({ workspaceId, initialPersonas }) {
             {filtered.map((p) => (
               <PersonaRow key={p.id} persona={p}
                 channels={channels} takenChannelIds={takenChannelIds}
-                onAssign={(ch) => assignChannel(p, ch)} />
+                onAddChannel={(ch) => addChannelLink(p, ch)}
+                onRemoveChannel={(linkId) => removeChannelLink(linkId)}
+                onSetDefault={(linkId) => setDefaultChannel(p, linkId)} />
             ))}
           </div>
         )}
@@ -265,10 +301,11 @@ function PlatformOverride({ personaId, current, onSet }) {
   )
 }
 
-function PersonaRow({ persona: p, channels, takenChannelIds, onAssign }) {
+function PersonaRow({ persona: p, channels, takenChannelIds, onAddChannel, onRemoveChannel, onSetDefault }) {
+  const links = p.channelLinks || []
   return (
-    <div className="grid grid-cols-[2fr_1fr_1fr_2fr_auto] gap-3 px-5 py-3 items-center text-sm">
-      <div className="flex items-center gap-3 min-w-0">
+    <div className="grid grid-cols-[2fr_1fr_1fr_3fr] gap-3 px-5 py-3 items-start text-sm border-b border-[var(--border)]">
+      <div className="flex items-center gap-3 min-w-0 pt-1">
         {p.avatar_url ? (
           <img src={p.avatar_url} alt="" className="w-9 h-9 rounded-full object-cover flex-shrink-0" />
         ) : (
@@ -281,32 +318,48 @@ function PersonaRow({ persona: p, channels, takenChannelIds, onAssign }) {
           <div className="text-[10px] text-[var(--muted)] truncate">{p.role_label || '—'}</div>
         </div>
       </div>
-      <div className="text-xs text-[#93c5fd] truncate">@{p.username || '—'}</div>
-      <div>
-        {p.isConnected && p.matchedChannel ? (
-          <span className="text-[10px] font-semibold text-green-400 border border-green-500/40 px-2 py-0.5 rounded">✓ Terhubung</span>
-        ) : p.postiz_channel_id ? (
-          <span className="text-[10px] font-semibold text-orange-400 border border-orange-500/40 px-2 py-0.5 rounded" title="ID tersimpan, channel gak match di Postiz sync">⚠ Drift</span>
+      <div className="text-xs text-[#93c5fd] truncate pt-2">@{p.username || '—'}</div>
+      <div className="pt-1.5">
+        {links.length > 0 ? (
+          <span className="text-[10px] font-semibold text-green-400 border border-green-500/40 px-2 py-0.5 rounded">
+            ✓ {links.length} channel{links.length > 1 ? 's' : ''}
+          </span>
         ) : (
           <span className="text-[10px] font-semibold text-red-400 border border-red-500/40 px-2 py-0.5 rounded">⊘ Belum</span>
         )}
       </div>
-      <div className="text-xs min-w-0">
-        {p.matchedChannel ? (
-          <div className="flex items-center gap-2">
-            <PlatformIcon platform={p.matchedChannel.platform || p.postiz_platform} />
-            <div className="flex-1 min-w-0">
-              <div className="font-semibold truncate">{p.matchedChannel.name}</div>
-              <div className="text-[9px] text-[var(--muted)] flex items-center gap-1">
-                @{p.matchedChannel.username || '—'}
-                {!p.matchedChannel.platform && (
-                  <PlatformOverride personaId={p.id} current={p.postiz_platform} onSet={(plat) => onAssign({ ...p.matchedChannel, platform: plat, _platformOverride: true })} />
-                )}
+      <div className="text-xs min-w-0 space-y-1.5">
+        {/* List of linked channels */}
+        {links.map((link) => {
+          const synced = link.synced
+          const platform = link.platform || synced?.platform
+          const accountLabel = synced?.account_label
+          return (
+            <div key={link.id} className="flex items-center gap-2 p-1.5 rounded bg-[var(--surface2)]/50 border border-[var(--border)]">
+              <PlatformIcon platform={platform} />
+              <div className="flex-1 min-w-0">
+                <div className="font-semibold truncate text-xs flex items-center gap-1.5">
+                  {link.channel_label || synced?.name || '?'}
+                  {link.is_default && <span className="text-[8px] uppercase font-bold text-[var(--accent)] bg-[var(--accent)]/15 px-1 py-0.5 rounded">DEFAULT</span>}
+                  {!synced && link.channel_id && (
+                    <span className="text-[8px] uppercase font-bold text-orange-400 bg-orange-500/15 px-1 py-0.5 rounded" title="Channel ID gak match di Postiz sync (sync ulang?)">⚠ DRIFT</span>
+                  )}
+                </div>
+                <div className="text-[9px] text-[var(--muted)] truncate">
+                  @{link.username || synced?.username || '—'}
+                  {accountLabel && <span className="text-[var(--accent)]"> · 📮 {accountLabel}</span>}
+                </div>
               </div>
+              {!link.is_default && links.length > 1 && (
+                <button onClick={() => onSetDefault(link.id)} className="text-[10px] text-[var(--muted)] hover:text-[var(--accent)]" title="Set as default">★</button>
+              )}
+              <button onClick={() => onRemoveChannel(link.id)} className="text-[10px] text-red-400 hover:underline" title="Unlink">✕</button>
             </div>
-            <button onClick={() => onAssign(null)} className="text-[10px] text-red-400 hover:underline" title="Unlink">unlink</button>
-          </div>
-        ) : !channels ? (
+          )
+        })}
+
+        {/* Add channel dropdown */}
+        {!channels ? (
           <span className="text-[var(--muted2)] text-[10px]">Klik <strong>🔄 Sync Channels</strong> di atas ☝️</span>
         ) : channels.length === 0 ? (
           <span className="text-[var(--muted2)] text-[10px]">Sync kosong — gak ada channel di Postiz</span>
@@ -314,14 +367,13 @@ function PersonaRow({ persona: p, channels, takenChannelIds, onAssign }) {
           <select onChange={(e) => {
               const ch = channels.find((c) => String(c.id) === e.target.value)
               if (!ch) return
-              // Confirm before saving — bantu user verify platform yg bener
-              const ok = confirm(`Link "${p.name}" ke channel ini?\n\n${ch.name} (@${ch.username || '—'})\nPlatform: ${(ch.platform || '?').toUpperCase()}\n\nID: ${ch.id}`)
-              if (ok) onAssign(ch)
+              const ok = confirm(`Link "${p.name}" ke channel ini?\n\n${ch.name} (@${ch.username || '—'})\nPlatform: ${(ch.platform || '?').toUpperCase()}${ch.account_label ? `\nPostiz: ${ch.account_label}` : ''}\n\nID: ${ch.id}`)
+              if (ok) onAddChannel(ch)
               e.target.value = ''
             }}
             defaultValue=""
-            className="text-xs w-full px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)]">
-            <option value="">{p.postiz_channel_id ? '⚠ ID lama — pilih ulang' : '— pilih channel —'}</option>
+            className="text-xs w-full px-2 py-1 rounded bg-[var(--surface2)] border border-dashed border-[var(--border)] focus:outline-none focus:border-[var(--accent)]">
+            <option value="">{links.length > 0 ? '+ Link channel lain' : '— pilih channel —'}</option>
             {(() => {
               // Group by platform with optgroup buat kurangin salah pilih.
               const groups = {}

@@ -21,14 +21,20 @@ export async function POST(req) {
 
   const { data: sp, error } = await supabase
     .from('scheduled_posts')
-    .select('*, results(id, type, url, label), personas(id, name, postiz_channel_id, postiz_platform, postiz_account_id)')
+    .select('*, results(id, type, url, label), personas(id, name, postiz_channel_id, postiz_platform, postiz_account_id, persona_channels(channel_id, channel_label, platform, postiz_account_id, is_default))')
     .eq('id', scheduled_post_id).single()
   if (error || !sp) return NextResponse.json({ ok: false, error: 'scheduled post not found' }, { status: 404 })
 
-  // Mirror upload: prefer target_* (per-row override) atas persona's default.
-  const channelId = sp.target_channel_id || sp.personas?.postiz_channel_id
-  const platform = sp.target_platform || sp.personas?.postiz_platform || null
-  const accountId = sp.target_postiz_account_id || sp.personas?.postiz_account_id
+  // Channel resolution priority:
+  //   1. target_channel_id (per-row mirror override) — most specific
+  //   2. persona's default channel from persona_channels (is_default=true)
+  //   3. persona's first channel from persona_channels
+  //   4. persona's legacy postiz_channel_id (single-link backward compat)
+  const personaLinks = sp.personas?.persona_channels || []
+  const defaultLink = personaLinks.find((l) => l.is_default) || personaLinks[0]
+  const channelId = sp.target_channel_id || defaultLink?.channel_id || sp.personas?.postiz_channel_id
+  const platform = sp.target_platform || defaultLink?.platform || sp.personas?.postiz_platform || null
+  const accountId = sp.target_postiz_account_id || defaultLink?.postiz_account_id || sp.personas?.postiz_account_id
   if (!channelId) {
     return NextResponse.json({ ok: false, error: `Belum ada target channel. Pilih channel di Schedule modal atau link persona ke channel di /posting.` }, { status: 400 })
   }
