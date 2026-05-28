@@ -64,6 +64,67 @@ export default function PersonasClient({ workspaceId, userId, activeBrandName, i
     setSelected((s) => s.size === personas.length ? new Set() : new Set(personas.map((p) => p.id)))
   }
 
+  const [csvOpen, setCsvOpen] = useState(false)
+  const [csvText, setCsvText] = useState('')
+  const [csvPreview, setCsvPreview] = useState(null)
+  const [csvBusy, setCsvBusy] = useState(false)
+  const csvFileRef = useRef(null)
+
+  function parseCsv(text) {
+    const lines = text.trim().split(/\r?\n/).filter(Boolean)
+    if (lines.length < 2) return { error: 'CSV harus minimal punya header + 1 baris data' }
+    // Simple CSV parser (quoted strings with commas inside double quotes)
+    function parseRow(line) {
+      const cells = []
+      let cur = '', inQuotes = false
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i]
+        if (ch === '"' && line[i - 1] !== '\\') { inQuotes = !inQuotes; continue }
+        if (ch === ',' && !inQuotes) { cells.push(cur); cur = ''; continue }
+        cur += ch
+      }
+      cells.push(cur)
+      return cells.map((s) => s.trim())
+    }
+    const headers = parseRow(lines[0]).map((h) => h.toLowerCase())
+    const rows = lines.slice(1).map(parseRow)
+    const required = ['name']
+    for (const r of required) if (!headers.includes(r)) return { error: `Missing required column: ${r}` }
+    return { headers, rows }
+  }
+
+  async function onCsvFile(e) {
+    const f = e.target.files?.[0]; if (!f) return; e.target.value = ''
+    const text = await f.text()
+    setCsvText(text)
+    const parsed = parseCsv(text)
+    setCsvPreview(parsed)
+  }
+
+  async function importCsv() {
+    if (!csvPreview || csvPreview.error) return
+    setCsvBusy(true); setErr('')
+    try {
+      const { headers, rows } = csvPreview
+      const toInsert = rows.map((cells) => {
+        const obj = { workspace_id: workspaceId, created_by: userId }
+        headers.forEach((h, i) => {
+          const v = cells[i]
+          if (!v) return
+          // Map common columns
+          if (['name', 'username', 'role_label', 'character_prompt', 'emotional_angle', 'avatar_url', 'postiz_channel_id', 'postiz_platform'].includes(h)) {
+            obj[h] = v
+          }
+        })
+        return obj
+      }).filter((r) => r.name)
+      const { error } = await supabase.from('personas').insert(toInsert)
+      if (error) throw error
+      setCsvOpen(false); setCsvText(''); setCsvPreview(null)
+    } catch (e) { setErr('CSV import: ' + e.message) }
+    setCsvBusy(false)
+  }
+
   return (
     <div>
       <div className="flex items-start justify-between mb-1">
@@ -72,10 +133,14 @@ export default function PersonasClient({ workspaceId, userId, activeBrandName, i
           <h1 className="text-3xl font-bold mt-1">Personas</h1>
           <p className="text-sm text-[var(--muted)] mt-1">Tiap persona = 1 akun TikTok/IG. Upload foto refs → otomatis dipakai pas generate.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <button onClick={() => setShowTemplates(true)}
-            className="px-4 py-2 rounded-lg bg-purple-500/30 border border-purple-500/50 text-purple-200 text-sm font-semibold hover:bg-purple-500/50">
+            className="px-3 py-2 rounded-lg bg-purple-500/30 border border-purple-500/50 text-purple-200 text-sm font-semibold hover:bg-purple-500/50">
             📚 Templates
+          </button>
+          <button onClick={() => setCsvOpen(true)}
+            className="px-3 py-2 rounded-lg bg-cyan-500/30 border border-cyan-500/50 text-cyan-200 text-sm font-semibold hover:bg-cyan-500/50">
+            📥 CSV Import
           </button>
           <button onClick={() => setEditing({ isNew: true })}
             className="px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-semibold hover:opacity-90">
@@ -83,6 +148,51 @@ export default function PersonasClient({ workspaceId, userId, activeBrandName, i
           </button>
         </div>
       </div>
+
+      {csvOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={() => setCsvOpen(false)}>
+          <div className="w-full max-w-2xl bg-[var(--surface)] rounded-xl border border-[var(--border)] max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-3 border-b border-[var(--border)] flex items-center justify-between">
+              <h2 className="text-base font-bold">📥 CSV Persona Import</h2>
+              <button onClick={() => setCsvOpen(false)} className="text-[var(--muted)] hover:text-white">✕</button>
+            </div>
+            <div className="p-5 space-y-3">
+              <div className="text-xs text-[var(--muted)]">
+                Format header: <code className="bg-[var(--surface2)] px-1.5 py-0.5 rounded">name,username,role_label,character_prompt,emotional_angle,avatar_url,postiz_channel_id,postiz_platform</code>
+                <br />Required: <strong>name</strong>. Sisanya optional. String dengan koma = quote dengan double-quotes.
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => csvFileRef.current?.click()}
+                  className="px-3 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] text-sm font-semibold hover:bg-[var(--border)]">
+                  📤 Upload .csv
+                </button>
+                <input ref={csvFileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={onCsvFile} />
+                <span className="text-xs text-[var(--muted)] self-center">atau paste CSV di bawah:</span>
+              </div>
+              <textarea value={csvText} onChange={(e) => { setCsvText(e.target.value); setCsvPreview(parseCsv(e.target.value)) }}
+                rows={8} placeholder="name,username,role_label&#10;Emma,@emma,Ibu muda"
+                className="w-full text-xs font-mono px-3 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] resize-y" />
+              {csvPreview?.error && <div className="text-xs text-red-400">⚠ {csvPreview.error}</div>}
+              {csvPreview && !csvPreview.error && (
+                <div className="bg-[var(--surface2)]/50 rounded p-2 text-xs">
+                  <div className="font-bold mb-1">Preview: {csvPreview.rows.length} persona akan di-import</div>
+                  <div className="max-h-32 overflow-auto space-y-1 text-[10px] text-[var(--muted)]">
+                    {csvPreview.rows.slice(0, 10).map((r, i) => <div key={i}>• {r[csvPreview.headers.indexOf('name')] || '(no name)'}</div>)}
+                    {csvPreview.rows.length > 10 && <div className="text-[var(--muted2)]">...dan {csvPreview.rows.length - 10} lainnya</div>}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="px-5 py-3 border-t border-[var(--border)] flex justify-end gap-2">
+              <button onClick={() => setCsvOpen(false)} className="px-3 py-1.5 text-sm rounded">Batal</button>
+              <button onClick={importCsv} disabled={csvBusy || !csvPreview || csvPreview.error}
+                className="px-4 py-1.5 text-sm rounded bg-[var(--accent)] text-white font-semibold disabled:opacity-50">
+                {csvBusy ? '⏳' : `✓ Import ${csvPreview?.rows?.length || 0} persona`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {err && <div className="mt-3 text-xs text-red-400">⚠ {err}</div>}
 

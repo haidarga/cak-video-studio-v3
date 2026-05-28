@@ -171,7 +171,19 @@ export function activeOverlaysAt(t, clips) {
 
 // ── ffmpeg filter pieces ────────────────────────────────────────────
 function videoClipFilter(c, label) {
-  const trimSrc = `trim=start=${c.src_in}:end=${c.src_out},setpts=${(1/(c.speed || 1)).toFixed(4)}*(PTS-STARTPTS)`
+  // Support speed ramp: speed_in → speed_out linear over clip duration
+  // If both set: PTS multiplier varies linearly from 1/speed_in to 1/speed_out
+  let setptsExpr
+  if (c.speed_in != null && c.speed_out != null) {
+    const sIn = c.speed_in, sOut = c.speed_out
+    const clipDur = (c.src_out - c.src_in) / ((sIn + sOut) / 2)
+    // Linear interpolation: m(t) = 1/sIn + (1/sOut - 1/sIn) * (t / clipDur)
+    // Apply to PTS via setpts integral — approximation
+    setptsExpr = `setpts='(PTS-STARTPTS)*((1/${sIn})+(((1/${sOut})-(1/${sIn}))*(T/${clipDur.toFixed(3)})))'`
+  } else {
+    setptsExpr = `setpts=${(1/(c.speed || 1)).toFixed(4)}*(PTS-STARTPTS)`
+  }
+  const trimSrc = `trim=start=${c.src_in}:end=${c.src_out},${setptsExpr}`
   const f = c.filters || {}
   const eqParts = []
   if (f.brightness != null && f.brightness !== 0) eqParts.push(`brightness=${f.brightness.toFixed(3)}`)

@@ -588,7 +588,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
         </div>
       )}
 
-      <div className="grid grid-cols-[240px_1fr_310px] gap-3" style={{ minHeight: 700 }}>
+      <div className="grid grid-cols-1 lg:grid-cols-[240px_1fr_310px] gap-3" style={{ minHeight: 700 }}>
         {/* LEFT */}
         <div className="space-y-3">
           <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-2">
@@ -1088,6 +1088,17 @@ function VideoClipPanel({ clip, isBase, isFirst, totalDur, onUpdate, onDelete })
       </Field>
       <Field label={`Speed: ${clip.speed}x`}>
         <input type="range" min={0.25} max={3} step={0.05} value={clip.speed} onChange={(e) => onUpdate({ speed: parseFloat(e.target.value) })} className="w-full" />
+      </Field>
+      <Field label="Speed ramp (linear in→out)">
+        <div className="grid grid-cols-2 gap-1">
+          <input type="number" step={0.05} min={0.25} max={3} placeholder="In" value={clip.speed_in ?? ''}
+            onChange={(e) => onUpdate({ speed_in: e.target.value === '' ? null : parseFloat(e.target.value) })}
+            className="w-full text-xs px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)]" />
+          <input type="number" step={0.05} min={0.25} max={3} placeholder="Out" value={clip.speed_out ?? ''}
+            onChange={(e) => onUpdate({ speed_out: e.target.value === '' ? null : parseFloat(e.target.value) })}
+            className="w-full text-xs px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)]" />
+        </div>
+        <div className="text-[9px] text-[var(--muted2)] mt-0.5">Kosong = constant speed (use ↑). Isi = ramp linear dari In ke Out.</div>
       </Field>
       <Field label={`Volume: ${Math.round(clip.volume * 100)}%`}>
         <input type="range" min={0} max={1.5} step={0.05} value={clip.volume} onChange={(e) => onUpdate({ volume: parseFloat(e.target.value) })} className="w-full" />
