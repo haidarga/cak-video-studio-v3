@@ -347,6 +347,30 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
       }).select('id').single()
       if (error) throw error
       patchShot(idx, { video: { status: 'done', url: videoUrl, result_id: row.id } })
+
+      // Voice clone post-gen — if persona has a cloned voice, swap the AI native audio
+      // for the persona's voice via ElevenLabs Speech-to-Speech. Lip-sync preserved
+      // because S2S converts the same audio (same phonemes/timing, new timbre).
+      // Best-effort; failures don't break the video gen.
+      if (persona.voice_id) {
+        patchShot(idx, { video: { status: '🎙 voice clone...', url: videoUrl, result_id: row.id } })
+        try {
+          const r = await fetch('/api/voice/convert', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ video_url: videoUrl, voice_id: persona.voice_id, result_id: row.id }),
+          })
+          const j = await r.json()
+          if (j.ok) {
+            patchShot(idx, { video: { status: 'done', url: videoUrl, result_id: row.id, cloned_audio_url: j.audio_url } })
+          } else {
+            console.warn('voice convert skipped:', j.error)
+            patchShot(idx, { video: { status: 'done', url: videoUrl, result_id: row.id } })
+          }
+        } catch (e) {
+          console.warn('voice convert error:', e)
+          patchShot(idx, { video: { status: 'done', url: videoUrl, result_id: row.id } })
+        }
+      }
     } catch (e) {
       patchShot(idx, { video: { status: 'error', error: String(e?.message || e) } })
     }

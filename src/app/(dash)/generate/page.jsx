@@ -20,7 +20,7 @@ export default async function GeneratePage() {
   const [{ data: personas }, { data: refs }, brandRes] = await Promise.all([
     supabase
       .from('personas')
-      .select('id, name, username, avatar_url, role_label, postiz_channel_id, persona_refs(refs(id, fal_url, label, knowledge, kind))')
+      .select('id, name, username, avatar_url, role_label, postiz_channel_id, voice_id, voice_name, persona_refs(refs(id, fal_url, label, knowledge, kind))')
       .eq('workspace_id', ws.id).order('created_at', { ascending: false }),
     supabase.from('refs').select('id, fal_url, label, knowledge, kind').eq('workspace_id', ws.id).order('created_at', { ascending: false }),
     ws.active_brand_id

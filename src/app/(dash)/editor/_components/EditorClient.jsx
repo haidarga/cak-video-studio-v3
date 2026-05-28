@@ -178,6 +178,11 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
     const probe = document.createElement('video')
     probe.src = result.url; probe.crossOrigin = 'anonymous'
     const dur = await new Promise((res) => { probe.onloadedmetadata = () => res(probe.duration || 10); probe.onerror = () => res(10) })
+    // If the source result has a cloned audio (post-gen via /api/voice/convert),
+    // attach it here so the editor can swap native audio for the persona's voice.
+    // The cloned audio is the SAME audio timing/phonemes, just different voice —
+    // lip-sync stays in sync.
+    const cloned = result.meta?.cloned_audio_url || null
     const c = {
       id: uid(), src_url: result.url, src_label: result.label || 'untitled',
       src_duration: dur, src_in: 0, src_out: dur,
@@ -187,6 +192,9 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
       filters: { ...DEFAULT_FILTERS },
       transition_in: { ...DEFAULT_TRANSITION, type: baseClips.length === 0 || asOverlay ? 'cut' : 'crossfade' },
       position: { ...DEFAULT_POSITION },
+      cloned_audio_url: cloned,
+      use_cloned_voice: !!cloned,
+      voice_name: result.meta?.voice_name || '',
     }
     patch((p) => ({ ...p, video_clips: [...p.video_clips, c] }))
     if (project.video_clips.length === 0 && !asOverlay) {
@@ -614,7 +622,10 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                   <div className="flex gap-2 mb-1.5">
                     <video src={r.url} muted className="w-10 aspect-[9/16] object-cover rounded bg-black flex-shrink-0" />
                     <div className="min-w-0 flex-1">
-                      <div className="text-[11px] font-semibold truncate">{r.label || 'untitled'}</div>
+                      <div className="text-[11px] font-semibold truncate flex items-center gap-1">
+                        {r.label || 'untitled'}
+                        {r.meta?.cloned_audio_url && <span title={`Voice cloned: ${r.meta?.voice_name || 'cloned'}`} className="text-[8px] px-1 rounded bg-green-500/30 text-green-200 font-bold">🎙</span>}
+                      </div>
                       <div className="text-[9px] text-[var(--muted)] truncate">{r.personas?.name || '—'}</div>
                     </div>
                   </div>
@@ -1103,6 +1114,26 @@ function VideoClipPanel({ clip, isBase, isFirst, totalDur, onUpdate, onDelete })
       <Field label={`Volume: ${Math.round(clip.volume * 100)}%`}>
         <input type="range" min={0} max={1.5} step={0.05} value={clip.volume} onChange={(e) => onUpdate({ volume: parseFloat(e.target.value) })} className="w-full" />
       </Field>
+
+      {/* Cloned voice — present when result has cloned_audio_url. Lets user
+          swap native AI audio for the persona's voice (timing preserved). */}
+      {clip.cloned_audio_url && (
+        <div className="pt-2 border-t border-[var(--border)]">
+          <div className="text-[10px] uppercase font-semibold text-green-400 mb-1.5">🎙 Cloned Voice</div>
+          <div className="text-[10px] text-[var(--muted2)] mb-1.5">
+            Voice cloned: <strong className="text-green-300">{clip.voice_name || 'cloned'}</strong>
+          </div>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={clip.use_cloned_voice !== false}
+              onChange={(e) => onUpdate({ use_cloned_voice: e.target.checked })} className="w-4 h-4" />
+            <span className="text-xs">Pake cloned voice (mute native audio)</span>
+          </label>
+          <audio src={clip.cloned_audio_url} controls className="w-full h-8 mt-1.5" />
+          <div className="text-[9px] text-[var(--muted2)] mt-1 leading-relaxed">
+            ⚠️ Preview disini cuma play audio cloned-nya. Render final + sync sama video belum di-wire ke pipeline editor — masih TODO.
+          </div>
+        </div>
+      )}
 
       {!isBase && (
         <div className="pt-2 border-t border-[var(--border)]">

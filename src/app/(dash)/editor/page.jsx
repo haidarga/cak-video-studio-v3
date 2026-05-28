@@ -20,7 +20,7 @@ export default async function EditorPage() {
 
   const [{ data: results }, { data: projects }, { data: personas }] = await Promise.all([
     supabase.from('results')
-      .select('id, type, url, label, ar, qc_status, group_label, created_at, personas(id, name, username, avatar_url)')
+      .select('id, type, url, label, ar, qc_status, group_label, created_at, meta, personas(id, name, username, avatar_url)')
       .eq('workspace_id', ws.id).order('created_at', { ascending: false }).limit(120),
     supabase.from('editor_projects')
       .select('id, name, source_result_id, updated_at')

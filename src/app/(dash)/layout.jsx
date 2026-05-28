@@ -86,7 +86,8 @@ export default async function DashLayout({ children }) {
       <NavLink href="/studio" label="🎬 Studio v2 (single-mode)" />
       <NavLink href="/results" label="📁 Results (browse all)" />
       <div className="mt-auto pt-4 border-t border-[var(--border)] text-xs text-[var(--muted)]">
-        <div className="mb-2"><ThemeToggle /></div>
+        <NavLink href="/settings" label="⚙️ Settings & Keys" />
+        <div className="mb-2 mt-2"><ThemeToggle /></div>
         <div className="mb-2 truncate">{user.email}</div>
         <SignOutButton />
       </div>
