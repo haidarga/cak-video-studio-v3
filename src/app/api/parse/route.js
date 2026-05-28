@@ -37,25 +37,47 @@ export async function POST(req) {
   const shotTypes = constraints.skipProduct
     ? 'Close Up|Medium Shot|Wide Shot'
     : 'Close Up|Medium Shot|Wide Shot|Product Shot'
+
+  // Visual abstraction layer — parser now extracts VISUAL TOKENS not screenplay
+  // prose. Storyboard schema gains a shared `environment` field (one-line set
+  // + lighting + time-of-day) so every panel anchors to the same backdrop, and
+  // a top-level `video_motion` for the whole sequence (replaces the hardcoded
+  // 'Smooth camera transitions through 9 scenes' that ignored user intent).
   const schema = isStory
     ? `{
-  "concept": "one-line creative concept",
+  "concept": "one-line creative concept (English)",
+  "environment": "one-line setting + lighting + time-of-day shared across all panels (English visual tokens, e.g. 'small neighborhood park, late afternoon golden light, scattered passersby in background')",
+  "video_motion": "one-line camera-movement description for the whole sequence (English, max 20 words). If user toggled continuousShot, describe a single fluid take with no cuts.",
   "characters": ["Name1"],
   "panels": [
-    {"n":1,"title":"HOOK","visual":"English shot+action+lighting","dialog":"${constraints.skipDialog ? '' : `line in ${lang}`}","onscreen":"${constraints.skipOnscreen ? '' : `short ${lang} caption`}","shot_type":"${shotTypes}","seconds":2,"chars_in_shot":["Name1"]}
-    // 9 panels total
+    {"n":1,"title":"HOOK","visual":"English ACTION + camera angle only — do NOT describe faces, identity is locked by reference photos","dialog":"${constraints.skipDialog ? '' : `line in ${lang}`}","onscreen":"${constraints.skipOnscreen ? '' : `short ${lang} caption`}","shot_type":"${shotTypes}","seconds":2,"chars_in_shot":["Name1"]}
+    // 9 panels total. Each panel.visual is just the action + framing — no aesthetic words ('cinematic', 'beautiful', 'professional'), no lighting words (that's in environment), no face details.
   ]
 }`
     : `{
   "characters": ["Name1"],
+  "environment": "one-line setting + lighting + time-of-day shared across all shots",
   "shots": [
-    {"shot":1,"duration":5,"image_prompt":"English scene+lighting+camera, do NOT describe faces","video_motion":"English motion max 20 words","dialogue":"${constraints.skipDialog ? '' : `line in ${lang}`}","chars_in_shot":["Name1"]}
+    {"shot":1,"duration":5,"image_prompt":"English ACTION + camera angle only — do NOT describe faces","video_motion":"English motion max 20 words","dialogue":"${constraints.skipDialog ? '' : `line in ${lang}`}","chars_in_shot":["Name1"]}
   ]
 }`
 
-  const prompt = `You are a TikTok ad director. Convert this script into ${isStory ? 'ONE 3x3 storyboard (9 panels, ~15s total)' : '5-8 shots (4-8s each)'} for a ${ar} video.
+  // Hard rules applied universally (used to be guard only in per-shot mode).
+  const universalRules = [
+    'NEVER describe faces in detail (eye color, exact features, hair texture). Character identity is locked by reference photos.',
+    'Use VISUAL TOKENS — concrete actions, camera angles, props. Avoid aesthetic adjectives ("beautiful", "cinematic", "professional", "stunning") — those create contradictions downstream.',
+    'Set extras (lighting, time-of-day, backdrop) go in the shared `environment` field. Per-panel `visual` is just ACTION + framing.',
+    refLabels.length ? `Character names MUST come from this list (use exact names in chars_in_shot): ${refLabels.join(', ')}` : null,
+  ].filter(Boolean).map((r) => `- ${r}`).join('\n')
+
+  const prompt = `You are a cinematographer translating script into VISUAL TOKENS (not screenplay prose) for a diffusion image/video model.
 
 SPOKEN LANGUAGE: ${lang} — ALL dialog written in fluent native ${lang}.${refHint}${brandBlock}${constraintBlock}
+
+UNIVERSAL RULES:
+${universalRules}
+
+TASK: Convert this script into ${isStory ? 'ONE 3x3 storyboard (9 panels, ~15s total)' : '5-8 shots (4-8s each)'} for a ${ar} video.
 
 Output ONLY valid JSON, no markdown:
 ${schema}

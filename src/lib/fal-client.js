@@ -33,15 +33,30 @@ export async function falRun(model, input, { onProgress, maxWaitMs = 600000, wor
   return r
 }
 
-// ── Image input builder, ported from v2's src/lib/api.js ──
+// ── Image input builder ──
+// Per-model branches so multi-ref models don't silently drop refs[1..].
+// Single-ref models still receive refs[0]; a warn logs when refs are dropped.
 export function buildImgInput(imgModel, { prompt, refUrls = [], ar = '9:16' }) {
-  const refs = refUrls.filter(Boolean)
+  const refs = (refUrls || []).filter(Boolean)
   if (imgModel.includes('nano-banana')) {
     return { prompt, ...(refs.length ? { image_urls: refs.slice(0, 12) } : {}), num_images: 1, output_format: 'png', aspect_ratio: ar }
   }
   const image_size = ar === '9:16' ? { width: 1024, height: 1536 } : ar === '16:9' ? { width: 1536, height: 1024 } : { width: 1024, height: 1024 }
   if (imgModel.includes('gpt-image-2/edit')) {
     return { prompt, ...(refs.length ? { image_urls: refs.slice(0, 10) } : {}), image_size, quality: 'medium', num_images: 1 }
+  }
+  if (imgModel.includes('imagen-4-fast/edit')) {
+    return { prompt, ...(refs.length ? { image_urls: refs.slice(0, 8) } : {}), aspect_ratio: ar, num_images: 1 }
+  }
+  if (imgModel.includes('seedream/v4/edit')) {
+    return { prompt, ...(refs.length ? { image_urls: refs.slice(0, 6) } : {}), aspect_ratio: ar, num_images: 1 }
+  }
+  if (imgModel.includes('qwen-image-edit')) {
+    return { prompt, ...(refs.length ? { image_urls: refs.slice(0, 4) } : {}), aspect_ratio: ar, num_images: 1 }
+  }
+  // Single-ref fallback (flux/dev, flux-pro/v1.1-ultra). Warn if dropping refs.
+  if (refs.length > 1 && typeof console !== 'undefined') {
+    console.warn(`[buildImgInput] ${imgModel} is single-ref; dropping ${refs.length - 1} ref(s)`)
   }
   return { prompt, ...(refs.length ? { image_url: refs[0] } : {}), image_size, quality: 'medium' }
 }
@@ -93,13 +108,14 @@ export function buildVidInput(vidModel, { prompt, image_url, reference_urls, dur
   return { prompt, image_url, duration: parseInt(duration) || 5, aspect_ratio }
 }
 
-// Build the 3×3 storyboard grid prompt from structured panels.
-// Output asks the image model to render ONE storyboard sheet (header + 3x3
-// grid of cells, each cell with scene num, time range, photo, and text
-// blocks: Visual / Dialog / Keterangan), mirroring v2's PipelineTab logic.
+// Build the 3×3 storyboard grid LAYOUT HEADER only.
+// Pre-refactor this dumped ad-agency boilerplate ('Professional ... well-balanced
+// composition', 'Cohesive lighting & color grade', 'No watermark') that
+// contradicted UGC/animation camera presets at the compiler stage. Now it
+// returns ONLY the layout instructions — quality / continuity / negatives are
+// owned by prompt-compiler.
 //
-// constraints = { skipDialog, skipOnscreen, skipProduct } — gate optional text
-// rows so the grid matches user's stated intent (no dialog/text overlay/product).
+// constraints = { skipDialog, skipOnscreen, skipProduct }
 export function buildStoryboardGridPrompt(panels = [], ar = '9:16', concept = '', constraints = {}) {
   const nine = panels.slice(0, 9)
   let t = 0
@@ -107,28 +123,19 @@ export function buildStoryboardGridPrompt(panels = [], ar = '9:16', concept = ''
     const dur = Math.max(1, parseInt(p.seconds) || 2)
     const range = `${t}-${t + dur} detik`
     t += dur
-    const lines = [`Scene ${p.n} (${range}) — ${(p.title || '').trim()}`]
-    lines.push(`   Visual: ${(p.visual || p.scene || '').trim()}`)
-    if (!constraints.skipDialog && p.dialog) lines.push(`   Dialog/VO: "${p.dialog.trim()}"`)
-    if (!constraints.skipOnscreen) lines.push(`   Keterangan: ${(p.purpose || p.onscreen || '').trim()}`)
+    const lines = [`Cell ${p.n} (${range}) — ${(p.title || '').trim()}`]
+    if (p.shot_type) lines.push(`   Camera: ${p.shot_type}`)
+    lines.push(`   Action: ${(p.visual || p.scene || '').trim()}`)
+    if (!constraints.skipDialog && p.dialog) lines.push(`   Dialog: "${p.dialog.trim()}"`)
+    if (!constraints.skipOnscreen && p.onscreen) lines.push(`   Caption: ${p.onscreen.trim()}`)
     return lines.join('\n')
-  }).join('\n')
-  const header = (concept || 'STORYBOARD 3x3').trim().toUpperCase()
+  }).join('\n\n')
+  const conceptLine = concept ? `Concept: ${concept.trim()}.` : ''
   const productRule = constraints.skipProduct
-    ? 'NO product, NO brand packaging, NO logos anywhere in any cell. People only, lifestyle moments.'
-    : 'the SAME character(s) and product packaging CONSISTENT across all relevant cells.'
-  const labelList = constraints.skipDialog && constraints.skipOnscreen
-    ? '(Visual only)'
-    : constraints.skipDialog
-      ? '(Visual / Keterangan)'
-      : constraints.skipOnscreen
-        ? '(Visual / Dialog/VO)'
-        : '(Visual / Dialog/VO / Keterangan)'
-  return `Design ONE professional STORYBOARD SHEET image — an ad-agency shot-breakdown TABLE — clean white background, ${ar} canvas.
-LAYOUT: header bar with the title "${header}". Below, a 3x3 GRID of 9 equal cells in 3 rows x 3 columns, thin grey table lines. Each cell top-to-bottom: scene number in a circle badge + time range in bold; a photographic still; a small white block with labeled lines ${labelList}.
-HARD RULES: ${productRule} Cohesive lighting & color grade. Crisp, correctly-spelled, legible Indonesian text. No watermark.
-THE 9 CELLS, in order (left to right, top to bottom):
-${cells}`
+    ? 'No product or brand packaging in any cell — lifestyle moments only.'
+    : 'Product appears in cells marked Product Shot only.'
+  const header = `Storyboard sheet layout: ${ar} canvas, 3x3 grid (3 rows × 3 columns), thin grey lines, scene-number badge + time range per cell, one still per cell, concise text block under each still.`
+  return `${header}\n${conceptLine}\n${productRule}\n\nCELLS:\n${cells}`
 }
 
 export function productDirective(notes) {
@@ -137,8 +144,15 @@ export function productDirective(notes) {
   return ' PRODUCT FIDELITY (critical): reproduce the product packaging EXACTLY as in the reference image — correct shape and proportions, product upright with its front label facing the camera, and ALL label text sharp, legible and correctly spelled. Strictly respect this product knowledge: ' + n
 }
 
-export const IMG_QUALITY = 'Professional high-detail photography, sharp focus, natural realistic skin texture, anatomically correct hands and proportions, accurate product packaging with a clean legible logo and label, well-balanced composition.'
-export const VID_STABILITY = 'Keep the character identity, face, wardrobe and product appearance consistent and stable throughout; smooth, natural, continuous motion with steady framing.'
+// @deprecated — was unconditionally appended at every image gen and contradicted
+// phone/animation camera presets (audit flagged this as the #1 contradiction
+// source: 'shot on Samsung A13' + 'Professional high-detail photography' in
+// same prompt). prompt-compiler picks a style-aware quality line per preset.
+// Empty string kept so legacy imports don't throw.
+export const IMG_QUALITY = ''
+
+// @deprecated — same story; compileVideoPrompt handles stability per preset.
+export const VID_STABILITY = ''
 
 export const VIDEO_MODELS = [
   { v: 'xai/grok-imagine-video/image-to-video', l: 'Grok Imagine — ~$0.07/dtk 720p (audio) 💰' },

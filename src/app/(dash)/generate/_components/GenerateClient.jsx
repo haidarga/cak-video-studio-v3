@@ -2,12 +2,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import {
-  falRun, buildImgInput, buildVidInput, productDirective,
+  falRun, buildImgInput, buildVidInput,
   buildStoryboardGridPrompt,
-  IMG_QUALITY, VID_STABILITY, VIDEO_MODELS, IMAGE_MODELS,
+  VIDEO_MODELS, IMAGE_MODELS,
 } from '@/lib/fal-client'
 import { imageCost, videoCost, fmtCost } from '@/lib/cost-table'
-import { STYLE_PRESETS, applyStylePreset } from '@/lib/style-presets'
+import { STYLE_PRESETS } from '@/lib/style-presets'
+import { compilePrompt, compileVideoPrompt } from '@/lib/prompt-compiler'
+import { CAMERA_PRESETS, listAllPresets, DEFAULT_CAMERA } from '@/lib/camera-presets'
+import { buildIdentitySentence, productNotesShort } from '@/lib/identity'
 
 export default function GenerateClient({ workspaceId, userId, activeBrand, personas: initialPersonas, workspaceRefs: initialRefs }) {
   const supabase = createClient()
@@ -63,15 +66,36 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
   const [globalConfig, setGlobalConfig] = useState({
     mode: 'shots', ar: '9:16', lang: 'Indonesian',
     imgModel: IMAGE_MODELS[0].v, vidModel: VIDEO_MODELS[0].v,
-    style: 'ugc',
-    // Output constraints — toggles per gen session. These override the
-    // parser's default scene breakdown + brand product injection.
-    continuousShot: false, // storyboard: 1 continuous take (no multi-scene language in vid prompt)
-    skipDialog: false,     // omit dialog/VO from vid prompt + storyboard grid
-    skipOnscreen: false,   // omit onscreen text from prompt + grid
-    skipProduct: false,    // bypass brand product injection in CTA panel
-    wardrobeOverride: '',  // text — override outfit from reference (high-priority prompt block)
+    style: 'ugc',                       // @deprecated — kept for back-compat, mapped to camera in compiler
+    cameraPreset: DEFAULT_CAMERA,       // NEW — drives Visual Compiler L1
+    // Output constraints — toggles per gen session.
+    continuousShot: false,
+    skipDialog: false,
+    skipOnscreen: false,
+    skipProduct: false,
+    wardrobeOverride: '',
   })
+  // Workspace custom camera presets (user-defined). Built-ins are imported.
+  const [userCameraPresets, setUserCameraPresets] = useState([])
+  useEffect(() => {
+    if (!workspaceId) return
+    fetch('/api/workspace/camera-presets').then((r) => r.json()).then((j) => {
+      if (j.ok) setUserCameraPresets(j.presets || [])
+    }).catch(() => {})
+  }, [workspaceId])
+  // Reload on realtime change so CRUD modal updates immediately.
+  useEffect(() => {
+    if (!workspaceId) return
+    const ch = supabase.channel('cam-presets-' + workspaceId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'camera_presets', filter: `workspace_id=eq.${workspaceId}` }, () => {
+        fetch('/api/workspace/camera-presets').then((r) => r.json()).then((j) => {
+          if (j.ok) setUserCameraPresets(j.presets || [])
+        }).catch(() => {})
+      })
+      .subscribe()
+    return () => { supabase.removeChannel(ch) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId])
 
   // Pick style — does NOT touch model selection (user controls model independently)
   function pickStyle(styleKey) {
@@ -138,6 +162,19 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
             Style cuma inject ke prompt (prefix + suffix + negative + boosters). Model dipilih manual di bawah — fleksibel.
           </div>
         </div>
+
+        {/* Camera Preset — Visual Compiler L1 (first-priority tokens).
+            Drives the entire aesthetic. Built-ins + workspace customs merged. */}
+        <CameraPresetPicker
+          workspaceId={workspaceId}
+          value={globalConfig.cameraPreset}
+          onChange={(id) => setGlobalConfig({ ...globalConfig, cameraPreset: id })}
+          userPresets={userCameraPresets}
+          onUserPresetsChanged={() => {
+            fetch('/api/workspace/camera-presets').then((r) => r.json()).then((j) => {
+              if (j.ok) setUserCameraPresets(j.presets || [])
+            }).catch(() => {})
+          }} />
 
         {/* Style References — upload mood board images buat consistent look */}
         <StyleRefsPicker workspaceId={workspaceId} userId={userId}
@@ -344,12 +381,17 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
           id: `${persona.id}-storyboard-${Date.now()}`,
           raw: {
             concept: data.parsed.concept || '',
+            // NEW: parser now extracts shared environment + sequence motion.
+            // Falls back to empty so compiler picks mode-aware defaults.
+            environment: data.parsed.environment || '',
+            video_motion: data.parsed.video_motion || '',
             panels: panels.map((p) => ({
               n: p.n, title: p.title || '', visual: p.visual || p.scene || '',
               dialog: p.dialog || '', onscreen: p.onscreen || p.purpose || '',
               seconds: p.seconds || 2, shot_type: p.shot_type || '',
+              chars_in_shot: p.chars_in_shot || [],
             })),
-            video_motion: 'Smooth camera transitions through 9 scenes with subtle focus pulls and natural pacing',
+            chars_in_shot: data.parsed.characters || [],
             duration: panels.reduce((sum, p) => sum + (parseInt(p.seconds) || 2), 0) || 15,
             shot_label: 'Storyboard 3×3',
           },
@@ -360,12 +402,15 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
         }]
       } else {
         const items = data.parsed.shots || []
+        const sharedEnv = data.parsed.environment || ''
         shotsInit = items.map((it, i) => ({
           id: `${persona.id}-${i}-${Date.now()}`,
           raw: {
             image_prompt: it.image_prompt || '',
             video_motion: it.video_motion || '',
             dialogue: it.dialogue || '',
+            environment: sharedEnv,
+            chars_in_shot: it.chars_in_shot || [],
             duration: it.duration || 5,
             shot_label: `Shot ${it.shot}`,
           },
@@ -386,45 +431,50 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
     patchShot(idx, { image: { status: 'generating' } })
     try {
       const productKnowledge = selectedRefs.map((r) => (r.knowledge || '').trim()).filter(Boolean).join('\n')
-      const directive = productDirective(productKnowledge || activeBrand?.notes)
-      // Combine persona/product refs + global style refs (mood board)
       const characterProductUrls = selectedRefs.map((r) => r.fal_url).filter(Boolean)
       const styleUrls = styleRefs.map((r) => r.fal_url).filter(Boolean)
       const refUrls = [...characterProductUrls, ...styleUrls]
 
-      // Storyboard mode = ONE grid image built from all 9 panels (sheet view).
-      // Per-shot mode = single image from this shot's image_prompt.
-      // Grid is kept always — for continuous video without morphing, user must
-      // pick a reference-to-video model (which ignores the grid as start
-      // frame, uses persona refs for identity instead).
-      let rawPrompt
-      if (shot.raw.panels) {
-        rawPrompt = buildStoryboardGridPrompt(shot.raw.panels, globalConfig.ar, shot.raw.concept, {
-          skipDialog: !!globalConfig.skipDialog,
-          skipOnscreen: !!globalConfig.skipOnscreen,
-          skipProduct: !!globalConfig.skipProduct,
-        })
-      } else {
-        rawPrompt = shot.raw.image_prompt || shot.raw.shot_label
-      }
+      // Storyboard mode = grid layout description only. Per-shot mode = single action.
+      const isGrid = !!shot.raw.panels
+      const gridHeader = isGrid
+        ? buildStoryboardGridPrompt(shot.raw.panels, globalConfig.ar, shot.raw.concept, {
+            skipDialog: !!globalConfig.skipDialog,
+            skipOnscreen: !!globalConfig.skipOnscreen,
+            skipProduct: !!globalConfig.skipProduct,
+          })
+        : null
+      const action = isGrid ? null : (shot.raw.image_prompt || shot.raw.shot_label)
 
-      // Wardrobe override (priority injection — replaces reference outfit).
-      // Placed at the TOP of prompt where image models pay most attention.
-      // Plus explicit 'IGNORE reference outfit' instruction.
-      const wardrobeBlock = globalConfig.wardrobeOverride?.trim()
-        ? `=== WARDROBE OVERRIDE (mandatory, highest priority) ===
-The subject(s) wear EXACTLY: ${globalConfig.wardrobeOverride.trim()}
-IGNORE the outfit shown in any reference photo. Replace reference outfit with the wardrobe above.
-=== END WARDROBE ===
+      // Identity sentence — built from the persona record's character_prompt.
+      // Used as L2 of the compiler (after camera tokens, before everything else).
+      const identity = persona.character_prompt
+        ? `${persona.name} (${persona.character_prompt.slice(0, 200)})`
+        : null
 
-`
-        : ''
-      rawPrompt = wardrobeBlock + rawPrompt
-      // Apply style preset (UGC/animation/3D/cinematic_ad/short_movie/TVC/etc) for higher quality output
-      const basePrompt = applyStylePreset(globalConfig.style, rawPrompt)
-      // Skip product directive when user opts out — avoids brand packaging injection.
-      const noProductHint = globalConfig.skipProduct ? ' NO product, NO brand packaging, NO logo, NO product CTA.' : ''
-      const fullPrompt = `${basePrompt}. ${globalConfig.ar} composition. CONTINUITY: keep characters identical to references.${globalConfig.skipProduct ? noProductHint : directive} ${IMG_QUALITY}`
+      const brand = (!globalConfig.skipProduct)
+        ? productNotesShort(productKnowledge || activeBrand?.notes)
+        : null
+
+      // Visual Compiler — owns ordering, sanitization, style-aware quality.
+      // Replaces the old style-preset + IMG_QUALITY + productDirective + wardrobe
+      // soup that produced 11 documented contradictions per gen.
+      const fullPrompt = compilePrompt({
+        media: 'image',
+        camera: globalConfig.cameraPreset || DEFAULT_CAMERA,
+        identity,
+        wardrobe: globalConfig.wardrobeOverride || null,
+        environment: shot.raw.environment || null,
+        action,
+        brand,
+        ar: globalConfig.ar,
+        skipProduct: !!globalConfig.skipProduct,
+        continuousShot: !!globalConfig.continuousShot,
+        refsCount: refUrls.length,
+        gridHeader,
+        userPresets: userCameraPresets,
+      })
+
       const imgInput = buildImgInput(globalConfig.imgModel, { prompt: fullPrompt, refUrls, ar: globalConfig.ar })
       const imgResult = await falRun(globalConfig.imgModel, imgInput, { onProgress: (p) => patchShot(idx, { image: { status: p } }), workspaceId })
       const imageUrl = imgResult.images?.[0]?.url
@@ -445,52 +495,45 @@ IGNORE the outfit shown in any reference photo. Replace reference outfit with th
       const styleUrls = styleRefs.map((r) => r.fal_url).filter(Boolean)
       const refUrls = [...characterProductUrls, ...styleUrls]
 
-      // Storyboard: dialogue = all panel dialogs concatenated; flows across 9 scenes.
-      // Per-shot: dialogue = this shot's single line.
-      //
-      // CONTINUOUS SHOT MODE: when user enables `continuousShot`, revert to v2's
-      // minimal prompt — no "multi-scene / 9 panels" language, no dialog
-      // concatenation. Just video_motion + stability. Video model interprets the
-      // grid as one reference image and produces a continuous take instead of
-      // cutting between 9 scenes.
-      //
-      // The grid image is still used as start frame (carries the visual story),
-      // but the *prompt* no longer commands the model to "transition through 9
-      // distinct scenes" — that command was the cause of the cuts in v3.
-      let motion
-      if (shot.raw.panels) {
-        const continuous = globalConfig.continuousShot
-        const allDialogs = (globalConfig.skipDialog
-          ? []
-          : shot.raw.panels.map((p) => p.dialog).filter(Boolean)).join(' ')
+      // Visual Compiler for VIDEO prompt — same layered priority + sanitizer
+      // as image gen. Replaces the regex-mutilated motion string (jsx:470)
+      // and per-mode hardcoded fallbacks. Sanitizer drops 'multi-scene / 9
+      // panels' language when continuousShot=true (declarative, no regex).
+      const isGrid = !!shot.raw.panels
+      const dialogs = globalConfig.skipDialog
+        ? ''
+        : (isGrid
+          ? shot.raw.panels.map((p) => p.dialog).filter(Boolean).join(' ')
+          : (shot.raw.dialogue || ''))
+      const defaultMotion = globalConfig.continuousShot
+        ? 'Single fluid take, gentle reframing on subject, no cuts.'
+        : (isGrid
+          ? (shot.raw.video_motion || 'Smooth motion through the storyboard moments in order.')
+          : (shot.raw.video_motion || 'Natural cinematic motion.'))
+      const action = dialogs
+        ? `${defaultMotion} The subject speaks in fluent native ${globalConfig.lang}: "${dialogs}"`
+        : defaultMotion
+      const identity = persona.character_prompt
+        ? `${persona.name} (${persona.character_prompt.slice(0, 200)})`
+        : null
+      const productKnowledge2 = selectedRefs.map((r) => (r.knowledge || '').trim()).filter(Boolean).join('\n')
+      const brand = (!globalConfig.skipProduct)
+        ? productNotesShort(productKnowledge2 || activeBrand?.notes)
+        : null
 
-        if (continuous) {
-          // v2-style minimal prompt — let the start frame (grid) carry the visual
-          // story; the prompt only adds motion/style direction.
-          const flow = (shot.raw.video_motion || 'Natural cinematic motion, smooth continuous take').replace(/9 (panels?|beats?|scenes?|storyboards?)/gi, '').replace(/multi-scene/gi, '')
-          motion = allDialogs && !globalConfig.skipDialog
-            ? `${flow}. Single continuous take, no cuts. The subject speaks in fluent native ${globalConfig.lang}: "${allDialogs}". ${VID_STABILITY}`
-            : `${flow}. Single continuous take, no cuts, no scene changes. ${VID_STABILITY}`
-        } else {
-          // Original multi-scene behaviour (still works fine if user wants distinct cuts).
-          const flow = shot.raw.video_motion || 'Smooth transitions through 9 storyboard scenes'
-          motion = allDialogs
-            ? `${flow}. Continuous multi-scene sequence flowing through 9 storyboard panels in order. The narrator/subjects speak naturally in ${globalConfig.lang}: "${allDialogs}". ${VID_STABILITY}`
-            : `${flow}. Continuous sequence through 9 storyboard panels. ${VID_STABILITY}`
-        }
-      } else {
-        const dialogue = globalConfig.skipDialog ? null : shot.raw.dialogue
-        motion = dialogue
-          ? `${shot.raw.video_motion}. The subject speaks in fluent native ${globalConfig.lang}: "${dialogue}". ${VID_STABILITY}`
-          : `${shot.raw.video_motion || 'Natural cinematic motion'}. ${VID_STABILITY}`
-      }
-      // Wardrobe override — inject at top of video prompt too so the video model
-      // doesn't drift back to reference outfit during animation.
-      if (globalConfig.wardrobeOverride?.trim()) {
-        motion = `WARDROBE (must persist throughout video): ${globalConfig.wardrobeOverride.trim()}. ` + motion
-      }
-      // Apply style preset to motion as well (animation style, cinematic, etc influence camera + render style)
-      motion = applyStylePreset(globalConfig.style, motion)
+      const motion = compileVideoPrompt({
+        camera: globalConfig.cameraPreset || DEFAULT_CAMERA,
+        identity,
+        wardrobe: globalConfig.wardrobeOverride || null,
+        environment: shot.raw.environment || null,
+        action,
+        brand,
+        ar: globalConfig.ar,
+        skipProduct: !!globalConfig.skipProduct,
+        continuousShot: !!globalConfig.continuousShot,
+        refsCount: refUrls.length,
+        userPresets: userCameraPresets,
+      })
       const vidInput = buildVidInput(globalConfig.vidModel, {
         prompt: motion, image_url: shot.image.url, reference_urls: refUrls,
         duration: shot.raw.duration || 5, aspect_ratio: globalConfig.ar,
@@ -998,6 +1041,16 @@ function FieldRow({ label, children }) {
   )
 }
 
+// Compact field label + child wrapper (used by PresetEditorModal)
+function Field({ label, children }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase text-[var(--muted)] font-semibold mb-1">{label}</div>
+      {children}
+    </div>
+  )
+}
+
 function RefsPicker({ personaOwnRefs, workspaceRefs, showWorkspace, onToggleShowWorkspace, selectedIds, onToggle, workspaceId, userId, personaId, supabase, onErr, onAdded }) {
   const [extras, setExtras] = useState([])
   const fileRef = useRef(null)
@@ -1163,6 +1216,241 @@ function RefsPicker({ personaOwnRefs, workspaceRefs, showWorkspace, onToggleShow
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// Camera Preset picker — dropdown + chip strip of recent presets + CRUD modal.
+// Built-in presets come from CAMERA_PRESETS const. User custom presets from
+// /api/workspace/camera-presets. Lu bisa Add / Edit / Clone / Delete custom.
+function CameraPresetPicker({ workspaceId, value, onChange, userPresets, onUserPresetsChanged }) {
+  const [modalOpen, setModalOpen] = useState(false)
+  const [editing, setEditing] = useState(null) // null | { id?, _row_id?, preset_key, label, ... }
+  const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const all = useMemo(() => listAllPresets(userPresets), [userPresets])
+  const current = useMemo(() => all.find((p) => p.id === value) || all[0], [all, value])
+
+  // Group by category for the dropdown
+  const grouped = useMemo(() => {
+    const g = { phone: [], cinema: [], animation: [], social: [], custom: [] }
+    all.forEach((p) => {
+      const cat = p.category || (p._builtin ? 'cinema' : 'custom')
+      if (!g[cat]) g[cat] = []
+      g[cat].push(p)
+    })
+    return g
+  }, [all])
+
+  function startNew() {
+    setEditing({
+      preset_key: '',
+      label: '',
+      category: 'custom',
+      use_case: '',
+      tokens: [],
+      negatives: [],
+      conflicts_with: [],
+      dominance: 5,
+    })
+    setErr('')
+    setModalOpen(true)
+  }
+  function startEdit(preset) {
+    setEditing({
+      ...preset,
+      tokens: preset.tokens || [],
+      negatives: preset.negatives || [],
+    })
+    setErr('')
+    setModalOpen(true)
+  }
+  function startClone(preset) {
+    setEditing({
+      preset_key: (preset.id + '_copy').slice(0, 60),
+      label: preset.label + ' (copy)',
+      category: 'custom',
+      use_case: preset.use_case || '',
+      tokens: [...(preset.tokens || [])],
+      negatives: [...(preset.negatives || [])],
+      conflicts_with: [...(preset.conflicts_with || [])],
+      dominance: preset.dominance || 5,
+    })
+    setErr('')
+    setModalOpen(true)
+  }
+  async function save() {
+    if (!editing.label?.trim()) { setErr('Label wajib'); return }
+    if (!editing.preset_key?.trim()) { setErr('Preset key wajib'); return }
+    if (!editing.tokens?.length) { setErr('Minimal 1 token'); return }
+    setBusy(true); setErr('')
+    try {
+      const method = editing._row_id ? 'PATCH' : 'POST'
+      const body = {
+        ...editing,
+        id: editing._row_id || undefined,
+      }
+      const r = await fetch('/api/workspace/camera-presets', {
+        method, headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const j = await r.json()
+      if (!j.ok) throw new Error(j.error)
+      setModalOpen(false); setEditing(null)
+      onUserPresetsChanged?.()
+      // Auto-select the just-saved preset
+      if (j.preset_key) onChange(j.preset_key)
+    } catch (e) { setErr(e.message) }
+    setBusy(false)
+  }
+  async function deletePreset(preset) {
+    if (!preset._row_id) return
+    if (!confirm(`Hapus preset "${preset.label}"?`)) return
+    setBusy(true)
+    try {
+      const r = await fetch('/api/workspace/camera-presets', {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: preset._row_id }),
+      })
+      const j = await r.json()
+      if (!j.ok) throw new Error(j.error)
+      onUserPresetsChanged?.()
+      if (value === preset.id) onChange(DEFAULT_CAMERA)
+    } catch (e) { setErr(e.message) }
+    setBusy(false)
+  }
+
+  return (
+    <div className="mb-3">
+      <div className="flex items-center justify-between mb-1.5">
+        <label className="block text-[10px] uppercase text-[var(--muted)] tracking-wider font-semibold">
+          📷 Camera Preset — drives visual identity (L1 tokens, highest priority)
+        </label>
+        <div className="flex items-center gap-2">
+          {current && !current._builtin && (
+            <button onClick={() => startEdit(current)} type="button" className="text-[10px] text-[var(--muted)] hover:text-[var(--accent)] underline">Edit</button>
+          )}
+          {current && (
+            <button onClick={() => startClone(current)} type="button" className="text-[10px] text-[var(--muted)] hover:text-[var(--accent)] underline">Clone</button>
+          )}
+          <button onClick={startNew} type="button" className="text-[10px] text-[var(--accent)] font-semibold hover:underline">+ Bikin Preset</button>
+        </div>
+      </div>
+      <select value={value || DEFAULT_CAMERA} onChange={(e) => onChange(e.target.value)}
+        className="w-full text-sm px-3 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)]">
+        {['phone', 'cinema', 'animation', 'social', 'custom'].map((cat) => {
+          const list = grouped[cat] || []
+          if (list.length === 0) return null
+          return (
+            <optgroup key={cat} label={`${cat.toUpperCase()} (${list.length})`}>
+              {list.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p._builtin ? '⚙️ ' : '👤 '}{p.label}{p.use_case ? ` — ${p.use_case}` : ''}
+                </option>
+              ))}
+            </optgroup>
+          )
+        })}
+      </select>
+      {current && (
+        <div className="text-[10px] text-[var(--muted2)] mt-1 leading-relaxed">
+          <strong className="text-[var(--muted)]">{current.tokens?.length || 0} tokens</strong>: {(current.tokens || []).slice(0, 6).join(', ')}{current.tokens?.length > 6 ? '...' : ''}
+        </div>
+      )}
+
+      {modalOpen && editing && (
+        <PresetEditorModal
+          preset={editing}
+          onChange={setEditing}
+          err={err}
+          busy={busy}
+          onCancel={() => { setModalOpen(false); setEditing(null) }}
+          onSave={save}
+          onDelete={editing._row_id ? () => deletePreset(editing) : null} />
+      )}
+    </div>
+  )
+}
+
+function PresetEditorModal({ preset, onChange, err, busy, onCancel, onSave, onDelete }) {
+  const tokensText = (preset.tokens || []).join('\n')
+  const negativesText = (preset.negatives || []).join('\n')
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6" onClick={(e) => { if (e.target === e.currentTarget) onCancel() }}>
+      <div className="w-full max-w-2xl bg-[var(--surface)] rounded-xl border border-[var(--border)] max-h-[92vh] flex flex-col">
+        <div className="px-6 py-4 border-b border-[var(--border)] flex items-center justify-between flex-shrink-0">
+          <div>
+            <h2 className="text-lg font-bold">📷 {preset._row_id ? 'Edit' : 'Bikin'} Camera Preset</h2>
+            <p className="text-[10px] text-[var(--muted)]">Tokens di-inject paling awal di prompt (highest priority). Negatives di-strip dari layer lain pas preset ini menang.</p>
+          </div>
+          <button onClick={onCancel} className="text-[var(--muted)] hover:text-white">✕</button>
+        </div>
+        <div className="p-6 space-y-3 overflow-y-auto flex-1 text-xs">
+          {err && <div className="text-xs text-red-400 bg-red-900/20 border border-red-900/40 p-2 rounded">⚠ {err}</div>}
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Label (ditampilin di dropdown)">
+              <input value={preset.label} onChange={(e) => onChange({ ...preset, label: e.target.value })}
+                placeholder="My Brand UGC"
+                className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)]" />
+            </Field>
+            <Field label="Preset key (id, lowercase + underscore)">
+              <input value={preset.preset_key} disabled={!!preset._row_id}
+                onChange={(e) => onChange({ ...preset, preset_key: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_') })}
+                placeholder="acekid_brand_ugc"
+                className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)] font-mono disabled:opacity-60" />
+            </Field>
+          </div>
+          <Field label="Use case (hint)">
+            <input value={preset.use_case || ''} onChange={(e) => onChange({ ...preset, use_case: e.target.value })}
+              placeholder="Brand AceKid TikTok UGC — Samsung look natural"
+              className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)]" />
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Category">
+              <select value={preset.category} onChange={(e) => onChange({ ...preset, category: e.target.value })}
+                className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)]">
+                <option value="phone">phone</option>
+                <option value="cinema">cinema</option>
+                <option value="animation">animation</option>
+                <option value="social">social</option>
+                <option value="custom">custom</option>
+              </select>
+            </Field>
+            <Field label="Dominance (1-10, higher wins contradictions)">
+              <input type="number" min={1} max={10} value={preset.dominance ?? 5}
+                onChange={(e) => onChange({ ...preset, dominance: Math.max(1, Math.min(10, parseInt(e.target.value) || 5)) })}
+                className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)] font-mono" />
+            </Field>
+          </div>
+          <Field label="Tokens (1 per line) — visual phrases injected as L1, FIRST in prompt">
+            <textarea value={tokensText} onChange={(e) => onChange({ ...preset, tokens: e.target.value.split('\n').map((s) => s.trim()).filter(Boolean) })}
+              rows={6}
+              placeholder={`shot on Samsung Galaxy A13 phone camera\ncandid handheld\nvertical 9:16\nnatural window light\nslight motion blur\nimperfect framing\nauthentic skin pores\nno color grade`}
+              className="w-full text-[11px] font-mono px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)] resize-y" />
+            <div className="text-[9px] text-[var(--muted2)] mt-0.5">{preset.tokens?.length || 0} token. Recommend 5-10 untuk hasil paling stabil.</div>
+          </Field>
+          <Field label="Negatives (1 per line) — phrases sanitizer strips dari layer lain pas preset ini menang">
+            <textarea value={negativesText} onChange={(e) => onChange({ ...preset, negatives: e.target.value.split('\n').map((s) => s.trim()).filter(Boolean) })}
+              rows={4}
+              placeholder={`cinematic\nARRI Alexa\nprofessional studio\nglossy\ncolor graded\nsharp focus\nhigh-detail photography\nwell-balanced composition`}
+              className="w-full text-[11px] font-mono px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)] resize-y" />
+          </Field>
+        </div>
+        <div className="px-6 py-4 border-t border-[var(--border)] flex justify-between gap-3 flex-shrink-0">
+          <div>
+            {onDelete && (
+              <button onClick={onDelete} className="text-xs px-3 py-2 rounded text-red-400 hover:bg-red-900/20">🗑 Hapus</button>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <button onClick={onCancel} className="text-xs px-3 py-2 rounded text-[var(--muted)] hover:bg-[var(--surface2)]">Cancel</button>
+            <button onClick={onSave} disabled={busy} className="text-xs px-4 py-2 rounded bg-[var(--accent)] text-white font-semibold disabled:opacity-50">
+              {busy ? '⏳ Save...' : (preset._row_id ? 'Update' : '+ Bikin')}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
