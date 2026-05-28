@@ -7,6 +7,7 @@ import ActiveBrandWidget from './_components/ActiveBrandWidget'
 import CostWidget from './_components/CostWidget'
 import OnboardingChecklist from './_components/OnboardingChecklist'
 import MobileNav from './_components/MobileNav'
+import ThemeToggle from './_components/ThemeToggle'
 import GlobalSearch from './_components/GlobalSearch'
 import HelpModal from './_components/HelpModal'
 
@@ -85,6 +86,7 @@ export default async function DashLayout({ children }) {
       <NavLink href="/studio" label="🎬 Studio v2 (single-mode)" />
       <NavLink href="/results" label="📁 Results (browse all)" />
       <div className="mt-auto pt-4 border-t border-[var(--border)] text-xs text-[var(--muted)]">
+        <div className="mb-2"><ThemeToggle /></div>
         <div className="mb-2 truncate">{user.email}</div>
         <SignOutButton />
       </div>
