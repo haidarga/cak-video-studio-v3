@@ -34,11 +34,30 @@ export async function GET(req) {
     }, { status: 400 })
   }
 
+  // Infer platform from account label when Postiz doesn't return a clear
+  // provider field. User labels like "IG Postiz" / "TikTok Postiz" / "YouTube"
+  // tell us the platform unambiguously even when c.platform is empty.
+  function platformHintFromLabel(label) {
+    const l = String(label || '').toLowerCase()
+    if (l.includes('tiktok')) return 'tiktok'
+    if (l.includes('instagram') || l.includes('ig ')) return 'instagram'
+    if (l.includes('youtube') || l.includes('yt ')) return 'youtube'
+    if (l.includes('facebook') || l.includes('fb ')) return 'facebook'
+    if (l.includes('linkedin')) return 'linkedin'
+    if (l.includes('thread')) return 'threads'
+    if (l === 'x' || l.includes('twitter')) return 'x'
+    return ''
+  }
+
   // Fetch from each account in parallel; tag each channel with source account info.
   const results = await Promise.allSettled(accounts.map(async (a) => {
     const channels = await fetchPostizChannels({ url: a.url, key: a.api_key })
+    const hint = platformHintFromLabel(a.label)
     return channels.map((c) => ({
       ...c,
+      // Fallback to account-label hint when Postiz response platform is empty.
+      // Keeps real value if Postiz returned something (e.g. 'tiktok' direct).
+      platform: c.platform || hint || 'unknown',
       account_id: a.id,
       account_label: a.label,
     }))

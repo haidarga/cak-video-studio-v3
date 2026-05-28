@@ -76,7 +76,15 @@ export default function PostingClient({ workspaceId, initialPersonas }) {
       username: channel.username,
       is_default: persona.channelLinks.length === 0, // first link auto-default
     })
-    if (error) setErr(error.message)
+    if (error) {
+      // Humanize the unique-constraint violation when user tries to add a
+      // channel that's already linked to this same persona.
+      if (error.code === '23505' || /duplicate key/i.test(error.message)) {
+        setErr(`Channel "${channel.name}" udah ke-link ke ${persona.name}. Hapus dulu kalau mau re-link.`)
+      } else {
+        setErr(error.message)
+      }
+    }
   }
 
   // Remove a single channel link.
