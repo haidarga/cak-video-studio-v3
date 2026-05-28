@@ -287,6 +287,7 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
           state={stateByPersona[persona.id] || { naskah: '', refIds: new Set(), showWorkspaceRefs: false, parsed: null, busy: false, shots: [] }}
           onPatch={(patch) => patchPersona(persona.id, patch)}
           globalConfig={globalConfig}
+          userCameraPresets={userCameraPresets}
           styleRefs={workspaceRefs.filter((r) => r.kind === 'style' && (globalConfig.styleRefIds || new Set()).has(r.id))}
           activeBrand={activeBrand}
           workspaceId={workspaceId}
@@ -305,7 +306,7 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
   )
 }
 
-function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch, globalConfig, activeBrand, workspaceId, userId, onErr, supabase }) {
+function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch, globalConfig, userCameraPresets = [], activeBrand, workspaceId, userId, onErr, supabase }) {
   const personaOwnRefs = (persona.persona_refs || []).map((pr) => pr.refs).filter(Boolean)
 
   // Default: only this persona's own refs are SELECTED. Workspace pool stays
