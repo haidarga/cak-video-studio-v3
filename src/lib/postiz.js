@@ -1,5 +1,8 @@
 // SERVER-ONLY Postiz API client.
-// Env: POSTIZ_API_URL + POSTIZ_API_KEY
+//
+// All public functions now take explicit `creds = { url, key }` so the same
+// workspace can talk to N Postiz instances (multi-account). Look up the right
+// account in the DB before calling.
 //
 // Flow per Postiz public API:
 // 1) POST /upload (multipart) — server-side upload media → returns { id, path }
@@ -8,16 +11,15 @@
 // Postiz nolak external media URLs (e.g. Supabase Storage) — image[].URL harus
 // di domain uploads.postiz.com, jadi kita HARUS upload-relay dulu.
 
-function getCreds() {
-  const url = (process.env.POSTIZ_API_URL || '').replace(/\/$/, '')
-  const key = process.env.POSTIZ_API_KEY
-  if (!url) throw new Error('POSTIZ_API_URL belum di-set di Vercel env vars')
-  if (!key) throw new Error('POSTIZ_API_KEY belum di-set di Vercel env vars')
-  return { url, key }
+function normCreds(creds) {
+  if (!creds || !creds.url || !creds.key) {
+    throw new Error('Postiz creds gak lengkap — pastikan workspace punya postiz_accounts row valid.')
+  }
+  return { url: String(creds.url).replace(/\/$/, ''), key: String(creds.key) }
 }
 
-async function postizJson(path, init = {}) {
-  const { url, key } = getCreds()
+async function postizJson(creds, path, init = {}) {
+  const { url, key } = normCreds(creds)
   const headers = {
     'Authorization': key,
     'Content-Type': 'application/json',
@@ -38,10 +40,10 @@ async function postizJson(path, init = {}) {
   return json
 }
 
-async function postizJsonFallback(paths, init) {
+async function postizJsonFallback(creds, paths, init) {
   let lastErr
   for (const p of paths) {
-    try { return await postizJson(p, init) }
+    try { return await postizJson(creds, p, init) }
     catch (e) {
       lastErr = e
       if (e.status && e.status !== 404) throw e
@@ -78,26 +80,28 @@ function pickUsername(c) {
   )
 }
 
-// Fetch a single post by id - to check actual state (QUEUE/PUBLISHED/ERROR)
+// Fetch a single post by id — check actual state (QUEUE/PUBLISHED/ERROR)
 // and grab releaseURL once platform finishes processing.
-export async function getPostizPost(postId) {
+export async function getPostizPost(creds, postId) {
   return postizJsonFallback(
+    creds,
     [`/public/v1/posts/${postId}`, `/api/public/v1/posts/${postId}`, `/api/v1/posts/${postId}`],
     { method: 'GET' }
   )
 }
 
-// Fetch a single integration to see its ACTUAL providerIdentifier - useful
-// kalo sync return integration list tanpa platform field.
-export async function getPostizIntegration(integrationId) {
+// Fetch a single integration to see its ACTUAL providerIdentifier.
+export async function getPostizIntegration(creds, integrationId) {
   return postizJsonFallback(
+    creds,
     [`/public/v1/integrations/${integrationId}`, `/api/public/v1/integrations/${integrationId}`, `/api/v1/integrations/${integrationId}`],
     { method: 'GET' }
   )
 }
 
-export async function fetchPostizChannels() {
+export async function fetchPostizChannels(creds) {
   const data = await postizJsonFallback(
+    creds,
     ['/public/v1/integrations', '/api/public/v1/integrations', '/api/v1/integrations/list', '/api/v1/integrations'],
     { method: 'GET' }
   )
@@ -122,8 +126,8 @@ async function downloadMedia(url) {
   return { buffer, contentType, name: lastSeg }
 }
 
-async function uploadToPostiz({ buffer, name, contentType }) {
-  const { url, key } = getCreds()
+async function uploadToPostiz(creds, { buffer, name, contentType }) {
+  const { url, key } = normCreds(creds)
   const paths = ['/public/v1/upload', '/api/public/v1/upload', '/api/v1/upload']
   let lastErr
   for (const path of paths) {
@@ -147,7 +151,6 @@ async function uploadToPostiz({ buffer, name, contentType }) {
         lastErr = err
         continue
       }
-      // Postiz upload returns { id, path, name, organizationId } — id is what posts.image[] wants.
       const id = json?.id || json?.path || json?.url
       if (!id) throw new Error('Postiz upload response gak include id/path: ' + JSON.stringify(json).slice(0, 200))
       return { id, path: json.path || json.url || null, raw: json }
@@ -160,9 +163,6 @@ async function uploadToPostiz({ buffer, name, contentType }) {
 }
 
 // ── Platform-specific default settings ──────────────────────────────
-// IMPORTANT: post_type is required across ALL platforms by this Postiz
-// validator (kept seeing 'post_type must be one of: post, story' even on
-// TikTok). So we always include it.
 function defaultSettings(platform) {
   const p = (platform || '').toLowerCase()
   if (p.includes('tiktok')) {
@@ -180,46 +180,34 @@ function defaultSettings(platform) {
     }
   }
   if (p.includes('instagram')) {
-    return {
-      post_type: 'post',
-      collaborators: [],
-    }
+    return { post_type: 'post', collaborators: [] }
   }
   if (p.includes('youtube')) {
-    return {
-      post_type: 'post',
-      title: '',
-      type: 'public',
-    }
+    return { post_type: 'post', title: '', type: 'public' }
   }
   if (p.includes('facebook') || p.includes('fb')) {
     return { post_type: 'post' }
   }
-  // Unknown platform — sane fallback.
   return { post_type: 'post' }
 }
 
 // ── Create post ─────────────────────────────────────────────────────
-export async function createPostizPost({ channelId, content, mediaUrl, scheduledFor, platform }) {
+export async function createPostizPost({ creds, channelId, content, mediaUrl, scheduledFor, platform }) {
   if (!channelId) throw new Error('channelId kosong — persona belum link ke Postiz channel')
+  normCreds(creds) // throws if missing — fail fast before downloading media
 
-  // Auto-detect platform via integration lookup kalau platform kosong (UI
-  // sebelumnya kadang gak save postiz_platform pas pick channel).
   if (!platform) {
     try {
-      const channels = await fetchPostizChannels()
+      const channels = await fetchPostizChannels(creds)
       const ch = channels.find((c) => String(c.id) === String(channelId))
       if (ch) platform = ch.platform || ch.raw?.providerIdentifier || ''
-    } catch (e) { /* ignore — fall through dengan platform kosong */ }
+    } catch (e) { /* ignore — fall through */ }
   }
 
-  // 1) Upload media to Postiz first (Postiz nolak external URLs; harus
-  // domain uploads.postiz.com). Returns { id, path } yang dua-duanya
-  // dibutuhin di posts[].value[].image[].
   let imageField = []
   if (mediaUrl) {
     const media = await downloadMedia(mediaUrl)
-    const uploaded = await uploadToPostiz(media)
+    const uploaded = await uploadToPostiz(creds, media)
     imageField = [{
       id: String(uploaded.id),
       path: uploaded.path || uploaded.raw?.url || '',
@@ -230,8 +218,6 @@ export async function createPostizPost({ channelId, content, mediaUrl, scheduled
   const isScheduled = !!scheduledFor
   const settings = defaultSettings(platform)
 
-  // For 'now' mode, use current ISO (NOT +60s future, which would actually
-  // schedule it ~1 menit di depan and bisa bingungin user).
   const body = {
     type: isScheduled ? 'schedule' : 'now',
     date: scheduledFor || new Date().toISOString(),
@@ -239,10 +225,7 @@ export async function createPostizPost({ channelId, content, mediaUrl, scheduled
     tags: [],
     posts: [{
       integration: { id: String(channelId) },
-      value: [{
-        content: content || '',
-        image: imageField,
-      }],
+      value: [{ content: content || '', image: imageField }],
       settings,
     }],
   }
@@ -251,7 +234,7 @@ export async function createPostizPost({ channelId, content, mediaUrl, scheduled
   let lastErr
   for (const path of paths) {
     try {
-      return await postizJson(path, { method: 'POST', body: JSON.stringify(body) })
+      return await postizJson(creds, path, { method: 'POST', body: JSON.stringify(body) })
     } catch (e) {
       lastErr = e
       if (e.status && e.status !== 404) {

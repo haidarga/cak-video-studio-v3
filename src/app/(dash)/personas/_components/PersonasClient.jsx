@@ -287,6 +287,262 @@ function Avatar({ url, name }) {
   return <div className="w-14 h-14 rounded-full bg-[var(--surface2)] flex items-center justify-center text-lg font-bold flex-shrink-0">{initial}</div>
 }
 
+// Voice attachment widget — 3 modes:
+//   🎙 Clone (upload audio file → ElevenLabs IVC → voice_id)
+//   🪄 Design (text prompt → 3 previews → pick → save → voice_id)
+//   🎵 Library (pick from existing voices in this workspace's ElevenLabs account)
+function VoicePicker({ voiceId, voiceName, voiceSource, onAttach, onClear, onError }) {
+  const [mode, setMode] = useState('clone')
+  const [busy, setBusy] = useState(false)
+  const [name, setName] = useState('')
+  // clone
+  const cloneFileRef = useRef(null)
+  // design
+  const [designDesc, setDesignDesc] = useState('')
+  const [designText, setDesignText] = useState('')
+  const [previews, setPreviews] = useState([]) // [{ generated_voice_id, audio_url }]
+  const [picked, setPicked] = useState(null)
+  // library
+  const [libVoices, setLibVoices] = useState(null)
+  const [libSearch, setLibSearch] = useState('')
+
+  async function handleClone() {
+    const files = [...(cloneFileRef.current?.files || [])]
+    if (!name.trim()) { onError('Voice name kosong'); return }
+    if (!files.length) { onError('Pilih file audio dulu'); return }
+    setBusy(true); onError('')
+    try {
+      const fd = new FormData()
+      fd.append('name', name.trim())
+      files.forEach((f) => fd.append('files', f, f.name || 'sample.mp3'))
+      const r = await fetch('/api/voice/clone', { method: 'POST', body: fd })
+      const j = await r.json()
+      if (!j.ok) throw new Error(j.error || 'clone failed')
+      onAttach({ voice_id: j.voice_id, voice_name: name.trim(), voice_source: 'clone' })
+      setName(''); if (cloneFileRef.current) cloneFileRef.current.value = ''
+    } catch (e) { onError('Clone gagal: ' + e.message) }
+    setBusy(false)
+  }
+
+  async function handleDesign() {
+    setBusy(true); onError('')
+    setPreviews([]); setPicked(null)
+    try {
+      const r = await fetch('/api/voice/design', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: designDesc, text: designText }),
+      })
+      const j = await r.json()
+      if (!j.ok) throw new Error(j.error || 'design failed')
+      // Convert each base64 to a blob URL for <audio>
+      const withUrls = (j.previews || []).map((p) => {
+        const bin = atob(p.audio_base_64)
+        const arr = new Uint8Array(bin.length)
+        for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i)
+        return {
+          generated_voice_id: p.generated_voice_id,
+          audio_url: URL.createObjectURL(new Blob([arr], { type: p.media_type || 'audio/mpeg' })),
+        }
+      })
+      setPreviews(withUrls)
+    } catch (e) { onError('Design gagal: ' + e.message) }
+    setBusy(false)
+  }
+
+  async function handleSavePicked() {
+    if (!picked) { onError('Pilih preview dulu'); return }
+    if (!name.trim()) { onError('Voice name kosong'); return }
+    setBusy(true); onError('')
+    try {
+      const r = await fetch('/api/voice/save-design', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ generated_voice_id: picked.generated_voice_id, voice_name: name.trim(), voice_description: designDesc }),
+      })
+      const j = await r.json()
+      if (!j.ok) throw new Error(j.error || 'save failed')
+      onAttach({ voice_id: j.voice_id, voice_name: name.trim(), voice_source: 'design' })
+      previews.forEach((p) => URL.revokeObjectURL(p.audio_url))
+      setPreviews([]); setPicked(null); setName(''); setDesignDesc(''); setDesignText('')
+    } catch (e) { onError('Save gagal: ' + e.message) }
+    setBusy(false)
+  }
+
+  async function loadLibrary() {
+    setBusy(true); onError('')
+    try {
+      const r = await fetch('/api/voice/library')
+      const j = await r.json()
+      if (!j.ok) throw new Error(j.error || 'load failed')
+      setLibVoices(j.voices || [])
+    } catch (e) { onError('Library load gagal: ' + e.message); setLibVoices([]) }
+    setBusy(false)
+  }
+
+  async function handleRemove() {
+    if (!voiceId) return
+    if (!confirm(`Hapus voice "${voiceName}" dari ElevenLabs library?`)) return
+    setBusy(true); onError('')
+    try {
+      const r = await fetch('/api/voice/' + voiceId, { method: 'DELETE' })
+      const j = await r.json()
+      if (!j.ok) throw new Error(j.error || 'delete failed')
+      onClear()
+    } catch (e) { onError('Hapus gagal: ' + e.message) }
+    setBusy(false)
+  }
+
+  // ── current state badge ──
+  if (voiceId) {
+    return (
+      <div className="bg-[var(--surface2)] border border-[var(--border)] rounded p-3">
+        <div className="flex items-center gap-3">
+          <span className="text-xl">🎙</span>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-semibold truncate text-green-300">{voiceName || 'unnamed voice'}</div>
+            <div className="text-[10px] text-[var(--muted2)]">
+              <span className="uppercase font-semibold">{voiceSource || 'attached'}</span> · ID: <code className="font-mono">{voiceId.slice(0, 12)}...</code>
+            </div>
+          </div>
+          <button type="button" onClick={onClear} disabled={busy}
+            className="text-xs px-2 py-1 rounded text-[var(--muted)] hover:text-white disabled:opacity-50">
+            Lepas
+          </button>
+          <button type="button" onClick={handleRemove} disabled={busy}
+            className="text-xs px-2 py-1 rounded text-red-400 hover:bg-red-500/10 disabled:opacity-50">
+            🗑 Hapus dari ElevenLabs
+          </button>
+        </div>
+        <div className="text-[10px] text-[var(--muted2)] mt-2 leading-relaxed">
+          Auto-applied saat generate video — native AI audio akan di-swap ke voice ini via ElevenLabs Speech-to-Speech (lip-sync preserved).
+        </div>
+      </div>
+    )
+  }
+
+  // ── mode picker ──
+  return (
+    <div className="bg-[var(--surface2)] border border-[var(--border)] rounded p-3 space-y-3">
+      <div className="flex gap-1.5 flex-wrap">
+        {[
+          ['clone', '🎙 Clone (audio)'],
+          ['design', '🪄 Design (teks)'],
+          ['library', '🎵 Library'],
+        ].map(([k, l]) => (
+          <button key={k} type="button" onClick={() => { setMode(k); if (k === 'library' && !libVoices) loadLibrary() }}
+            className={`text-xs px-2.5 py-1 rounded font-semibold ${mode === k ? 'bg-[var(--accent)] text-white' : 'bg-[var(--surface)] border border-[var(--border)] text-[var(--muted)]'}`}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {mode === 'clone' && (
+        <div className="space-y-2">
+          <div className="text-[10px] text-[var(--muted2)] leading-relaxed">
+            Upload audio sample (≥10dtk, MP3/WAV/M4A). Boleh dari mana aja — recording sendiri, rip TikTok, sample talent.
+            <strong> Yang penting clean</strong> — gak ada BGM / multiple speakers.
+          </div>
+          <Input value={name} onChange={setName} placeholder="Nama voice (e.g. AceKid Mom)" />
+          <input ref={cloneFileRef} type="file" accept="audio/*" multiple
+            className="text-xs w-full file:mr-2 file:px-3 file:py-1.5 file:rounded file:border-0 file:bg-[var(--surface)] file:text-white file:font-semibold" />
+          <button type="button" onClick={handleClone} disabled={busy}
+            className="w-full px-4 py-2 rounded bg-[var(--accent)] text-white text-sm font-semibold disabled:opacity-50">
+            {busy ? '⏳ Cloning...' : '🎙 Clone Voice'}
+          </button>
+        </div>
+      )}
+
+      {mode === 'design' && (
+        <div className="space-y-2">
+          <div className="text-[10px] text-[var(--muted2)] leading-relaxed">
+            Generate voice baru dari teks — gak butuh recording sama sekali. Jelasin karakter suara → dapet 3 preview → pilih.
+          </div>
+          <div>
+            <label className="text-[10px] uppercase text-[var(--muted)] font-semibold">Voice description (≥20 char)</label>
+            <Textarea rows={2} value={designDesc} onChange={setDesignDesc}
+              placeholder={'e.g. "Wanita Indonesia 30-an, suara hangat ramah energik, aksen Jakarta natural, cocok buat iklan produk anak"'} />
+          </div>
+          <div>
+            <label className="text-[10px] uppercase text-[var(--muted)] font-semibold">Sample text (≥100 char — yang bakal diucap di preview)</label>
+            <Textarea rows={3} value={designText} onChange={setDesignText}
+              placeholder={'e.g. "Halo bunda! Aku punya rekomendasi nih buat si kecil yang lagi tumbuh. AceKid susu pertumbuhan dengan bahan alami pilihan, bikin anak makin aktif dan sehat."'} />
+          </div>
+          <button type="button" onClick={handleDesign} disabled={busy}
+            className="w-full px-4 py-2 rounded bg-[var(--accent)] text-white text-sm font-semibold disabled:opacity-50">
+            {busy ? '⏳ Generating 3 preview...' : '🪄 Generate 3 Voice Previews'}
+          </button>
+          {!!previews.length && (
+            <div className="space-y-2 pt-2 border-t border-[var(--border)]">
+              <div className="text-[10px] text-[var(--muted)]">Dengerin, pilih yang paling match:</div>
+              {previews.map((p, i) => {
+                const on = picked?.generated_voice_id === p.generated_voice_id
+                return (
+                  <div key={p.generated_voice_id} onClick={() => setPicked(p)}
+                    className={`p-2 rounded border cursor-pointer ${on ? 'border-[var(--accent)] bg-[var(--accent)]/10' : 'border-[var(--border)] bg-[var(--surface)]'}`}>
+                    <div className="text-xs font-semibold mb-1">{on ? '✓ ' : ''}Preview {i + 1}</div>
+                    <audio src={p.audio_url} controls className="w-full h-8" />
+                  </div>
+                )
+              })}
+              {picked && (
+                <>
+                  <Input value={name} onChange={setName} placeholder="Kasih nama voice (e.g. AceKid Mom v2)" />
+                  <button type="button" onClick={handleSavePicked} disabled={busy || !name.trim()}
+                    className="w-full px-4 py-2 rounded bg-green-500 text-white text-sm font-semibold disabled:opacity-50">
+                    💾 Save Voice to Library
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {mode === 'library' && (
+        <div className="space-y-2">
+          <div className="text-[10px] text-[var(--muted2)] leading-relaxed">
+            Pilih dari voice yang udah ada di akun ElevenLabs workspace ini — clone lama, designed voice, library voice yang udah lu add.
+          </div>
+          {libVoices === null ? (
+            <div className="text-xs text-[var(--muted)]">⏳ Loading...</div>
+          ) : !libVoices.length ? (
+            <div className="text-xs text-[var(--muted)]">Library kosong. Bikin Clone/Design dulu.</div>
+          ) : (
+            <>
+              <div className="flex gap-2">
+                <Input value={libSearch} onChange={setLibSearch} placeholder={`Cari (${libVoices.length} voice)...`} />
+                <button type="button" onClick={loadLibrary} disabled={busy}
+                  className="text-xs px-3 py-1.5 rounded bg-[var(--surface)] border border-[var(--border)]">🔄</button>
+              </div>
+              <Input value={name} onChange={setName} placeholder="Nama panggilan (optional, kosong = pake nama asli)" />
+              <div className="max-h-64 overflow-y-auto space-y-2">
+                {libVoices
+                  .filter((v) => !libSearch || (v.name || '').toLowerCase().includes(libSearch.toLowerCase()))
+                  .map((v) => (
+                    <div key={v.voice_id} className="bg-[var(--surface)] border border-[var(--border)] rounded p-2">
+                      <div className="flex items-center gap-2 mb-1">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs font-semibold truncate">{v.name || 'unnamed'}</div>
+                          <div className="text-[9px] text-[var(--muted2)] truncate">
+                            {(v.category || '').replace('_', ' ')} {v.labels?.gender ? '· ' + v.labels.gender : ''} {v.labels?.accent ? '· ' + v.labels.accent : ''}
+                          </div>
+                        </div>
+                        <button type="button" onClick={() => onAttach({ voice_id: v.voice_id, voice_name: (name.trim() || v.name), voice_source: 'library' })}
+                          className="text-[10px] px-2.5 py-1 rounded bg-[var(--accent)] text-white font-semibold">
+                          Attach
+                        </button>
+                      </div>
+                      {v.preview_url && <audio src={v.preview_url} controls className="w-full h-7" />}
+                    </div>
+                  ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function PersonaEditor({ persona, workspaceId, userId, onClose, onError }) {
   const supabase = createClient()
   const [name, setName] = useState(persona?.name || '')
@@ -298,6 +554,10 @@ function PersonaEditor({ persona, workspaceId, userId, onClose, onError }) {
   const [postizChannelId, setPostizChannelId] = useState(persona?.postiz_channel_id || '')
   const [avatarUrl, setAvatarUrl] = useState(persona?.avatar_url || '')
   const [refs, setRefs] = useState(persona?.persona_refs?.map((pr) => pr.refs).filter(Boolean) || [])
+  // ElevenLabs voice attached to this persona — drives auto S2S post-gen.
+  const [voiceId, setVoiceId] = useState(persona?.voice_id || null)
+  const [voiceName, setVoiceName] = useState(persona?.voice_name || '')
+  const [voiceSource, setVoiceSource] = useState(persona?.voice_source || null)
   const [busy, setBusy] = useState(false)
   const fileInputRef = useRef(null)
   const refsInputRef = useRef(null)
@@ -360,6 +620,9 @@ function PersonaEditor({ persona, workspaceId, userId, onClose, onError }) {
       character_prompt: characterPrompt.trim() || null,
       postiz_channel_id: postizChannelId.trim() || null,
       avatar_url: avatarUrl || null,
+      voice_id: voiceId || null,
+      voice_name: voiceName || null,
+      voice_source: voiceSource || null,
     }
     let personaId = persona?.id
     let error
@@ -428,6 +691,15 @@ function PersonaEditor({ persona, workspaceId, userId, onClose, onError }) {
         <div className="text-[10px] text-[var(--muted2)] mt-1">
           ID channel TikTok/IG di Postiz. Wajib kalau mau fitur Post Now. Cek /posting → Sync Channels buat lihat list.
         </div>
+      </Field>
+
+      <Field label={<>🎙 Voice Clone <span className="text-[9px] text-[var(--muted2)] ml-1">OPTIONAL — ElevenLabs</span></>}>
+        <VoicePicker
+          voiceId={voiceId} voiceName={voiceName} voiceSource={voiceSource}
+          onAttach={(v) => { setVoiceId(v.voice_id); setVoiceName(v.voice_name); setVoiceSource(v.voice_source) }}
+          onClear={() => { setVoiceId(null); setVoiceName(''); setVoiceSource(null) }}
+          onError={onError}
+        />
       </Field>
 
       {/* Avatar */}

@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { fmtCost } from '@/lib/cost-table'
 
@@ -12,17 +12,25 @@ export default function CostWidget({ workspaceId }) {
   const [budget, setBudget] = useState({ daily_limit_usd: 50, monthly_limit_usd: 500, alert_at_pct: 80 })
   const [expanded, setExpanded] = useState(false)
   const [byKind, setByKind] = useState({})
+  // Throttle realtime reloads: realtime fires once per usage_log insert; a
+  // burst of inserts (parse → 10 image gens in flight) would cause a re-fetch
+  // storm. Coalesce into a single fetch every 2s while bursting.
+  const pendingReloadRef = useRef(null)
 
   async function loadAggregates() {
     const now = new Date()
     const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
+    // Cap at 500 — even at 30 paid gens/day this covers the whole month.
+    // Old limit 5000 was shipping ~100KB to every page nav (sidebar mounts
+    // each route change).
     const { data: monthRows } = await supabase
       .from('usage_log')
       .select('kind, cost_usd, created_at')
       .eq('workspace_id', workspaceId)
       .gte('created_at', startOfMonth)
-      .limit(5000)
+      .order('created_at', { ascending: false })
+      .limit(500)
     const m = (monthRows || []).reduce((s, r) => s + parseFloat(r.cost_usd || 0), 0)
     const t = (monthRows || [])
       .filter((r) => r.created_at >= startOfDay)
@@ -39,12 +47,20 @@ export default function CostWidget({ workspaceId }) {
   useEffect(() => {
     if (!workspaceId) return
     loadAggregates()
-    const ch = supabase.channel('cost-' + workspaceId)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'usage_log', filter: `workspace_id=eq.${workspaceId}` }, () => {
+    function scheduleReload() {
+      if (pendingReloadRef.current) return
+      pendingReloadRef.current = setTimeout(() => {
+        pendingReloadRef.current = null
         loadAggregates()
-      })
+      }, 2000)
+    }
+    const ch = supabase.channel('cost-' + workspaceId)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'usage_log', filter: `workspace_id=eq.${workspaceId}` }, scheduleReload)
       .subscribe()
-    return () => { supabase.removeChannel(ch) }
+    return () => {
+      supabase.removeChannel(ch)
+      if (pendingReloadRef.current) { clearTimeout(pendingReloadRef.current); pendingReloadRef.current = null }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId])
 

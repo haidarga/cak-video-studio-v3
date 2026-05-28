@@ -50,17 +50,20 @@ export default function PostingClient({ workspaceId, initialPersonas }) {
     return new Set(personas.map((p) => p.postiz_channel_id).filter(Boolean).map(String))
   }, [personas])
 
-  // Link / unlink a Postiz channel to a persona inline (no need to open /personas)
+  // Link / unlink a Postiz channel to a persona. Also persists postiz_account_id
+  // so the post route knows WHICH Postiz instance to send through (multi-acct).
   async function assignChannel(persona, channel) {
     setErr('')
     const patch = channel ? {
       postiz_channel_id: String(channel.id),
       postiz_channel_label: channel.name,
       postiz_platform: channel.platform,
+      postiz_account_id: channel.account_id || null,
     } : {
       postiz_channel_id: null,
       postiz_channel_label: null,
       postiz_platform: null,
+      postiz_account_id: null,
     }
     const { error } = await supabase.from('personas').update(patch).eq('id', persona.id)
     if (error) setErr(error.message)
@@ -164,6 +167,7 @@ export default function PostingClient({ workspaceId, initialPersonas }) {
                     <span className="font-semibold text-[var(--text)]">{c.name}</span>
                     <div className="text-[10px]">
                       @{c.username || '—'}{c.platform && <> · <span className="uppercase">{c.platform}</span></>}
+                      {c.account_label && <> · <span className="text-[var(--accent)]">📮 {c.account_label}</span></>}
                     </div>
                     <code className="text-[9px] text-[var(--muted2)] break-all">{c.id}</code>
                   </summary>
@@ -337,7 +341,7 @@ function PersonaRow({ persona: p, channels, takenChannelIds, onAssign }) {
                     const taken = takenChannelIds.has(String(c.id))
                     return (
                       <option key={c.id} value={String(c.id)} disabled={taken}>
-                        {c.name} (@{c.username || '—'}){taken ? ' [taken]' : ''}
+                        {c.name} (@{c.username || '—'}){c.account_label ? ` · ${c.account_label}` : ''}{taken ? ' [taken]' : ''}
                       </option>
                     )
                   })}

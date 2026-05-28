@@ -47,7 +47,13 @@ export default function BrandsClient({ workspaceId, activeBrandId: initialActive
         </button>
       </div>
 
-      {err && <div className="mb-4 text-xs text-red-400">⚠ {err}</div>}
+      {err && (
+        <div className="mb-4 p-3 rounded-lg bg-red-900/20 border border-red-500/40 text-red-300 text-xs flex items-start gap-2">
+          <span className="font-bold flex-shrink-0">⚠</span>
+          <div className="flex-1">{err}</div>
+          <button onClick={() => setErr('')} className="text-[var(--muted)] hover:text-white flex-shrink-0 leading-none">✕</button>
+        </div>
+      )}
 
       {brands.length === 0 ? (
         <div className="text-sm text-[var(--muted)] p-12 border border-dashed border-[var(--border)] rounded-lg text-center">

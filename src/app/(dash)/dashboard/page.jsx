@@ -28,17 +28,17 @@ export default async function DashboardPage() {
     { data: usageMonth },
     { data: activity },
     { data: errors },
-    { data: costByPersona },
+    { data: budgetRow },
   ] = await Promise.all([
     supabase.from('personas').select('*', { count: 'exact', head: true }),
     supabase.from('refs').select('*', { count: 'exact', head: true }),
     supabase.from('results').select('*', { count: 'exact', head: true }),
     supabase.from('results').select('*', { count: 'exact', head: true }).eq('qc_status', 'approved'),
     supabase.from('scheduled_posts').select('*', { count: 'exact', head: true }).eq('status', 'scheduled'),
-    wsId ? supabase.from('usage_log').select('kind, cost_usd, created_at, meta').eq('workspace_id', wsId).gte('created_at', monthStart).limit(2000) : Promise.resolve({ data: [] }),
+    wsId ? supabase.from('usage_log').select('kind, cost_usd, created_at').eq('workspace_id', wsId).gte('created_at', monthStart).limit(2000) : Promise.resolve({ data: [] }),
     wsId ? supabase.from('activity_log').select('*').eq('workspace_id', wsId).order('created_at', { ascending: false }).limit(15) : Promise.resolve({ data: [] }),
     wsId ? supabase.from('error_log').select('*').or(`workspace_id.eq.${wsId},workspace_id.is.null`).order('created_at', { ascending: false }).limit(10) : Promise.resolve({ data: [] }),
-    wsId ? supabase.from('usage_log').select('cost_usd, meta').eq('workspace_id', wsId).gte('created_at', monthStart).limit(2000) : Promise.resolve({ data: [] }),
+    wsId ? supabase.from('budget_settings').select('*').eq('workspace_id', wsId).maybeSingle() : Promise.resolve({ data: null }),
   ])
 
   const todayCost = (usageMonth || []).filter((u) => u.created_at >= dayStart).reduce((s, u) => s + parseFloat(u.cost_usd || 0), 0)
@@ -56,10 +56,39 @@ export default async function DashboardPage() {
     return acc
   }, {})
 
+  const monthlyLimit = parseFloat(budgetRow?.monthly_limit_usd ?? 500)
+  const dailyLimit = parseFloat(budgetRow?.daily_limit_usd ?? 50)
+  const alertPct = parseFloat(budgetRow?.alert_at_pct ?? 80)
+  const monthlyPct = monthlyLimit > 0 ? (monthCost / monthlyLimit) * 100 : 0
+  const forecastPct = monthlyLimit > 0 ? (forecastEom / monthlyLimit) * 100 : 0
+  const overBudget = monthlyLimit > 0 && monthCost >= monthlyLimit
+  const forecastOver = monthlyLimit > 0 && forecastEom > monthlyLimit
+  const nearAlert = monthlyLimit > 0 && monthlyPct >= alertPct
+
   return (
     <div>
       <h1 className="text-2xl font-bold mb-1">📊 Dashboard</h1>
       <p className="text-sm text-[var(--muted)] mb-6">Halo, {user?.email}</p>
+
+      {/* Budget banner — fires on over-budget OR forecast-over-limit. */}
+      {(overBudget || forecastOver || nearAlert) && (
+        <div className={`mb-5 p-4 rounded-lg border ${
+          overBudget ? 'bg-red-900/30 border-red-700 text-red-200'
+          : forecastOver ? 'bg-orange-900/30 border-orange-700 text-orange-200'
+          : 'bg-yellow-900/20 border-yellow-700/60 text-yellow-200'
+        }`}>
+          <div className="font-bold text-sm mb-1">
+            {overBudget ? '🛑 Monthly budget habis — API gen di-block'
+              : forecastOver ? `📈 Pace lu bakal lewat limit — forecast EOM ${fmtCost(forecastEom)} vs limit ${fmtCost(monthlyLimit)}`
+              : `⚠ ${monthlyPct.toFixed(0)}% monthly budget kepakai (alert threshold ${alertPct}%)`}
+          </div>
+          <div className="text-xs">
+            Spend bulan ini <b>{fmtCost(monthCost)}</b> dari limit <b>{fmtCost(monthlyLimit)}</b>
+            {' · '}forecast EOM <b>{fmtCost(forecastEom)}</b> ({forecastPct.toFixed(0)}%)
+            {' · '}<a href="/settings" className="underline">naikkin limit di Settings</a>
+          </div>
+        </div>
+      )}
 
       {/* Top stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">

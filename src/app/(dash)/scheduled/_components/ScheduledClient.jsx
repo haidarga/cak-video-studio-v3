@@ -26,7 +26,9 @@ const STATUS_COLORS = {
 export default function ScheduledClient({ workspaceId, userId, initialScheduled, approvedResults }) {
   const supabase = createClient()
   const [scheduled, setScheduled] = useState(initialScheduled)
-  const [picking, setPicking] = useState(null) // approved result -> picking schedule time
+  const [picking, setPicking] = useState(null) // approved result -> single-result modal
+  const [bulkSelected, setBulkSelected] = useState(new Set()) // result.id -> for bulk mirror
+  const [bulkOpen, setBulkOpen] = useState(false) // bulk mirror modal
   const [err, setErr] = useState('')
   const [channels, setChannels] = useState(null)
   const [channelsLoading, setChannelsLoading] = useState(false)
@@ -64,7 +66,7 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
   }, [supabase, workspaceId])
 
   // Mirror upload: schedule a result ke N target channels sekaligus.
-  // targets = [{ id, platform, name }] -- list of channels to post to.
+  // targets = [{ id, platform, name, caption? }] -- list of channels to post to.
   async function schedule(result, scheduledFor, caption, targets) {
     setErr('')
     if (!targets || targets.length === 0) {
@@ -72,20 +74,41 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
       return
     }
     setPicking(null)
+    await insertAndFire(result, scheduledFor, caption, targets)
+  }
 
-    // Insert N rows + fire N concurrent Postiz pushes
+  // Bulk variant: M results × N channels with per-result scheduled_for.
+  // plan = [{ result, scheduledFor, caption }] -- one entry per selected result.
+  // Used to ngakalin rate limit by drip-scheduling across hours.
+  async function bulkSchedule(plan, targets, sharedCaption) {
+    setErr('')
+    if (!targets || targets.length === 0) { setErr('Pilih minimal 1 channel'); return }
+    if (!plan || plan.length === 0) { setErr('Gak ada result yang dipilih'); return }
+    setBulkOpen(false)
+    setBulkSelected(new Set())
+    for (const item of plan) {
+      const caption = item.caption || sharedCaption || null
+      await insertAndFire(item.result, item.scheduledFor, caption, targets)
+    }
+  }
+
+  // Shared between single + bulk: insert N scheduled_posts rows + fire pushes.
+  async function insertAndFire(result, scheduledFor, caption, targets) {
     for (const target of targets) {
+      // status: 'posting' if now, 'scheduled' if future. The /api/postiz/post
+      // call still happens immediately, but Postiz itself honors scheduled_for.
+      const isFuture = scheduledFor && new Date(scheduledFor) > new Date(Date.now() + 30_000)
       const { data: sp, error } = await supabase.from('scheduled_posts').insert({
         workspace_id: workspaceId,
         result_id: result.id,
         persona_id: result.personas?.id || null,
         scheduled_for: scheduledFor || null,
-        status: 'posting',
-        // Per-channel caption override if set, else fall back to global caption
+        status: isFuture ? 'scheduled' : 'posting',
         caption: target.caption || caption || null,
         created_by: userId,
         target_channel_id: String(target.id),
         target_platform: target.platform || null,
+        target_postiz_account_id: target.account_id || null,
       }).select('id').single()
       if (error) { setErr(`Insert (${target.name || target.id}): ${error.message}`); continue }
 
@@ -99,6 +122,12 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
       }).catch((e) => console.error('Postiz push error:', e))
     }
   }
+
+  function toggleBulkSelect(id) {
+    setBulkSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
+  function clearBulkSelect() { setBulkSelected(new Set()) }
+  function selectAllReady() { setBulkSelected(new Set(readyToSchedule.map((r) => r.id))) }
 
   async function retryPostiz(scheduledPostId) {
     setErr('')
@@ -150,24 +179,50 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
 
       {readyToSchedule.length > 0 && (
         <section className="mb-7">
-          <h2 className="text-[10px] uppercase font-semibold tracking-wider text-[var(--muted)] mb-3">
-            ✓ Siap di-jadwalin ({readyToSchedule.length} approved, belum ke-schedule)
-          </h2>
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2">
-            {readyToSchedule.map((r) => (
-              <button key={r.id} onClick={() => setPicking(r)}
-                className="text-left bg-[var(--surface)] border border-[var(--border)] hover:border-[var(--accent)] rounded overflow-hidden">
-                <div className="aspect-[9/16] bg-black">
-                  {r.type === 'video'
-                    ? <video src={r.url} muted loop className="w-full h-full object-cover" />
-                    : <img src={r.url} alt="" className="w-full h-full object-cover" />}
-                </div>
-                <div className="p-1.5">
-                  <div className="text-[10px] font-semibold truncate">{r.label}</div>
-                  <div className="text-[9px] text-[var(--muted)] truncate">@{r.personas?.username || '—'}</div>
-                </div>
+          <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+            <h2 className="text-[10px] uppercase font-semibold tracking-wider text-[var(--muted)]">
+              ✓ Siap di-jadwalin ({readyToSchedule.length} approved, belum ke-schedule)
+            </h2>
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-[var(--muted)]">{bulkSelected.size}/{readyToSchedule.length} dipilih</span>
+              <button onClick={selectAllReady} className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] hover:bg-[var(--surface3)]">Pilih semua</button>
+              {bulkSelected.size > 0 && (
+                <button onClick={clearBulkSelect} className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] hover:bg-[var(--surface3)]">Clear</button>
+              )}
+              <button onClick={() => setBulkOpen(true)} disabled={bulkSelected.size === 0}
+                className="text-xs px-3 py-1.5 rounded font-semibold bg-[var(--accent)] text-white disabled:opacity-40 disabled:cursor-not-allowed">
+                🚀 Bulk Schedule ({bulkSelected.size})
               </button>
-            ))}
+            </div>
+          </div>
+          <div className="text-[10px] text-[var(--muted2)] mb-2">
+            💡 Pilih beberapa result terus klik <b>Bulk Schedule</b> buat drip-post antar waktu (ngakalin rate limit per channel).
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2">
+            {readyToSchedule.map((r) => {
+              const on = bulkSelected.has(r.id)
+              return (
+                <div key={r.id}
+                  className={`relative text-left bg-[var(--surface)] border rounded overflow-hidden ${on ? 'border-[var(--accent)] ring-2 ring-[var(--accent)]/50' : 'border-[var(--border)] hover:border-[var(--accent)]'}`}>
+                  {/* Bulk-select checkbox — stops propagation so clicking it doesn't open single-mirror modal */}
+                  <label onClick={(e) => e.stopPropagation()} className="absolute top-1.5 left-1.5 z-10 cursor-pointer bg-black/60 rounded p-1">
+                    <input type="checkbox" checked={on} onChange={() => toggleBulkSelect(r.id)}
+                      className="w-4 h-4 accent-[var(--accent)] cursor-pointer block" />
+                  </label>
+                  <button onClick={() => setPicking(r)} className="w-full text-left">
+                    <div className="aspect-[9/16] bg-black">
+                      {r.type === 'video'
+                        ? <video src={r.url} muted loop preload="none" className="w-full h-full object-cover" />
+                        : <img src={r.url} alt="" loading="lazy" className="w-full h-full object-cover" />}
+                    </div>
+                    <div className="p-1.5">
+                      <div className="text-[10px] font-semibold truncate">{r.label}</div>
+                      <div className="text-[9px] text-[var(--muted)] truncate">@{r.personas?.username || '—'}</div>
+                    </div>
+                  </button>
+                </div>
+              )
+            })}
           </div>
         </section>
       )}
@@ -207,6 +262,14 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
         <ScheduleModal result={picking} onClose={() => setPicking(null)}
           channels={channels} channelsLoading={channelsLoading}
           onSubmit={(t, c, targets) => schedule(picking, t, c, targets)} />
+      )}
+
+      {bulkOpen && (
+        <BulkScheduleModal
+          results={readyToSchedule.filter((r) => bulkSelected.has(r.id))}
+          channels={channels} channelsLoading={channelsLoading}
+          onClose={() => setBulkOpen(false)}
+          onSubmit={(plan, targets, sharedCaption) => bulkSchedule(plan, targets, sharedCaption)} />
       )}
     </div>
   )
@@ -597,6 +660,7 @@ function ScheduleModal({ result, onClose, onSubmit, channels, channelsLoading })
             setBusy(true)
             const targets = channels?.filter((c) => selectedIds.has(String(c.id))).map((c) => ({
               id: c.id, platform: c.platform, name: c.name,
+              account_id: c.account_id || null,
               // Per-channel caption override if user customized via captionOverrides state
               caption: captionOverrides[String(c.id)] || null,
             })) || []
@@ -608,5 +672,290 @@ function ScheduleModal({ result, onClose, onSubmit, channels, channelsLoading })
         </div>
       </div>
     </div>
+  )
+}
+
+// Bulk mirror modal — M results × N channels with per-result scheduled_for.
+// Timing modes (the whole point — buat ngakalin rate limit per channel):
+//   - all_now      : semua post sekarang. Risk: kena daily limit kalau >5
+//   - all_at       : semua di jam tertentu (jarang berguna, sama aja nabrak limit)
+//   - drip         : first at <startAt> (default now), each next +<gap> minutes
+//   - custom       : manual edit per result
+function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubmit }) {
+  const [selectedChannelIds, setSelectedChannelIds] = useState(new Set())
+  const [sharedCaption, setSharedCaption] = useState('')
+  const [mode, setMode] = useState('drip') // 'all_now' | 'drip' | 'custom'
+  const [dripStartNow, setDripStartNow] = useState(true)
+  const [dripStartAt, setDripStartAt] = useState(() => {
+    const d = new Date(Date.now() + 600_000); d.setSeconds(0, 0)
+    return d.toISOString().slice(0, 16)
+  })
+  const [dripGapMin, setDripGapMin] = useState(90)
+  const [customTimes, setCustomTimes] = useState({}) // result.id -> ISO datetime-local
+  const [busy, setBusy] = useState(false)
+
+  // Group channels by platform — same UI as single ScheduleModal.
+  const grouped = useMemo(() => {
+    if (!channels) return {}
+    const m = {}
+    channels.forEach((c) => {
+      const key = (c.platform || 'unknown').toUpperCase()
+      if (!m[key]) m[key] = []
+      m[key].push(c)
+    })
+    return m
+  }, [channels])
+  const platformOrder = ['TIKTOK', 'INSTAGRAM', 'INSTAGRAM-STANDALONE', 'YOUTUBE', 'YOUTUBE-STANDALONE', 'FACEBOOK', 'X', 'LINKEDIN', 'THREADS', 'UNKNOWN']
+  const platformKeys = Object.keys(grouped).sort((a, b) => {
+    const ai = platformOrder.indexOf(a); const bi = platformOrder.indexOf(b)
+    return (ai < 0 ? 999 : ai) - (bi < 0 ? 999 : bi)
+  })
+
+  function toggleChannel(id) {
+    setSelectedChannelIds((s) => { const n = new Set(s); n.has(String(id)) ? n.delete(String(id)) : n.add(String(id)); return n })
+  }
+  function toggleGroup(platformChannels) {
+    const allOn = platformChannels.every((c) => selectedChannelIds.has(String(c.id)))
+    setSelectedChannelIds((s) => {
+      const n = new Set(s)
+      platformChannels.forEach((c) => allOn ? n.delete(String(c.id)) : n.add(String(c.id)))
+      return n
+    })
+  }
+
+  // Compute final plan: each result -> scheduledFor string (ISO).
+  // Returns [{ result, scheduledFor }] in result order.
+  const plan = useMemo(() => {
+    if (mode === 'all_now') {
+      return results.map((r) => ({ result: r, scheduledFor: null }))
+    }
+    if (mode === 'drip') {
+      const startMs = dripStartNow ? Date.now() + 5_000 : new Date(dripStartAt).getTime()
+      const gapMs = Math.max(0, dripGapMin) * 60_000
+      return results.map((r, i) => ({
+        result: r,
+        scheduledFor: new Date(startMs + i * gapMs).toISOString(),
+      }))
+    }
+    if (mode === 'custom') {
+      return results.map((r) => {
+        const v = customTimes[r.id]
+        return { result: r, scheduledFor: v ? new Date(v).toISOString() : null }
+      })
+    }
+    return []
+  }, [mode, results, dripStartNow, dripStartAt, dripGapMin, customTimes])
+
+  const targets = useMemo(() => {
+    if (!channels) return []
+    return channels.filter((c) => selectedChannelIds.has(String(c.id))).map((c) => ({
+      id: c.id, platform: c.platform, name: c.name, account_id: c.account_id || null,
+    }))
+  }, [channels, selectedChannelIds])
+
+  const totalPosts = plan.length * targets.length
+  const canSubmit = plan.length > 0 && targets.length > 0 && !busy
+
+  async function submit() {
+    if (!canSubmit) return
+    setBusy(true)
+    await onSubmit(plan, targets, sharedCaption || null)
+    setBusy(false)
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="w-full max-w-3xl bg-[var(--surface)] rounded-xl border border-[var(--border)] max-h-[92vh] flex flex-col">
+        <div className="px-6 py-4 border-b border-[var(--border)] flex items-center justify-between flex-shrink-0">
+          <div>
+            <h2 className="text-lg font-bold">🚀 Bulk Schedule — {results.length} result × {targets.length || '?'} channel</h2>
+            <p className="text-[10px] text-[var(--muted)]">Drip-post antar waktu buat ngakalin rate limit per channel</p>
+          </div>
+          <button onClick={onClose} className="text-[var(--muted)] hover:text-white">✕</button>
+        </div>
+
+        <div className="p-6 space-y-5 overflow-y-auto flex-1">
+          {/* SELECTED RESULTS preview */}
+          <div>
+            <div className="text-[10px] uppercase text-[var(--muted)] font-semibold mb-2">📦 Selected results ({results.length})</div>
+            <div className="flex gap-1.5 overflow-x-auto pb-1">
+              {results.map((r) => (
+                <div key={r.id} className="flex-shrink-0 w-16 aspect-[9/16] rounded overflow-hidden bg-black border border-[var(--border)]">
+                  {r.type === 'video'
+                    ? <video src={r.url} muted preload="none" className="w-full h-full object-cover" />
+                    : <img src={r.url} alt="" loading="lazy" className="w-full h-full object-cover" />}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* TIMING MODE */}
+          <div>
+            <div className="text-[10px] uppercase text-[var(--muted)] font-semibold mb-2">⏰ Timing strategy</div>
+            <div className="flex gap-1.5 mb-3 flex-wrap">
+              <ModeButton on={mode === 'all_now'} onClick={() => setMode('all_now')}>🚀 All now</ModeButton>
+              <ModeButton on={mode === 'drip'} onClick={() => setMode('drip')}>💧 Drip (interval)</ModeButton>
+              <ModeButton on={mode === 'custom'} onClick={() => setMode('custom')}>🎯 Custom per result</ModeButton>
+            </div>
+
+            {mode === 'all_now' && (
+              <div className="text-xs text-yellow-300 bg-yellow-500/10 border border-yellow-500/30 p-2 rounded">
+                ⚠ Semua {totalPosts} post bakal fire bareng. Hati-hati kena rate limit (TikTok ~5/hari, IG ~10/hari).
+              </div>
+            )}
+
+            {mode === 'drip' && (
+              <div className="bg-[var(--surface2)]/40 border border-[var(--border)] rounded p-3 space-y-2.5">
+                <label className="flex items-center gap-2 text-xs cursor-pointer">
+                  <input type="checkbox" checked={dripStartNow} onChange={(e) => setDripStartNow(e.target.checked)} />
+                  <span>Mulai sekarang (post #1 langsung fire)</span>
+                </label>
+                {!dripStartNow && (
+                  <div>
+                    <div className="text-[10px] text-[var(--muted)] mb-1">Post #1 di:</div>
+                    <input type="datetime-local" value={dripStartAt} onChange={(e) => setDripStartAt(e.target.value)}
+                      className="text-xs px-2 py-1.5 rounded bg-[var(--surface)] border border-[var(--border)]" />
+                  </div>
+                )}
+                <div>
+                  <div className="text-[10px] text-[var(--muted)] mb-1">Gap antar post (menit):</div>
+                  <div className="flex items-center gap-2">
+                    <input type="number" min={0} step={5} value={dripGapMin} onChange={(e) => setDripGapMin(Math.max(0, parseInt(e.target.value || '0')))}
+                      className="w-24 text-xs px-2 py-1.5 rounded bg-[var(--surface)] border border-[var(--border)]" />
+                    <div className="flex gap-1">
+                      {[30, 60, 90, 180, 360].map((g) => (
+                        <button key={g} onClick={() => setDripGapMin(g)} type="button"
+                          className={`text-[10px] px-1.5 py-1 rounded ${dripGapMin === g ? 'bg-[var(--accent)] text-white' : 'bg-[var(--surface)] hover:bg-[var(--surface3)]'}`}>
+                          {g}m
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                <div className="text-[10px] text-[var(--muted2)]">
+                  Hasil: {plan.length} post tersebar dari {plan[0]?.scheduledFor ? new Date(plan[0].scheduledFor).toLocaleString() : '—'} sampai {plan[plan.length - 1]?.scheduledFor ? new Date(plan[plan.length - 1].scheduledFor).toLocaleString() : '—'} (×{targets.length} channel masing-masing).
+                </div>
+              </div>
+            )}
+
+            {mode === 'custom' && (
+              <div className="bg-[var(--surface2)]/40 border border-[var(--border)] rounded p-3 space-y-1.5 max-h-48 overflow-y-auto">
+                {results.map((r, i) => (
+                  <div key={r.id} className="flex items-center gap-2 text-xs">
+                    <div className="w-8 aspect-[9/16] rounded overflow-hidden bg-black flex-shrink-0">
+                      {r.type === 'video'
+                        ? <video src={r.url} muted preload="none" className="w-full h-full object-cover" />
+                        : <img src={r.url} alt="" loading="lazy" className="w-full h-full object-cover" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[10px] font-semibold truncate">#{i + 1} {r.label}</div>
+                    </div>
+                    <input type="datetime-local" value={customTimes[r.id] || ''}
+                      onChange={(e) => setCustomTimes((p) => ({ ...p, [r.id]: e.target.value }))}
+                      placeholder="now"
+                      className="text-[10px] px-2 py-1 rounded bg-[var(--surface)] border border-[var(--border)]" />
+                  </div>
+                ))}
+                <div className="text-[10px] text-[var(--muted2)] pt-1">Kosongin = post now untuk result tersebut.</div>
+              </div>
+            )}
+          </div>
+
+          {/* CAPTION */}
+          <div>
+            <div className="text-[10px] uppercase text-[var(--muted)] font-semibold mb-2">📝 Caption (shared)</div>
+            <textarea value={sharedCaption} onChange={(e) => setSharedCaption(e.target.value)} rows={2}
+              placeholder="Caption yang dipakai semua post (per-channel override gak available di bulk mode)"
+              className="w-full text-xs px-3 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] resize-y" />
+          </div>
+
+          {/* CHANNELS */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[10px] uppercase text-[var(--muted)] font-semibold">🪞 Mirror to channels ({targets.length} selected)</div>
+              {channels && channels.length > 0 && (
+                <button onClick={() => setSelectedChannelIds(new Set(channels.map((c) => String(c.id))))} type="button"
+                  className="text-[10px] text-[var(--muted)] underline hover:text-white">
+                  Select all channels
+                </button>
+              )}
+            </div>
+            {channelsLoading ? (
+              <div className="text-xs text-[var(--muted)] p-4 border border-dashed border-[var(--border)] rounded">⏳ Loading channels...</div>
+            ) : !channels || channels.length === 0 ? (
+              <div className="text-xs text-[var(--muted)] p-4 border border-dashed border-[var(--border)] rounded">
+                Belum ada channel. Buka <a href="/posting" className="underline text-[var(--accent)]">/posting</a> → Sync Channels.
+              </div>
+            ) : (
+              <div className="border border-[var(--border)] rounded bg-[var(--surface2)]/30 p-2 space-y-3 max-h-60 overflow-auto">
+                {platformKeys.map((plat) => {
+                  const chs = grouped[plat]
+                  const allSelected = chs.every((c) => selectedChannelIds.has(String(c.id)))
+                  return (
+                    <div key={plat}>
+                      <div className="flex items-center justify-between text-[10px] uppercase font-bold tracking-wider text-[var(--muted)] mb-1.5">
+                        <span>{plat} ({chs.length})</span>
+                        <button onClick={() => toggleGroup(chs)} type="button"
+                          className="text-[9px] underline hover:text-white">
+                          {allSelected ? 'Unselect all' : `Select all ${plat.toLowerCase()}`}
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
+                        {chs.map((c) => {
+                          const on = selectedChannelIds.has(String(c.id))
+                          return (
+                            <label key={c.id} className={`p-1.5 rounded text-xs cursor-pointer flex items-center gap-2 ${on ? 'bg-[var(--accent)]/20 border border-[var(--accent)]/50' : 'bg-[var(--surface)] border border-transparent hover:border-[var(--border)]'}`}>
+                              <input type="checkbox" checked={on} onChange={() => toggleChannel(c.id)} className="flex-shrink-0" />
+                              {c.avatar
+                                ? <img src={c.avatar} alt="" className="w-6 h-6 rounded-full object-cover flex-shrink-0" />
+                                : <div className="w-6 h-6 rounded-full bg-[var(--surface2)] flex-shrink-0" />}
+                              <div className="min-w-0 flex-1">
+                                <div className="font-semibold truncate">{c.name}</div>
+                                <div className="text-[9px] text-[var(--muted)] truncate flex items-center gap-1">
+                                  {c.username && <>@{c.username}</>}
+                                  {c.account_label && <span className="text-[var(--accent)]">· 📮 {c.account_label}</span>}
+                                </div>
+                              </div>
+                            </label>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* SUMMARY */}
+          <div className="bg-[var(--surface2)]/60 border border-[var(--border)] rounded p-3 text-xs">
+            <div className="font-bold text-sm mb-1">📊 Summary</div>
+            <div className="text-[var(--muted)]">
+              {results.length} result × {targets.length} channel = <b className="text-[var(--text)]">{totalPosts} total post</b>
+              {mode === 'drip' && plan.length > 1 && (
+                <> · tersebar selama <b className="text-[var(--text)]">{Math.round((plan.length - 1) * dripGapMin / 60 * 10) / 10}h</b></>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="px-6 py-4 border-t border-[var(--border)] flex justify-end gap-2 flex-shrink-0">
+          <button onClick={onClose} className="text-xs px-4 py-2 rounded text-[var(--muted)] hover:bg-[var(--surface2)]">Cancel</button>
+          <button onClick={submit} disabled={!canSubmit}
+            className="text-xs px-4 py-2 rounded bg-[var(--accent)] text-white font-semibold disabled:opacity-40 disabled:cursor-not-allowed">
+            {busy ? '⏳ Submitting...' : `🚀 Submit ${totalPosts} post`}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ModeButton({ on, onClick, children }) {
+  return (
+    <button onClick={onClick} type="button"
+      className={`text-xs px-3 py-1.5 rounded font-semibold ${on ? 'bg-[var(--accent)] text-white' : 'bg-[var(--surface2)] text-[var(--muted)] hover:bg-[var(--surface3)]'}`}>
+      {children}
+    </button>
   )
 }

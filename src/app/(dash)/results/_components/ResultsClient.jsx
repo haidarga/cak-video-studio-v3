@@ -116,8 +116,8 @@ function ResultCard({ result: r, onQC, onDelete }) {
     <div className="bg-[var(--surface)] border border-[var(--border)] rounded-lg overflow-hidden">
       <div className="relative aspect-[9/16] bg-[var(--surface2)]">
         {r.type === 'video'
-          ? <video src={r.url} controls muted loop playsInline className="w-full h-full object-cover" />
-          : <img src={r.url} alt={r.label} className="w-full h-full object-cover" />}
+          ? <video src={r.url} controls muted loop playsInline preload="none" className="w-full h-full object-cover" />
+          : <img src={r.url} alt={r.label} loading="lazy" className="w-full h-full object-cover" />}
         {r.qc_status && (
           <span className={`absolute top-2 right-2 px-1.5 py-0.5 rounded text-[9px] font-bold ${
             r.qc_status === 'approved' ? 'bg-green-500 text-white'

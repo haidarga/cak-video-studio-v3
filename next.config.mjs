@@ -1,6 +1,19 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Tree-shake heavy deps so unused exports don't bloat the client bundle.
+  // Biggest impact: @supabase/* import everything from index by default.
+  experimental: {
+    optimizePackageImports: [
+      '@supabase/ssr',
+      '@supabase/supabase-js',
+      '@fal-ai/client',
+    ],
+  },
+  compress: true,
+  // Skip ESLint during prod builds — keep lint as a separate `npm run lint`
+  // step so Vercel deploys aren't blocked by stylistic warnings.
+  eslint: { ignoreDuringBuilds: true },
   async headers() {
     return [
       {

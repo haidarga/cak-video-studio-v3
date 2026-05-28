@@ -9,9 +9,57 @@ import {
 import { imageCost, videoCost, fmtCost } from '@/lib/cost-table'
 import { STYLE_PRESETS, applyStylePreset } from '@/lib/style-presets'
 
-export default function GenerateClient({ workspaceId, userId, activeBrand, personas, workspaceRefs }) {
+export default function GenerateClient({ workspaceId, userId, activeBrand, personas: initialPersonas, workspaceRefs: initialRefs }) {
   const supabase = createClient()
+  // Mirror server-fetched data to local state so realtime can keep it fresh.
+  // Without this, mutations made elsewhere (other tab, /qc, /refs, persona
+  // edit) require a full page refresh to reflect — which is what the user
+  // was complaining about.
+  const [personas, setPersonas] = useState(initialPersonas)
+  const [workspaceRefs, setWorkspaceRefs] = useState(initialRefs)
   const [selectedIds, setSelectedIds] = useState(new Set())
+
+  // Realtime sync: any change to personas / refs / persona_refs (link table)
+  // for this workspace triggers a targeted refetch. Single channel covers all
+  // tables — cheap on the wire, no re-subscribe per route.
+  useEffect(() => {
+    if (!workspaceId) return
+    let pendingPersonas = null
+    let pendingRefs = null
+    function reloadPersonas() {
+      if (pendingPersonas) return
+      pendingPersonas = setTimeout(async () => {
+        pendingPersonas = null
+        const { data } = await supabase
+          .from('personas')
+          .select('id, name, username, avatar_url, role_label, postiz_channel_id, voice_id, voice_name, persona_refs(refs(id, fal_url, label, knowledge, kind))')
+          .eq('workspace_id', workspaceId).order('created_at', { ascending: false })
+        if (data) setPersonas(data)
+      }, 400)
+    }
+    function reloadRefs() {
+      if (pendingRefs) return
+      pendingRefs = setTimeout(async () => {
+        pendingRefs = null
+        const { data } = await supabase.from('refs')
+          .select('id, fal_url, label, knowledge, kind')
+          .eq('workspace_id', workspaceId).order('created_at', { ascending: false })
+        if (data) setWorkspaceRefs(data)
+      }, 400)
+    }
+    const ch = supabase.channel('gen-' + workspaceId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'personas', filter: `workspace_id=eq.${workspaceId}` }, reloadPersonas)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'refs', filter: `workspace_id=eq.${workspaceId}` }, reloadRefs)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'persona_refs' }, reloadPersonas)
+      .subscribe()
+    return () => {
+      supabase.removeChannel(ch)
+      if (pendingPersonas) { clearTimeout(pendingPersonas); pendingPersonas = null }
+      if (pendingRefs) { clearTimeout(pendingRefs); pendingRefs = null }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId])
+
   const [globalConfig, setGlobalConfig] = useState({
     mode: 'shots', ar: '9:16', lang: 'Indonesian',
     imgModel: IMAGE_MODELS[0].v, vidModel: VIDEO_MODELS[0].v,
@@ -347,6 +395,30 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
       }).select('id').single()
       if (error) throw error
       patchShot(idx, { video: { status: 'done', url: videoUrl, result_id: row.id } })
+
+      // Voice clone post-gen — if persona has a cloned voice, swap the AI native audio
+      // for the persona's voice via ElevenLabs Speech-to-Speech. Lip-sync preserved
+      // because S2S converts the same audio (same phonemes/timing, new timbre).
+      // Best-effort; failures don't break the video gen.
+      if (persona.voice_id) {
+        patchShot(idx, { video: { status: '🎙 voice clone...', url: videoUrl, result_id: row.id } })
+        try {
+          const r = await fetch('/api/voice/convert', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ video_url: videoUrl, voice_id: persona.voice_id, result_id: row.id }),
+          })
+          const j = await r.json()
+          if (j.ok) {
+            patchShot(idx, { video: { status: 'done', url: videoUrl, result_id: row.id, cloned_audio_url: j.audio_url } })
+          } else {
+            console.warn('voice convert skipped:', j.error)
+            patchShot(idx, { video: { status: 'done', url: videoUrl, result_id: row.id } })
+          }
+        } catch (e) {
+          console.warn('voice convert error:', e)
+          patchShot(idx, { video: { status: 'done', url: videoUrl, result_id: row.id } })
+        }
+      }
     } catch (e) {
       patchShot(idx, { video: { status: 'error', error: String(e?.message || e) } })
     }
@@ -555,9 +627,9 @@ function ShotEditor({ shot, idx, onChangeRaw, onGenImage, onGenVideo, onApprove,
         <div className="w-32 flex-shrink-0">
           <div className="aspect-[9/16] bg-black rounded overflow-hidden border border-[var(--border)] relative">
             {shot.video?.url ? (
-              <video src={shot.video.url} controls muted loop playsInline className="w-full h-full object-cover" />
+              <video src={shot.video.url} controls muted loop playsInline preload="none" className="w-full h-full object-cover" />
             ) : shot.image?.url ? (
-              <img src={shot.image.url} alt="" className="w-full h-full object-cover" />
+              <img src={shot.image.url} alt="" loading="lazy" className="w-full h-full object-cover" />
             ) : (
               <div className="w-full h-full flex items-center justify-center text-[10px] text-[var(--muted)] text-center p-2">
                 {imgStatus === 'idle' ? 'no image yet' : imgStatus}
@@ -696,9 +768,9 @@ function StoryboardEditor({ shot, idx, ar, onChangeRaw, onChangePanel, onGenImag
         <div>
           <div className={`${aspectClass} bg-black rounded overflow-hidden border border-[var(--border)] relative`}>
             {shot.video?.url ? (
-              <video src={shot.video.url} controls muted loop playsInline className="w-full h-full object-cover" />
+              <video src={shot.video.url} controls muted loop playsInline preload="none" className="w-full h-full object-cover" />
             ) : shot.image?.url ? (
-              <img src={shot.image.url} alt="" className="w-full h-full object-cover" />
+              <img src={shot.image.url} alt="" loading="lazy" className="w-full h-full object-cover" />
             ) : (
               <div className="w-full h-full flex items-center justify-center text-[10px] text-[var(--muted)] text-center p-2">
                 {imgStatus === 'idle' ? 'no grid yet — klik 🖼 Gen Grid' : imgStatus}
@@ -1009,12 +1081,31 @@ function StyleRefsPicker({ workspaceId, userId, selectedIds, onChange }) {
   useEffect(() => {
     if (!workspaceId) return
     setLoading(true)
-    supabase.from('refs')
-      .select('id, fal_url, label, knowledge, kind')
-      .eq('workspace_id', workspaceId)
-      .eq('kind', 'style')
-      .order('created_at', { ascending: false })
-      .then(({ data }) => { setRefs(data || []); setLoading(false) })
+    async function load() {
+      const { data, error } = await supabase.from('refs')
+        .select('id, fal_url, label, knowledge, kind')
+        .eq('workspace_id', workspaceId)
+        .eq('kind', 'style')
+        .order('created_at', { ascending: false })
+      if (error) {
+        // 400 dari sini berarti ref_kind enum belum punya 'style' value.
+        // Sebelum migration 0015 di-apply, fail gracefully — tampilin empty
+        // list bukannya throw. Migrasi enum: alter type ref_kind add value 'style'.
+        if (error.code === 'PGRST204' || /invalid input value for enum/i.test(error.message)) {
+          setErr('Style refs disabled — apply migration 0015_ref_kind_style.sql di Supabase SQL Editor.')
+        }
+        setRefs([])
+      } else {
+        setRefs(data || [])
+      }
+      setLoading(false)
+    }
+    load()
+    // Realtime sync: kalau user upload style ref atau hapus, list auto-update.
+    const ch = supabase.channel('styleref-' + workspaceId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'refs', filter: `workspace_id=eq.${workspaceId}` }, () => load())
+      .subscribe()
+    return () => { supabase.removeChannel(ch) }
   }, [workspaceId, supabase])
 
   function toggle(id) {

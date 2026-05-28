@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 
 const STATUSES = [
@@ -313,12 +313,9 @@ function PersonaGroup({ persona, items, busyUpload, onUpload, onSetStatus, onRem
         <div className="p-3 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
           {items.map((r) => (
             <QCCard key={r.id} result={r}
-              selected={selectedIds?.has(r.id)} onToggleSelect={() => onToggleSelect?.(r.id)}
-              onSetStatus={(s) => onSetStatus(r.id, s)}
-              onRemove={() => onRemove(r.id)}
-              onOpenNote={() => onOpenNote(r)}
-              onRename={(label) => onRename(r.id, label)}
-              onDeletePerma={() => onDeletePerma(r.id)} />
+              selected={selectedIds?.has(r.id)} onToggleSelect={onToggleSelect}
+              onSetStatus={onSetStatus} onRemove={onRemove} onOpenNote={onOpenNote}
+              onRename={onRename} onDeletePerma={onDeletePerma} />
           ))}
         </div>
       )}
@@ -326,7 +323,28 @@ function PersonaGroup({ persona, items, busyUpload, onUpload, onSetStatus, onRem
   )
 }
 
-function QCCard({ result: r, onSetStatus, onRemove, onOpenNote, onRename, onDeletePerma, selected, onToggleSelect }) {
+// Custom comparator — re-render only when the relevant card-visible state
+// changes, not when QCClient re-renders for unrelated reasons (e.g. another
+// card's selection toggled). The handler props are intentionally ignored
+// in the compare because parent re-creates them per render but their effect
+// is identical; the card's behaviour is fully driven by `r` + `selected`.
+function qcCardEqual(prev, next) {
+  if (prev.selected !== next.selected) return false
+  const a = prev.result, b = next.result
+  if (a === b) return true
+  return a.id === b.id
+    && a.url === b.url
+    && a.label === b.label
+    && a.qc_status === b.qc_status
+    && a.qc_notes === b.qc_notes
+    && a.type === b.type
+    && a.meta?.source === b.meta?.source
+}
+
+// memo'd: with 300 cards on the page, toggling one selected state was
+// re-rendering all 299 siblings. Now: only the card whose `r` or `selected`
+// actually changed re-renders.
+const QCCard = memo(function QCCard({ result: r, onSetStatus, onRemove, onOpenNote, onRename, onDeletePerma, selected, onToggleSelect }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(r.label || '')
   const statusCfg = STATUSES.find((s) => s.v === r.qc_status) || STATUSES[0]
@@ -334,13 +352,14 @@ function QCCard({ result: r, onSetStatus, onRemove, onOpenNote, onRename, onDele
     <div className={`bg-[var(--surface2)] border rounded overflow-hidden ${selected ? 'border-[var(--accent)] ring-2 ring-[var(--accent)]/50' : 'border-[var(--border)]'}`}>
       <div className="relative aspect-[9/16] bg-black">
         {r.type === 'video'
-          ? <video src={r.url} muted loop playsInline className="w-full h-full object-cover"
-              onMouseEnter={(e) => e.target.play().catch(()=>{})} onMouseLeave={(e) => e.target.pause()} />
-          : <img src={r.url} alt={r.label} className="w-full h-full object-cover" />}
+          ? <video src={r.url} muted loop playsInline preload="none" className="w-full h-full object-cover"
+              onMouseEnter={(e) => { e.target.preload = 'auto'; e.target.play().catch(()=>{}) }}
+              onMouseLeave={(e) => e.target.pause()} />
+          : <img src={r.url} alt={r.label} loading="lazy" className="w-full h-full object-cover" />}
         {/* Multi-select checkbox top-left, status badge top-right */}
         {onToggleSelect && (
           <label onClick={(e) => e.stopPropagation()} className="absolute top-1.5 left-1.5 cursor-pointer">
-            <input type="checkbox" checked={!!selected} onChange={onToggleSelect}
+            <input type="checkbox" checked={!!selected} onChange={() => onToggleSelect(r.id)}
               className="w-4 h-4 accent-[var(--accent)] cursor-pointer" />
           </label>
         )}
@@ -357,7 +376,7 @@ function QCCard({ result: r, onSetStatus, onRemove, onOpenNote, onRename, onDele
       <div className="p-2">
         {editing ? (
           <input value={label} onChange={(e) => setLabel(e.target.value)}
-            onBlur={() => { setEditing(false); if (label !== r.label) onRename(label) }}
+            onBlur={() => { setEditing(false); if (label !== r.label) onRename(r.id, label) }}
             onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur() }}
             autoFocus className="w-full text-xs px-1 py-0.5 rounded bg-[var(--surface)] border border-[var(--accent)]" />
         ) : (
@@ -368,24 +387,24 @@ function QCCard({ result: r, onSetStatus, onRemove, onOpenNote, onRename, onDele
         {r.qc_notes && (
           <div className="text-[10px] text-[var(--muted)] mt-1 line-clamp-2 italic">📝 {r.qc_notes}</div>
         )}
-        <select value={r.qc_status} onChange={(e) => onSetStatus(e.target.value)}
+        <select value={r.qc_status} onChange={(e) => onSetStatus(r.id, e.target.value)}
           className="mt-2 w-full text-[10px] px-1.5 py-1 rounded bg-[var(--surface)] border border-[var(--border)]">
           {STATUSES.map((s) => <option key={s.v} value={s.v}>{s.l}</option>)}
         </select>
         <div className="flex gap-1 mt-1.5">
-          <button onClick={onOpenNote} className="flex-1 text-[10px] px-1.5 py-1 rounded bg-[var(--surface)] hover:bg-[var(--border)]">
+          <button onClick={() => onOpenNote(r)} className="flex-1 text-[10px] px-1.5 py-1 rounded bg-[var(--surface)] hover:bg-[var(--border)]">
             {r.qc_notes ? '📝' : '+ note'}
           </button>
           {r.qc_status === 'approved' && (
             <a href="/scheduled" className="flex-1 text-[10px] px-1.5 py-1 rounded bg-green-500/20 hover:bg-green-500/30 text-green-300 text-center font-semibold">📅</a>
           )}
-          <button onClick={onRemove} title="Keluarin dari QC" className="text-[10px] px-1.5 py-1 rounded text-[var(--muted)] hover:bg-[var(--surface)]">✕</button>
-          <button onClick={onDeletePerma} title="Hapus permanen" className="text-[10px] px-1.5 py-1 rounded text-red-400 hover:bg-[var(--surface)]">🗑</button>
+          <button onClick={() => onRemove(r.id)} title="Keluarin dari QC" className="text-[10px] px-1.5 py-1 rounded text-[var(--muted)] hover:bg-[var(--surface)]">✕</button>
+          <button onClick={() => onDeletePerma(r.id)} title="Hapus permanen" className="text-[10px] px-1.5 py-1 rounded text-red-400 hover:bg-[var(--surface)]">🗑</button>
         </div>
       </div>
     </div>
   )
-}
+}, qcCardEqual)
 
 function NoteEditor({ result, onClose, onSave }) {
   const [notes, setNotes] = useState(result.qc_notes || '')

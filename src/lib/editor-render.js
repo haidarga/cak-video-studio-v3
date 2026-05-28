@@ -205,8 +205,16 @@ function audioClipFilter(c, label) {
   return `atrim=start=${c.src_in}:end=${c.src_out},asetpts=PTS-STARTPTS,${tempos.join(',')},volume=${vol.toFixed(2)}${label}`
 }
 
+// Collect clips whose audio should be replaced by a cloned voice track.
+// Each entry will get its own audio input (mp3) and replace the clip's native
+// audio at render time.
+function clipsWithClonedVoice(project) {
+  const all = project.video_clips || []
+  return all.filter((c) => c && c.cloned_audio_url && c.use_cloned_voice !== false)
+}
+
 // Build full filter_complex: base concat → overlays → image/text → audio mix
-function buildFilterGraph(project, canvasDims, musicInputIdx) {
+function buildFilterGraph(project, canvasDims, musicInputIdx, clonedAudioInputStartIdx) {
   const allClips = project.video_clips || []
   const base = baseTrackClips(allClips)
   const overlays = overlayClips(allClips)
@@ -215,6 +223,13 @@ function buildFilterGraph(project, canvasDims, musicInputIdx) {
 
   const lines = []
   const inputIdx = new Map() // clip.id -> input index dalam args ffmpeg
+  // Map: clip.id -> cloned-audio input index (if any)
+  const clonedAudioInput = new Map()
+  const voiced = clipsWithClonedVoice(project)
+  if (clonedAudioInputStartIdx != null) {
+    voiced.forEach((c, i) => clonedAudioInput.set(c.id, clonedAudioInputStartIdx + i))
+  }
+  function usesCloned(c) { return clonedAudioInput.has(c.id) }
 
   // Assign input indices: base clips first, then overlay clips
   base.forEach((c, i) => inputIdx.set(c.id, i))
@@ -323,19 +338,30 @@ function buildFilterGraph(project, canvasDims, musicInputIdx) {
 
   lines.push(`${currentLabel}copy[vout]`)
 
-  // 6) Audio: from BASE clips concat + overlay clips mixed in by their position
+  // 6) Audio: from BASE clips concat + overlay clips mixed by position + cloned voices
+  // Clips with use_cloned_voice get their native audio silenced (volume=0). The
+  // cloned audio is then mixed in separately as a delayed track at the clip's
+  // in_track position. Preserves all original timing — cloned voice IS the
+  // original audio converted, so lip-sync stays in sync.
   base.forEach((c) => {
     const idx = inputIdx.get(c.id)
-    lines.push(`[${idx}:a]${audioClipFilter(c, `[ba${idx}]`)}`)
+    if (usesCloned(c)) {
+      // Silenced native track preserves concat timing
+      lines.push(`[${idx}:a]${audioClipFilter({ ...c, volume: 0 }, `[ba${idx}]`)}`)
+    } else {
+      lines.push(`[${idx}:a]${audioClipFilter(c, `[ba${idx}]`)}`)
+    }
   })
   const baseAudioLabels = base.map((c) => `[ba${inputIdx.get(c.id)}]`).join('')
   lines.push(`${baseAudioLabels}concat=n=${base.length}:v=0:a=1[aseq]`)
 
-  // Each overlay audio: delayed to in_track + mixed with base
+  // Each overlay audio: delayed to in_track + mixed with base.
+  // Same silencing logic for overlays with cloned voice.
   let audioAcc = '[aseq]'
   overlays.forEach((c, i) => {
     const idx = inputIdx.get(c.id)
-    lines.push(`[${idx}:a]${audioClipFilter(c, `[ova${i}raw]`)}`)
+    const fc = usesCloned(c) ? { ...c, volume: 0 } : c
+    lines.push(`[${idx}:a]${audioClipFilter(fc, `[ova${i}raw]`)}`)
     const startMs = Math.round((c.in_track || 0) * 1000)
     lines.push(`[ova${i}raw]adelay=${startMs}|${startMs}[ova${i}]`)
     const out = `[amix${i}]`
@@ -343,12 +369,40 @@ function buildFilterGraph(project, canvasDims, musicInputIdx) {
     audioAcc = out
   })
 
-  // 7) Optional music underlay
+  // 6b) Cloned voice tracks — one per clip with use_cloned_voice. Each is
+  // delayed to the clip's in_track. They replace the silenced native audio.
+  voiced.forEach((c, i) => {
+    const idx = clonedAudioInput.get(c.id)
+    const startMs = Math.round((c.in_track || 0) * 1000)
+    const dur = clipDuration(c)
+    // Trim cloned audio to clip duration so a longer source doesn't bleed past
+    // the clip's slot (rare but possible if the convert returned padded output).
+    lines.push(`[${idx}:a]atrim=0:${dur.toFixed(3)},asetpts=PTS-STARTPTS,adelay=${startMs}|${startMs}[cv${i}]`)
+    const out = `[acv${i}]`
+    lines.push(`${audioAcc}[cv${i}]amix=inputs=2:duration=first:dropout_transition=0${out}`)
+    audioAcc = out
+  })
+
+  // 7) Optional music underlay — BGM with auto-duck when any cloned voice plays.
+  // Build a multiplicative duck expression: vol * Π duck_factor_during_voice_range.
   if (musicInputIdx !== null && (project.audio_clips || []).length > 0) {
     const a = project.audio_clips[0]
     const startMs = Math.round((a.start || 0) * 1000)
-    const vol = a.volume ?? 0.3
-    lines.push(`[${musicInputIdx}:a]adelay=${startMs}|${startMs},volume=${vol.toFixed(2)}[am]`)
+    const baseVol = (a.volume ?? 0.3)
+    const duckLevel = a.bgm_duck ?? 0.25  // 25% of base when ducked
+    // Build duck expression: 1*(if(between(t,s1,e1),duck/1,1))*(...)*...
+    // Multiply each ducking factor; default 1 (no duck) outside ranges.
+    let duckExpr = '1'
+    if (voiced.length > 0) {
+      const factors = voiced.map((c) => {
+        const s = (c.in_track || 0).toFixed(3)
+        const e = ((c.in_track || 0) + clipDuration(c)).toFixed(3)
+        return `if(between(t,${s},${e}),${duckLevel.toFixed(3)},1)`
+      })
+      duckExpr = factors.join('*')
+    }
+    // Compose: volume = baseVol * duckExpr
+    lines.push(`[${musicInputIdx}:a]adelay=${startMs}|${startMs},volume=${baseVol.toFixed(2)}*(${duckExpr}):eval=frame[am]`)
     lines.push(`${audioAcc}[am]amix=inputs=2:duration=first:dropout_transition=0[aout]`)
   } else {
     lines.push(`${audioAcc}anull[aout]`)
@@ -407,6 +461,19 @@ export async function renderWithFFmpeg(project, onProgress) {
     musicInputIdx = base.length + overlays.length + imageClips.length
   }
 
+  // Cloned voice tracks — one per clip with use_cloned_voice
+  const voiced = clipsWithClonedVoice(project)
+  let clonedAudioInputStartIdx = null
+  if (voiced.length > 0) {
+    const base0 = base.length + overlays.length + imageClips.length + (musicInputIdx !== null ? 1 : 0)
+    clonedAudioInputStartIdx = base0
+    for (let i = 0; i < voiced.length; i++) {
+      onProgress?.(`Download cloned voice ${i + 1}/${voiced.length}...`)
+      const bytes = await fetchToUint8(voiced[i].cloned_audio_url)
+      await ff.writeFile(`cv${i}.mp3`, bytes)
+    }
+  }
+
   const ar = project.ar || '9:16'
   const [W, H] = ar === '16:9' ? [1280, 720] : ar === '1:1' ? [1080, 1080] : [720, 1280]
 
@@ -421,7 +488,7 @@ export async function renderWithFFmpeg(project, onProgress) {
     }
   }
 
-  const { graph } = buildFilterGraph(project, [W, H], musicInputIdx)
+  const { graph } = buildFilterGraph(project, [W, H], musicInputIdx, clonedAudioInputStartIdx)
 
   const args = []
   for (let i = 0; i < base.length + overlays.length; i++) {
@@ -429,6 +496,7 @@ export async function renderWithFFmpeg(project, onProgress) {
   }
   imageClips.forEach((_, i) => args.push('-i', `img${i}.png`))
   if (musicInputIdx !== null) args.push('-i', 'music.mp3')
+  voiced.forEach((_, i) => args.push('-i', `cv${i}.mp3`))
   args.push(
     '-filter_complex', graph,
     '-map', '[vout]', '-map', '[aout]',
@@ -476,43 +544,70 @@ export async function renderWithCanvas(project, onProgress) {
     await new Promise((res, rej) => { musicEl.oncanplay = res; musicEl.onerror = () => rej(new Error('Music load failed')) })
   }
 
-  // Pre-load video elements per clip (base + overlay)
-  const baseVideos = await Promise.all(base.map(async (c) => {
+  // Pre-load video elements per clip (base + overlay).
+  // For clips with use_cloned_voice we also pre-load a cloned-audio element
+  // and mute the video — the cloned voice takes its place in the mix.
+  async function loadClipMedia(c) {
     const v = document.createElement('video')
-    v.src = c.src_url; v.crossOrigin = 'anonymous'; v.muted = false
+    v.src = c.src_url; v.crossOrigin = 'anonymous'
+    const wantsCloned = c.cloned_audio_url && c.use_cloned_voice !== false
+    v.muted = !!wantsCloned // mute native when cloned voice is in play
     v.playbackRate = c.speed || 1
     await new Promise((res, rej) => { v.onloadedmetadata = res; v.onerror = () => rej(new Error('Video load failed')) })
-    return v
-  }))
-  const overlayVideos = await Promise.all(overlays.map(async (c) => {
-    const v = document.createElement('video')
-    v.src = c.src_url; v.crossOrigin = 'anonymous'; v.muted = false
-    v.playbackRate = c.speed || 1
-    await new Promise((res, rej) => { v.onloadedmetadata = res; v.onerror = () => rej(new Error('Overlay video load failed')) })
-    return v
-  }))
+    let cloned = null
+    if (wantsCloned) {
+      cloned = document.createElement('audio')
+      cloned.src = c.cloned_audio_url; cloned.crossOrigin = 'anonymous'
+      cloned.preload = 'auto'
+      try { await new Promise((res, rej) => { cloned.oncanplay = res; cloned.onerror = () => rej(new Error('Cloned audio load failed')) }) } catch {}
+    }
+    return { v, cloned }
+  }
+  const baseMedia = await Promise.all(base.map(loadClipMedia))
+  const overlayMedia = await Promise.all(overlays.map(loadClipMedia))
+  const baseVideos = baseMedia.map((m) => m.v)
+  const overlayVideos = overlayMedia.map((m) => m.v)
 
   const stream = canvas.captureStream(30)
   const audioCtx = new (window.AudioContext || window.webkitAudioContext)()
   const dest = audioCtx.createMediaStreamDestination()
-  ;[...baseVideos, ...overlayVideos].forEach((v, i) => {
+  // Route each clip: cloned audio takes priority over native, gain set to clip.volume
+  function routeClipAudio(media, clip) {
     try {
-      const src = audioCtx.createMediaElementSource(v)
-      const gain = audioCtx.createGain()
-      const clip = i < baseVideos.length ? base[i] : overlays[i - baseVideos.length]
-      gain.gain.value = clip.volume ?? 1
-      src.connect(gain); gain.connect(dest)
-    } catch (e) { console.warn('audio src fail', e.message) }
-  })
+      if (media.cloned) {
+        const src = audioCtx.createMediaElementSource(media.cloned)
+        const gain = audioCtx.createGain()
+        gain.gain.value = clip.volume ?? 1
+        src.connect(gain); gain.connect(dest)
+      } else {
+        const src = audioCtx.createMediaElementSource(media.v)
+        const gain = audioCtx.createGain()
+        gain.gain.value = clip.volume ?? 1
+        src.connect(gain); gain.connect(dest)
+      }
+    } catch (e) { console.warn('audio route fail:', e.message) }
+  }
+  baseMedia.forEach((m, i) => routeClipAudio(m, base[i]))
+  overlayMedia.forEach((m, i) => routeClipAudio(m, overlays[i]))
+  let bgmGainNode = null
   if (musicEl) {
     try {
       const mSrc = audioCtx.createMediaElementSource(musicEl)
-      const mGain = audioCtx.createGain()
-      mGain.gain.value = firstAudio.volume ?? 0.3
-      mSrc.connect(mGain); mGain.connect(dest); mGain.connect(audioCtx.destination)
+      bgmGainNode = audioCtx.createGain()
+      bgmGainNode.gain.value = firstAudio.volume ?? 0.3
+      mSrc.connect(bgmGainNode); bgmGainNode.connect(dest); bgmGainNode.connect(audioCtx.destination)
     } catch (e) {}
   }
   dest.stream.getAudioTracks().forEach((t) => stream.addTrack(t))
+  const voiced = clipsWithClonedVoice(project)
+  function anyClonedVoiceActiveAt(t) {
+    return voiced.some((c) => {
+      const s = c.in_track || 0
+      return t >= s && t < s + clipDuration(c)
+    })
+  }
+  const bgmDuck = firstAudio?.bgm_duck ?? 0.25
+  const bgmBase = firstAudio?.volume ?? 0.3
 
   const mime = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
     .find((m) => MediaRecorder.isTypeSupported(m)) || 'video/webm'
@@ -529,6 +624,9 @@ export async function renderWithCanvas(project, onProgress) {
     overlayVideos[i].currentTime = overlays[i].src_in || 0
     await new Promise((res) => { overlayVideos[i].onseeked = res })
   }
+  // Cloned audio elements: rewind to 0
+  baseMedia.forEach((m) => { if (m.cloned) m.cloned.currentTime = 0 })
+  overlayMedia.forEach((m) => { if (m.cloned) m.cloned.currentTime = 0 })
   if (musicEl) musicEl.currentTime = 0
 
   const total = totalDuration(allClips)
@@ -554,10 +652,18 @@ export async function renderWithCanvas(project, onProgress) {
     if (baseInfo) {
       const bi = base.findIndex((c) => c.id === baseInfo.clip.id)
       if (bi !== activeBaseIdx) {
-        if (activeBaseIdx >= 0) baseVideos[activeBaseIdx].pause()
+        if (activeBaseIdx >= 0) {
+          baseVideos[activeBaseIdx].pause()
+          // Pause previously active cloned audio (if any)
+          const prev = baseMedia[activeBaseIdx]?.cloned
+          if (prev) prev.pause()
+        }
         activeBaseIdx = bi
         baseVideos[bi].currentTime = baseInfo.srcTime
         baseVideos[bi].play().catch(() => {})
+        // Start the cloned audio for this clip in sync with base srcTime
+        const cv = baseMedia[bi]?.cloned
+        if (cv) { cv.currentTime = baseInfo.srcTime; cv.play().catch(() => {}) }
       }
       const v = baseVideos[bi]
       const vw = v.videoWidth, vh = v.videoHeight
@@ -579,12 +685,20 @@ export async function renderWithCanvas(project, onProgress) {
       const end = start + clipDuration(c)
       if (elapsed < start || elapsed >= end) {
         if (!overlayVideos[i].paused) overlayVideos[i].pause()
+        const ocv = overlayMedia[i]?.cloned
+        if (ocv && !ocv.paused) ocv.pause()
         return
       }
       // Sync overlay video to its source time
       const desired = (c.src_in || 0) + (elapsed - start) * (c.speed || 1)
       if (Math.abs(overlayVideos[i].currentTime - desired) > 0.5) overlayVideos[i].currentTime = desired
       if (overlayVideos[i].paused) overlayVideos[i].play().catch(() => {})
+      // Cloned audio for overlay clip
+      const ocv = overlayMedia[i]?.cloned
+      if (ocv) {
+        if (Math.abs(ocv.currentTime - (elapsed - start)) > 0.5) ocv.currentTime = elapsed - start
+        if (ocv.paused) ocv.play().catch(() => {})
+      }
       const pos = c.position || { x_pct: 50, y_pct: 50, w_pct: 40, opacity: 1 }
       const ov = overlayVideos[i]
       if (ov.videoWidth > 0) {
@@ -661,9 +775,16 @@ export async function renderWithCanvas(project, onProgress) {
     const pct = Math.min(100, Math.round((elapsed / total) * 100))
     onProgress?.(`Recording ${pct}% (base ${activeBaseIdx + 1}/${base.length}, +${overlays.length} overlay)`)
 
+    // BGM auto-duck: drop gain when any cloned voice is active.
+    if (bgmGainNode) {
+      const ducking = anyClonedVoiceActiveAt(elapsed)
+      bgmGainNode.gain.value = bgmBase * (ducking ? bgmDuck : 1)
+    }
+
     if (elapsed >= total) {
       stop = true
       ;[...baseVideos, ...overlayVideos].forEach((v) => v.pause())
+      ;[...baseMedia, ...overlayMedia].forEach((m) => { if (m.cloned) m.cloned.pause() })
       if (musicEl) musicEl.pause()
       setTimeout(() => recorder.stop(), 100)
       return
