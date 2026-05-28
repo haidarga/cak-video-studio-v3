@@ -64,49 +64,94 @@ export default function PostingClient({ workspaceId, initialPersonas }) {
   // duplicate check happens inline via channelLinks.find.
 
   // Add a new channel link to a persona.
+  // Optimistic update: patch local state first, then INSERT to DB. If insert
+  // fails, roll back. This works even if realtime channel isn't firing (e.g.
+  // persona_channels not in supabase_realtime publication).
   async function addChannelLink(persona, channel) {
     setErr('')
     if (!channel?.id) return
-    const { error } = await supabase.from('persona_channels').insert({
+    const newRow = {
+      id: 'tmp-' + Math.random().toString(36).slice(2),
       persona_id: persona.id,
       postiz_account_id: channel.account_id || null,
       channel_id: String(channel.id),
       channel_label: channel.name,
       platform: channel.platform,
       username: channel.username,
-      is_default: persona.channelLinks.length === 0, // first link auto-default
-    })
+      is_default: persona.channelLinks.length === 0,
+    }
+    // Optimistic UI patch
+    setPersonas((prev) => prev.map((p) => p.id === persona.id
+      ? { ...p, persona_channels: [...(p.persona_channels || []), newRow] }
+      : p))
+    const { data, error } = await supabase.from('persona_channels').insert({
+      persona_id: newRow.persona_id,
+      postiz_account_id: newRow.postiz_account_id,
+      channel_id: newRow.channel_id,
+      channel_label: newRow.channel_label,
+      platform: newRow.platform,
+      username: newRow.username,
+      is_default: newRow.is_default,
+    }).select('id').single()
     if (error) {
-      // Humanize the unique-constraint violation when user tries to add a
-      // channel that's already linked to this same persona.
+      // Roll back optimistic insert
+      setPersonas((prev) => prev.map((p) => p.id === persona.id
+        ? { ...p, persona_channels: (p.persona_channels || []).filter((pc) => pc.id !== newRow.id) }
+        : p))
       if (error.code === '23505' || /duplicate key/i.test(error.message)) {
         setErr(`Channel "${channel.name}" udah ke-link ke ${persona.name}. Hapus dulu kalau mau re-link.`)
       } else {
         setErr(error.message)
       }
+      return
     }
+    // Swap temp id for real id
+    setPersonas((prev) => prev.map((p) => p.id === persona.id
+      ? { ...p, persona_channels: (p.persona_channels || []).map((pc) => pc.id === newRow.id ? { ...pc, id: data.id } : pc) }
+      : p))
   }
 
-  // Remove a single channel link.
+  // Remove a single channel link. Optimistic UI patch first; rollback on error.
   async function removeChannelLink(linkId) {
     setErr('')
+    // Snapshot for rollback
+    let removedFrom = null
+    let removedRow = null
+    setPersonas((prev) => prev.map((p) => {
+      const idx = (p.persona_channels || []).findIndex((pc) => pc.id === linkId)
+      if (idx < 0) return p
+      removedFrom = p.id
+      removedRow = p.persona_channels[idx]
+      return { ...p, persona_channels: p.persona_channels.filter((pc) => pc.id !== linkId) }
+    }))
     const { error } = await supabase.from('persona_channels').delete().eq('id', linkId)
-    if (error) setErr(error.message)
+    if (error) {
+      // Roll back
+      if (removedFrom && removedRow) {
+        setPersonas((prev) => prev.map((p) => p.id === removedFrom
+          ? { ...p, persona_channels: [...(p.persona_channels || []), removedRow] }
+          : p))
+      }
+      setErr(error.message)
+    }
   }
 
   // Set one channel as default (unsets others for the same persona).
   async function setDefaultChannel(persona, linkId) {
     setErr('')
+    // Optimistic UI patch
+    setPersonas((prev) => prev.map((p) => p.id === persona.id
+      ? { ...p, persona_channels: (p.persona_channels || []).map((pc) => ({ ...pc, is_default: pc.id === linkId })) }
+      : p))
     const personaLinkIds = (persona.channelLinks || []).map((l) => l.id)
-    // Unset all then set the chosen one
     if (personaLinkIds.length > 0) {
       const { error: e1 } = await supabase.from('persona_channels')
         .update({ is_default: false }).in('id', personaLinkIds)
-      if (e1) { setErr(e1.message); return }
+      if (e1) { setErr(e1.message); reloadPersonas(); return }
     }
     const { error: e2 } = await supabase.from('persona_channels')
       .update({ is_default: true }).eq('id', linkId)
-    if (e2) setErr(e2.message)
+    if (e2) { setErr(e2.message); reloadPersonas() }
   }
 
   const filtered = useMemo(() => {
