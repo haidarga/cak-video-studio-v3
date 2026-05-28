@@ -16,6 +16,46 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
   const [busyUpload, setBusyUpload] = useState(null) // { id, name, sizeMB, stage } while uploading
   const [filter, setFilter] = useState('all') // status filter
   const [err, setErr] = useState('')
+  const [selectedIds, setSelectedIds] = useState(new Set()) // multi-select untuk batch ops
+  const [batchBusy, setBatchBusy] = useState(false)
+
+  function toggleSelect(id) {
+    setSelectedIds((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
+  function selectAllVisible(visibleIds) {
+    setSelectedIds((s) => {
+      const allSel = visibleIds.every((id) => s.has(id))
+      const n = new Set(s)
+      visibleIds.forEach((id) => allSel ? n.delete(id) : n.add(id))
+      return n
+    })
+  }
+  async function batchSetStatus(status) {
+    if (selectedIds.size === 0) return
+    setBatchBusy(true); setErr('')
+    const ids = [...selectedIds]
+    const { error } = await supabase.from('results').update({ qc_status: status }).in('id', ids)
+    if (error) setErr(`Batch ${status}: ${error.message}`)
+    setSelectedIds(new Set())
+    setBatchBusy(false)
+  }
+  async function batchDelete() {
+    if (selectedIds.size === 0) return
+    if (!confirm(`Hapus ${selectedIds.size} result?`)) return
+    setBatchBusy(true); setErr('')
+    const { error } = await supabase.from('results').delete().in('id', [...selectedIds])
+    if (error) setErr(`Batch delete: ${error.message}`)
+    setSelectedIds(new Set())
+    setBatchBusy(false)
+  }
+  async function batchRemoveFromQC() {
+    if (selectedIds.size === 0) return
+    setBatchBusy(true); setErr('')
+    const { error } = await supabase.from('results').update({ qc_status: null, qc_notes: null }).in('id', [...selectedIds])
+    if (error) setErr(`Batch remove: ${error.message}`)
+    setSelectedIds(new Set())
+    setBatchBusy(false)
+  }
 
   useEffect(() => {
     const ch = supabase.channel('qc-' + workspaceId)
@@ -144,12 +184,53 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
 
       {err && <div className="mb-3 text-xs text-red-400 bg-red-900/20 border border-red-900/40 p-3 rounded">⚠ {err}</div>}
 
-      <div className="flex gap-2 mb-5 flex-wrap">
+      <div className="flex gap-2 mb-5 flex-wrap items-center">
         <FilterPill on={filter === 'all'} onClick={() => setFilter('all')} label={`Semua ${totalCounts.all}`} />
         {STATUSES.map((s) => (
           <FilterPill key={s.v} on={filter === s.v} onClick={() => setFilter(s.v)} label={`${s.l} ${totalCounts[s.v]}`} />
         ))}
+        {results.length > 0 && (
+          <button onClick={() => selectAllVisible(byPersona.flatMap(({ items }) => items.map((r) => r.id)))}
+            className="ml-auto text-xs px-3 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)]">
+            {selectedIds.size > 0 ? `Selected ${selectedIds.size} — Unselect all` : 'Select all visible'}
+          </button>
+        )}
       </div>
+
+      {/* Batch actions toolbar — sticky on top when selection active */}
+      {selectedIds.size > 0 && (
+        <div className="sticky top-0 z-30 mb-4 bg-[var(--accent)]/15 border border-[var(--accent)]/50 rounded p-2.5 flex items-center gap-2 flex-wrap">
+          <span className="text-xs font-bold text-[var(--accent)]">⚡ {selectedIds.size} selected</span>
+          <button onClick={() => batchSetStatus('approved')} disabled={batchBusy}
+            className="text-xs px-3 py-1 rounded bg-green-500 hover:bg-green-600 text-white font-bold disabled:opacity-50">
+            ✅ Approve all
+          </button>
+          <button onClick={() => batchSetStatus('rejected')} disabled={batchBusy}
+            className="text-xs px-3 py-1 rounded bg-red-500 hover:bg-red-600 text-white font-bold disabled:opacity-50">
+            ❌ Reject all
+          </button>
+          <button onClick={() => batchSetStatus('revise')} disabled={batchBusy}
+            className="text-xs px-3 py-1 rounded bg-orange-500 hover:bg-orange-600 text-white font-bold disabled:opacity-50">
+            🔁 Revise all
+          </button>
+          <button onClick={() => batchSetStatus('pending')} disabled={batchBusy}
+            className="text-xs px-3 py-1 rounded bg-blue-500 hover:bg-blue-600 text-white font-bold disabled:opacity-50">
+            ⏳ Re-review
+          </button>
+          <button onClick={batchRemoveFromQC} disabled={batchBusy}
+            className="text-xs px-3 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--border)] disabled:opacity-50">
+            Remove from QC
+          </button>
+          <button onClick={batchDelete} disabled={batchBusy}
+            className="text-xs px-3 py-1 rounded bg-red-900/40 border border-red-700/60 text-red-300 hover:bg-red-900/60 disabled:opacity-50">
+            🗑 Delete perma
+          </button>
+          <button onClick={() => setSelectedIds(new Set())} disabled={batchBusy}
+            className="text-xs px-2 py-1 ml-auto text-[var(--muted)] hover:text-white">
+            Cancel
+          </button>
+        </div>
+      )}
 
       <div className="space-y-6">
         {byPersona.map(({ persona, items }) => (
@@ -157,7 +238,8 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
             busyUpload={busyUpload?.id === persona?.id ? busyUpload : null}
             onUpload={(file) => persona && uploadExternal(persona, file)}
             onSetStatus={setStatus} onRemove={removeFromQC} onOpenNote={setOpenNote}
-            onRename={rename} onDeletePerma={deletePerma} />
+            onRename={rename} onDeletePerma={deletePerma}
+            selectedIds={selectedIds} onToggleSelect={toggleSelect} />
         ))}
 
         {byPersona.length === 0 && (
@@ -175,7 +257,7 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
   )
 }
 
-function PersonaGroup({ persona, items, busyUpload, onUpload, onSetStatus, onRemove, onOpenNote, onRename, onDeletePerma }) {
+function PersonaGroup({ persona, items, busyUpload, onUpload, onSetStatus, onRemove, onOpenNote, onRename, onDeletePerma, selectedIds, onToggleSelect }) {
   const fileRef = useRef(null)
   const counts = items.reduce((c, r) => ({ ...c, [r.qc_status]: (c[r.qc_status] || 0) + 1 }), {})
 
@@ -231,6 +313,7 @@ function PersonaGroup({ persona, items, busyUpload, onUpload, onSetStatus, onRem
         <div className="p-3 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
           {items.map((r) => (
             <QCCard key={r.id} result={r}
+              selected={selectedIds?.has(r.id)} onToggleSelect={() => onToggleSelect?.(r.id)}
               onSetStatus={(s) => onSetStatus(r.id, s)}
               onRemove={() => onRemove(r.id)}
               onOpenNote={() => onOpenNote(r)}
@@ -243,22 +326,32 @@ function PersonaGroup({ persona, items, busyUpload, onUpload, onSetStatus, onRem
   )
 }
 
-function QCCard({ result: r, onSetStatus, onRemove, onOpenNote, onRename, onDeletePerma }) {
+function QCCard({ result: r, onSetStatus, onRemove, onOpenNote, onRename, onDeletePerma, selected, onToggleSelect }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(r.label || '')
   const statusCfg = STATUSES.find((s) => s.v === r.qc_status) || STATUSES[0]
   return (
-    <div className="bg-[var(--surface2)] border border-[var(--border)] rounded overflow-hidden">
+    <div className={`bg-[var(--surface2)] border rounded overflow-hidden ${selected ? 'border-[var(--accent)] ring-2 ring-[var(--accent)]/50' : 'border-[var(--border)]'}`}>
       <div className="relative aspect-[9/16] bg-black">
         {r.type === 'video'
           ? <video src={r.url} muted loop playsInline className="w-full h-full object-cover"
               onMouseEnter={(e) => e.target.play().catch(()=>{})} onMouseLeave={(e) => e.target.pause()} />
           : <img src={r.url} alt={r.label} className="w-full h-full object-cover" />}
+        {/* Multi-select checkbox top-left, status badge top-right */}
+        {onToggleSelect && (
+          <label onClick={(e) => e.stopPropagation()} className="absolute top-1.5 left-1.5 cursor-pointer">
+            <input type="checkbox" checked={!!selected} onChange={onToggleSelect}
+              className="w-4 h-4 accent-[var(--accent)] cursor-pointer" />
+          </label>
+        )}
         <span className={`absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold border ${statusCfg.color}`}>
           {r.qc_status}
         </span>
         {r.meta?.source === 'external_upload' && (
-          <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded text-[8px] font-bold bg-purple-500/30 text-purple-200 border border-purple-500/40">📤 EXT</span>
+          <span className="absolute bottom-1.5 left-1.5 px-1.5 py-0.5 rounded text-[8px] font-bold bg-purple-500/30 text-purple-200 border border-purple-500/40">📤 EXT</span>
+        )}
+        {r.meta?.source === 'editor' && (
+          <span className="absolute bottom-1.5 left-1.5 px-1.5 py-0.5 rounded text-[8px] font-bold bg-cyan-500/30 text-cyan-200 border border-cyan-500/40">✂️ EDIT</span>
         )}
       </div>
       <div className="p-2">

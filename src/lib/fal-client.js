@@ -1,7 +1,7 @@
 // Browser-side fal helper that proxies through /api/fal/*. The FAL_KEY stays
 // on the server. submitRun returns once the fal job is COMPLETED (or throws).
 
-export async function falRun(model, input, { onProgress, maxWaitMs = 600000 } = {}) {
+export async function falRun(model, input, { onProgress, maxWaitMs = 600000, workspaceId, duration } = {}) {
   const submitRes = await fetch('/api/fal/submit', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model, input }),
@@ -23,7 +23,11 @@ export async function falRun(model, input, { onProgress, maxWaitMs = 600000 } = 
     if (s.status === 'COMPLETED') break
     if (s.status === 'FAILED' || s.status === 'ERROR') throw new Error(s.error?.message || s.error || 'fal job failed')
   }
-  const resultRes = await fetch(`/api/fal/result?model=${encodeURIComponent(model)}&request_id=${requestId}`, { cache: 'no-store' })
+  // Pass workspace_id + duration ke result endpoint biar usage logger bisa
+  // record cost dengan benar (per-second untuk video, flat untuk image)
+  const ws = workspaceId ? `&workspace_id=${workspaceId}` : ''
+  const dur = duration ? `&duration=${duration}` : ''
+  const resultRes = await fetch(`/api/fal/result?model=${encodeURIComponent(model)}&request_id=${requestId}${ws}${dur}`, { cache: 'no-store' })
   const r = await resultRes.json()
   if (!r.ok) throw new Error(r.error || 'result fetch failed')
   return r

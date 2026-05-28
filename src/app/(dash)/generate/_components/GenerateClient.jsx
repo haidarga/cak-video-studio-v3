@@ -6,6 +6,7 @@ import {
   buildStoryboardGridPrompt,
   IMG_QUALITY, VID_STABILITY, VIDEO_MODELS, IMAGE_MODELS,
 } from '@/lib/fal-client'
+import { imageCost, videoCost, fmtCost } from '@/lib/cost-table'
 
 export default function GenerateClient({ workspaceId, userId, activeBrand, personas, workspaceRefs }) {
   const supabase = createClient()
@@ -248,7 +249,7 @@ function PersonaSection({ persona, workspaceRefs, state, onPatch, globalConfig, 
         : (shot.raw.image_prompt || shot.raw.shot_label)
       const fullPrompt = `${basePrompt}. ${globalConfig.ar} composition. CONTINUITY: keep characters & product identical to references.${directive} ${IMG_QUALITY}`
       const imgInput = buildImgInput(globalConfig.imgModel, { prompt: fullPrompt, refUrls, ar: globalConfig.ar })
-      const imgResult = await falRun(globalConfig.imgModel, imgInput, { onProgress: (p) => patchShot(idx, { image: { status: p } }) })
+      const imgResult = await falRun(globalConfig.imgModel, imgInput, { onProgress: (p) => patchShot(idx, { image: { status: p } }), workspaceId })
       const imageUrl = imgResult.images?.[0]?.url
       if (!imageUrl) throw new Error('no image URL returned')
       patchShot(idx, { image: { status: 'done', url: imageUrl } })
@@ -282,7 +283,7 @@ function PersonaSection({ persona, workspaceRefs, state, onPatch, globalConfig, 
         prompt: motion, image_url: shot.image.url, reference_urls: refUrls,
         duration: shot.raw.duration || 5, aspect_ratio: globalConfig.ar,
       })
-      const vidResult = await falRun(globalConfig.vidModel, vidInput, { onProgress: (p) => patchShot(idx, { video: { status: p } }) })
+      const vidResult = await falRun(globalConfig.vidModel, vidInput, { onProgress: (p) => patchShot(idx, { video: { status: p } }), workspaceId, duration: shot.raw.duration || 5 })
       const videoUrl = vidResult.video?.url || vidResult.video
       if (!videoUrl) throw new Error('no video URL returned')
 
@@ -415,18 +416,28 @@ function PersonaSection({ persona, workspaceRefs, state, onPatch, globalConfig, 
             className="px-4 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] text-sm font-semibold hover:bg-[var(--border)] disabled:opacity-50">
             🤖 Parse with Gemini
           </button>
-          {state.shots.length > 0 && (
-            <button onClick={genAllImages} disabled={state.busy}
-              className="px-4 py-2 rounded bg-blue-500 text-white text-sm font-semibold hover:opacity-90 disabled:opacity-50">
-              🖼 Generate Images ({state.shots.length})
-            </button>
-          )}
-          {imageDoneCount > 0 && (
-            <button onClick={genVideosFromApproved} disabled={state.busy || !approvedCount}
-              className="px-4 py-2 rounded bg-[var(--accent)] text-white text-sm font-semibold hover:opacity-90 disabled:opacity-50">
-              🎬 Generate Videos ({approvedCount} approved)
-            </button>
-          )}
+          {state.shots.length > 0 && (() => {
+            const imgPending = state.shots.filter((s) => !s.image?.url).length
+            const estImg = imgPending * imageCost(globalConfig.imgModel)
+            return (
+              <button onClick={genAllImages} disabled={state.busy}
+                className="px-4 py-2 rounded bg-blue-500 text-white text-sm font-semibold hover:opacity-90 disabled:opacity-50">
+                🖼 Generate Images ({imgPending || state.shots.length})
+                <span className="ml-1.5 text-[10px] opacity-80">≈ {fmtCost(estImg)}</span>
+              </button>
+            )
+          })()}
+          {imageDoneCount > 0 && (() => {
+            const approvedShots = state.shots.filter((s) => s.approved && s.image?.url && s.video?.status !== 'done')
+            const estVid = approvedShots.reduce((sum, s) => sum + videoCost(globalConfig.vidModel, s.raw.duration || 5), 0)
+            return (
+              <button onClick={genVideosFromApproved} disabled={state.busy || !approvedCount}
+                className="px-4 py-2 rounded bg-[var(--accent)] text-white text-sm font-semibold hover:opacity-90 disabled:opacity-50">
+                🎬 Generate Videos ({approvedCount} approved)
+                {approvedCount > 0 && <span className="ml-1.5 text-[10px] opacity-80">≈ {fmtCost(estVid)}</span>}
+              </button>
+            )
+          })()}
         </div>
 
         {state.shots.length > 0 && (

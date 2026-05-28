@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import SignOutButton from './_components/SignOutButton'
 import ActiveBrandWidget from './_components/ActiveBrandWidget'
+import CostWidget from './_components/CostWidget'
 
 export default async function DashLayout({ children }) {
   const supabase = await createClient()
@@ -61,12 +62,15 @@ export default async function DashLayout({ children }) {
           <div className="text-sm font-bold">CAK Video</div>
           <div className="text-xs text-[var(--muted)] truncate">{activeWs?.name}</div>
         </div>
-        <div className="mb-4">
+        <div className="mb-3">
           <ActiveBrandWidget
             workspaceId={activeWs.id}
             activeBrandId={activeWs.active_brand_id}
             brands={brands || []}
           />
+        </div>
+        <div className="mb-4">
+          <CostWidget workspaceId={activeWs.id} />
         </div>
         <NavLink href="/generate" label="⚡ Generate" />
         <NavLink href="/qc" label="🧪 QC" />

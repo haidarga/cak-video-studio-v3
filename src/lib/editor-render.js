@@ -165,7 +165,7 @@ function buildFilterGraph(project, canvasDims, musicInputIdx) {
     currentLabel = out
   })
 
-  // 4) Text overlays
+  // 4) Text overlays — drawtext dengan alpha expr untuk fade animation
   ;(project.text_clips || []).forEach((c, i) => {
     const x = Math.round((c.x_pct / 100) * W)
     const y = Math.round((c.y_pct / 100) * H)
@@ -175,8 +175,16 @@ function buildFilterGraph(project, canvasDims, musicInputIdx) {
     const align = c.align || 'center'
     const xExpr = align === 'left' ? `${x}` : align === 'right' ? `${x}-text_w` : `${x}-text_w/2`
     const boxColor = c.bg && c.bg !== 'transparent' ? ':box=1:boxcolor=black@0.6:boxborderw=12' : ''
+    const start = (c.start || 0).toFixed(3)
+    const end = (c.end || 1).toFixed(3)
+    // Animation via fontcolor_expr: ramps alpha at start/end based on animation type
+    let alphaExpr = ''
+    if (c.animation === 'fade' || c.animation === 'pop') {
+      const animDur = 0.25
+      alphaExpr = `:alpha='if(between(t,${start},${end}), min(1, min((t-${start})/${animDur}, (${end}-t)/${animDur})), 0)'`
+    }
     const out = `[ot${i}]`
-    lines.push(`${currentLabel}drawtext=text='${txt}':fontcolor=0x${color}:fontsize=${fontSize}:x=${xExpr}:y=${y}-text_h/2${boxColor}:enable='between(t,${(c.start || 0).toFixed(3)},${(c.end || 1).toFixed(3)})'${out}`)
+    lines.push(`${currentLabel}drawtext=text='${txt}':fontcolor=0x${color}:fontsize=${fontSize}:x=${xExpr}:y=${y}-text_h/2${boxColor}${alphaExpr}:enable='between(t,${start},${end})'${out}`)
     currentLabel = out
   })
 
@@ -412,12 +420,28 @@ export async function renderWithCanvas(project, onProgress) {
       ctx.globalAlpha = 1
     })
 
-    // Text overlays
+    // Text overlays dengan animation (fade/pop)
     ;(project.text_clips || []).forEach((c) => {
       if (elapsed < c.start || elapsed > c.end) return
       const x = (c.x_pct / 100) * W
       const y = (c.y_pct / 100) * H
-      const fontSize = c.size * (W / 720)
+      let alpha = 1, scale = 1
+      const animDur = 0.25
+      if (c.animation === 'fade') {
+        const sinceStart = elapsed - c.start
+        const tillEnd = c.end - elapsed
+        if (sinceStart < animDur) alpha = sinceStart / animDur
+        else if (tillEnd < animDur) alpha = tillEnd / animDur
+      } else if (c.animation === 'pop') {
+        const sinceStart = elapsed - c.start
+        if (sinceStart < animDur) {
+          const p = sinceStart / animDur
+          scale = 0.5 + p * 0.5 + Math.sin(p * Math.PI) * 0.15
+          alpha = p
+        }
+      }
+      const fontSize = c.size * (W / 720) * scale
+      ctx.globalAlpha = alpha
       ctx.font = `${c.weight} ${fontSize}px system-ui, -apple-system, sans-serif`
       ctx.textAlign = c.align === 'left' ? 'left' : c.align === 'right' ? 'right' : 'center'
       ctx.textBaseline = 'middle'
@@ -436,6 +460,7 @@ export async function renderWithCanvas(project, onProgress) {
       ctx.fillStyle = c.color
       ctx.fillText(c.text, x, y)
       ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0
+      ctx.globalAlpha = 1
     })
 
     const pct = Math.min(100, Math.round((elapsed / total) * 100))

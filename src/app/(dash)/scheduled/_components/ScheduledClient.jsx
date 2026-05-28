@@ -30,6 +30,7 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
   const [err, setErr] = useState('')
   const [channels, setChannels] = useState(null)
   const [channelsLoading, setChannelsLoading] = useState(false)
+  const [view, setView] = useState('list') // 'list' | 'calendar'
 
   // Fetch Postiz channels sekali untuk mirror picker. Cached at component level.
   useEffect(() => {
@@ -171,11 +172,25 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
       )}
 
       <section>
-        <h2 className="text-[10px] uppercase font-semibold tracking-wider text-[var(--muted)] mb-3">Upcoming & Recent</h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-[10px] uppercase font-semibold tracking-wider text-[var(--muted)]">Upcoming & Recent ({scheduled.length})</h2>
+          <div className="flex gap-1">
+            <button onClick={() => setView('list')}
+              className={`text-xs px-3 py-1 rounded ${view === 'list' ? 'bg-[var(--accent)] text-white' : 'bg-[var(--surface2)] text-[var(--muted)]'}`}>
+              📋 List
+            </button>
+            <button onClick={() => setView('calendar')}
+              className={`text-xs px-3 py-1 rounded ${view === 'calendar' ? 'bg-[var(--accent)] text-white' : 'bg-[var(--surface2)] text-[var(--muted)]'}`}>
+              📅 Calendar
+            </button>
+          </div>
+        </div>
         {scheduled.length === 0 ? (
           <div className="text-sm text-[var(--muted)] p-10 border border-dashed border-[var(--border)] rounded-lg text-center">
             Belum ada scheduled post. Approved di QC, terus jadwalin di sini.
           </div>
+        ) : view === 'calendar' ? (
+          <CalendarView scheduled={scheduled} onClickItem={(sp) => setPicking(null)} />
         ) : (
           <div className="space-y-2">
             {[...grouped.upcoming, ...grouped.posted, ...grouped.failed, ...grouped.cancelled].map((s) => (
@@ -192,6 +207,77 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
           channels={channels} channelsLoading={channelsLoading}
           onSubmit={(t, c, targets) => schedule(picking, t, c, targets)} />
       )}
+    </div>
+  )
+}
+
+// Calendar grid view: shows posts grouped by day for the next 14 days + past 7
+function CalendarView({ scheduled, onClickItem }) {
+  // Build 21-day window: 7 past, today, 13 future
+  const today = useMemo(() => { const d = new Date(); d.setHours(0,0,0,0); return d }, [])
+  const days = useMemo(() => {
+    const arr = []
+    for (let i = -7; i < 14; i++) {
+      const d = new Date(today); d.setDate(d.getDate() + i)
+      arr.push(d)
+    }
+    return arr
+  }, [today])
+
+  const byDay = useMemo(() => {
+    const m = new Map()
+    days.forEach((d) => m.set(d.toDateString(), []))
+    scheduled.forEach((sp) => {
+      const dt = sp.scheduled_for ? new Date(sp.scheduled_for) : new Date(sp.created_at)
+      const key = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()).toDateString()
+      if (m.has(key)) m.get(key).push(sp)
+    })
+    return m
+  }, [days, scheduled])
+
+  const labels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+  return (
+    <div className="border border-[var(--border)] rounded overflow-hidden bg-[var(--surface)]">
+      <div className="grid grid-cols-7 border-b border-[var(--border)]">
+        {labels.map((l) => (
+          <div key={l} className="text-[10px] uppercase font-bold text-center py-2 text-[var(--muted)]">{l}</div>
+        ))}
+      </div>
+      <div className="grid grid-cols-7">
+        {days.map((d, i) => {
+          const items = byDay.get(d.toDateString()) || []
+          const isToday = d.toDateString() === today.toDateString()
+          const isPast = d < today
+          return (
+            <div key={i} className={`min-h-24 border-r border-b border-[var(--border)] p-1.5 ${isToday ? 'bg-[var(--accent)]/10' : ''} ${isPast ? 'opacity-60' : ''}`}>
+              <div className={`text-[10px] font-bold mb-1 ${isToday ? 'text-[var(--accent)]' : 'text-[var(--muted)]'}`}>
+                {d.getDate()}{isToday && ' · today'}
+              </div>
+              <div className="space-y-0.5">
+                {items.slice(0, 4).map((sp) => {
+                  const plat = (sp.target_platform || '').toLowerCase()
+                  const emoji = plat.includes('tiktok') ? '🎵' : plat.includes('instagram') ? '📷' : plat.includes('youtube') ? '▶️' : plat.includes('facebook') ? '👤' : '🌐'
+                  const color = sp.status === 'posted' ? 'bg-green-500/40 text-green-200'
+                    : sp.status === 'failed' ? 'bg-red-500/40 text-red-200'
+                    : sp.status === 'scheduled' ? 'bg-blue-500/40 text-blue-200'
+                    : sp.status === 'posting' ? 'bg-orange-500/40 text-orange-200'
+                    : 'bg-[var(--surface2)] text-[var(--muted)]'
+                  const time = sp.scheduled_for ? new Date(sp.scheduled_for).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'now'
+                  return (
+                    <div key={sp.id} className={`px-1 py-0.5 rounded text-[9px] truncate ${color}`} title={`${sp.results?.label || ''} → ${sp.personas?.name || ''}`}>
+                      {emoji} {time} · {(sp.results?.label || '').slice(0, 12)}
+                    </div>
+                  )
+                })}
+                {items.length > 4 && (
+                  <div className="text-[9px] text-[var(--muted2)]">+{items.length - 4} more</div>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }

@@ -176,6 +176,7 @@ export default function EditorClient({ workspaceId, userId, results, projects })
         size: 56, color: '#ffffff', weight: 900,
         bg: 'rgba(0,0,0,0.85)',
         align: 'center',
+        animation: 'fade',  // TikTok-style fade-in/out at boundaries
       }))
       patch((p) => ({ ...p, text_clips: [...p.text_clips, ...newClips] }))
       setTranscribeProgress(`✓ Generated ${newClips.length} subtitle clips dari clip 1 (${data.language || 'auto'})`)
@@ -488,15 +489,33 @@ export default function EditorClient({ workspaceId, userId, results, projects })
                 {project.text_clips.map((c) => {
                   if (currentTime < c.start || currentTime > c.end) return null
                   const on = selected?.kind === 'text' && selected.id === c.id
+                  // Compute fade opacity based on entrance/exit animation
+                  const animDur = 0.25
+                  let opacity = 1
+                  if (c.animation === 'fade') {
+                    const sinceStart = currentTime - c.start
+                    const tillEnd = c.end - currentTime
+                    if (sinceStart < animDur) opacity = sinceStart / animDur
+                    else if (tillEnd < animDur) opacity = tillEnd / animDur
+                  }
+                  let scale = 1
+                  if (c.animation === 'pop') {
+                    const sinceStart = currentTime - c.start
+                    if (sinceStart < animDur) {
+                      const p = sinceStart / animDur
+                      scale = 0.5 + p * 0.5 + Math.sin(p * Math.PI) * 0.15
+                    }
+                  }
                   return (
                     <div key={c.id} onClick={(e) => { e.stopPropagation(); setSelected({ kind: 'text', id: c.id }) }}
                       style={{
                         position: 'absolute', left: `${c.x_pct}%`, top: `${c.y_pct}%`,
-                        transform: 'translate(-50%, -50%)',
+                        transform: `translate(-50%, -50%) scale(${scale})`,
                         color: c.color, fontWeight: c.weight, fontSize: `${c.size * 0.4}px`,
                         background: c.bg, padding: '4px 10px', borderRadius: 4, textAlign: c.align, whiteSpace: 'pre', cursor: 'pointer',
                         textShadow: '0 1px 3px rgba(0,0,0,0.8)',
                         outline: on ? '2px solid var(--accent)' : 'none',
+                        opacity,
                       }}>{c.text}</div>
                   )
                 })}
@@ -813,6 +832,13 @@ function TextPanel({ clip, duration, onUpdate, onDelete }) {
           </select>
         </Field>
       </div>
+      <Field label="Animation">
+        <select value={clip.animation || 'none'} onChange={(e) => onUpdate({ animation: e.target.value === 'none' ? null : e.target.value })} className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)]">
+          <option value="none">None (static)</option>
+          <option value="fade">Fade in/out</option>
+          <option value="pop">Pop (scale + fade)</option>
+        </select>
+      </Field>
     </div>
   )
 }
