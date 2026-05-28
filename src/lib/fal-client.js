@@ -78,6 +78,18 @@ export function buildVidInput(vidModel, { prompt, image_url, reference_urls, dur
     const srcField = isRef ? { image_urls: (reference_urls || []).filter(Boolean).slice(0, 9) } : { image_url }
     return { prompt, ...srcField, duration: parseInt(duration) || 5, aspect_ratio, resolution: '720p' }
   }
+  if (vidModel.includes('grok-imagine')) {
+    // xAI Grok Imagine Video — image-to-video with audio. Cap at 15s per
+    // fal.ai schema. Resolution 720p ($0.07/s) — 480p ($0.05/s) available but
+    // we prefer quality. aspect_ratio='auto' lets the model infer from source.
+    return {
+      prompt,
+      image_url,
+      duration: Math.max(5, Math.min(15, parseInt(duration) || 5)),
+      resolution: '720p',
+      aspect_ratio: aspect_ratio || 'auto',
+    }
+  }
   return { prompt, image_url, duration: parseInt(duration) || 5, aspect_ratio }
 }
 
@@ -129,6 +141,7 @@ export const IMG_QUALITY = 'Professional high-detail photography, sharp focus, n
 export const VID_STABILITY = 'Keep the character identity, face, wardrobe and product appearance consistent and stable throughout; smooth, natural, continuous motion with steady framing.'
 
 export const VIDEO_MODELS = [
+  { v: 'xai/grok-imagine-video/image-to-video', l: 'Grok Imagine — ~$0.07/dtk 720p (audio) 💰' },
   { v: 'fal-ai/kling-video/v3/standard/image-to-video', l: 'Kling v3 — ~$0.08/dtk 💰' },
   { v: 'fal-ai/kling-video/o3/standard/image-to-video', l: 'Kling O3 — ~$0.11/dtk (audio)' },
   { v: 'alibaba/happy-horse/image-to-video', l: 'Happy Horse 1.0 — ~$0.14/dtk' },
