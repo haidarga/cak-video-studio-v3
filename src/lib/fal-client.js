@@ -83,9 +83,12 @@ export function buildVidInput(vidModel, { prompt, image_url, reference_urls, dur
 
 // Build the 3×3 storyboard grid prompt from structured panels.
 // Output asks the image model to render ONE storyboard sheet (header + 3x3
-// grid of cells, each cell with scene num, time range, photo, and 3 text
+// grid of cells, each cell with scene num, time range, photo, and text
 // blocks: Visual / Dialog / Keterangan), mirroring v2's PipelineTab logic.
-export function buildStoryboardGridPrompt(panels = [], ar = '9:16', concept = '') {
+//
+// constraints = { skipDialog, skipOnscreen, skipProduct } — gate optional text
+// rows so the grid matches user's stated intent (no dialog/text overlay/product).
+export function buildStoryboardGridPrompt(panels = [], ar = '9:16', concept = '', constraints = {}) {
   const nine = panels.slice(0, 9)
   let t = 0
   const cells = nine.map((p) => {
@@ -94,14 +97,24 @@ export function buildStoryboardGridPrompt(panels = [], ar = '9:16', concept = ''
     t += dur
     const lines = [`Scene ${p.n} (${range}) — ${(p.title || '').trim()}`]
     lines.push(`   Visual: ${(p.visual || p.scene || '').trim()}`)
-    if (p.dialog) lines.push(`   Dialog/VO: "${p.dialog.trim()}"`)
-    lines.push(`   Keterangan: ${(p.purpose || p.onscreen || '').trim()}`)
+    if (!constraints.skipDialog && p.dialog) lines.push(`   Dialog/VO: "${p.dialog.trim()}"`)
+    if (!constraints.skipOnscreen) lines.push(`   Keterangan: ${(p.purpose || p.onscreen || '').trim()}`)
     return lines.join('\n')
   }).join('\n')
   const header = (concept || 'STORYBOARD 3x3').trim().toUpperCase()
+  const productRule = constraints.skipProduct
+    ? 'NO product, NO brand packaging, NO logos anywhere in any cell. People only, lifestyle moments.'
+    : 'the SAME character(s) and product packaging CONSISTENT across all relevant cells.'
+  const labelList = constraints.skipDialog && constraints.skipOnscreen
+    ? '(Visual only)'
+    : constraints.skipDialog
+      ? '(Visual / Keterangan)'
+      : constraints.skipOnscreen
+        ? '(Visual / Dialog/VO)'
+        : '(Visual / Dialog/VO / Keterangan)'
   return `Design ONE professional STORYBOARD SHEET image — an ad-agency shot-breakdown TABLE — clean white background, ${ar} canvas.
-LAYOUT: header bar with the title "${header}". Below, a 3x3 GRID of 9 equal cells in 3 rows x 3 columns, thin grey table lines. Each cell top-to-bottom: scene number in a circle badge + time range in bold; a photographic still; a small white block with three labeled lines (Visual / Dialog/VO / Keterangan).
-HARD RULES: the SAME character(s) and product packaging CONSISTENT across all relevant cells. Cohesive lighting & color grade. Crisp, correctly-spelled, legible Indonesian text. No watermark.
+LAYOUT: header bar with the title "${header}". Below, a 3x3 GRID of 9 equal cells in 3 rows x 3 columns, thin grey table lines. Each cell top-to-bottom: scene number in a circle badge + time range in bold; a photographic still; a small white block with labeled lines ${labelList}.
+HARD RULES: ${productRule} Cohesive lighting & color grade. Crisp, correctly-spelled, legible Indonesian text. No watermark.
 THE 9 CELLS, in order (left to right, top to bottom):
 ${cells}`
 }

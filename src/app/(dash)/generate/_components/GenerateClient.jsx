@@ -64,6 +64,12 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
     mode: 'shots', ar: '9:16', lang: 'Indonesian',
     imgModel: IMAGE_MODELS[0].v, vidModel: VIDEO_MODELS[0].v,
     style: 'ugc',
+    // Output constraints — toggles per gen session. These override the
+    // parser's default scene breakdown + brand product injection.
+    continuousShot: false, // storyboard: 1 continuous take (no multi-scene language in vid prompt)
+    skipDialog: false,     // omit dialog/VO from vid prompt + storyboard grid
+    skipOnscreen: false,   // omit onscreen text from prompt + grid
+    skipProduct: false,    // bypass brand product injection in CTA panel
   })
 
   // Pick style — does NOT touch model selection (user controls model independently)
@@ -148,6 +154,22 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
             options={IMAGE_MODELS.map((m) => [m.v, m.l])} />
           <Sel label="Video Model" value={globalConfig.vidModel} onChange={(v) => setGlobalConfig({ ...globalConfig, vidModel: v })}
             options={VIDEO_MODELS.map((m) => [m.v, m.l])} />
+        </div>
+
+        {/* Output constraint toggles — overrides default parser/prompt behavior.
+            Especially relevant for storyboard mode where default = 9 multi-cut. */}
+        <div className="mt-3 pt-3 border-t border-[var(--border)]">
+          <div className="text-[10px] uppercase text-[var(--muted)] tracking-wider font-semibold mb-2">🎛 Output Constraints (untuk override default parser)</div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            <ToggleCard label="🎬 Continuous shot" sub="Video 1 take, no cuts (storyboard mode)" on={!!globalConfig.continuousShot}
+              onClick={() => setGlobalConfig({ ...globalConfig, continuousShot: !globalConfig.continuousShot })} />
+            <ToggleCard label="🔇 Skip dialog/VO" sub="No spoken lines in video" on={!!globalConfig.skipDialog}
+              onClick={() => setGlobalConfig({ ...globalConfig, skipDialog: !globalConfig.skipDialog })} />
+            <ToggleCard label="📝 Skip onscreen text" sub="No subtitle/caption overlay" on={!!globalConfig.skipOnscreen}
+              onClick={() => setGlobalConfig({ ...globalConfig, skipOnscreen: !globalConfig.skipOnscreen })} />
+            <ToggleCard label="🚫 Skip product" sub="No brand product in CTA panel" on={!!globalConfig.skipProduct}
+              onClick={() => setGlobalConfig({ ...globalConfig, skipProduct: !globalConfig.skipProduct })} />
+          </div>
         </div>
       </section>
 
@@ -273,6 +295,14 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
         body: JSON.stringify({
           naskah: state.naskah, lang: globalConfig.lang, mode: globalConfig.mode, ar: globalConfig.ar,
           refLabels, brand: activeBrand ? { notes: activeBrand.notes, config: activeBrand.config } : null,
+          // Honor output constraints — parser respects these instead of forcing
+          // dialog/onscreen/product into every panel.
+          constraints: {
+            continuousShot: !!globalConfig.continuousShot,
+            skipDialog: !!globalConfig.skipDialog,
+            skipOnscreen: !!globalConfig.skipOnscreen,
+            skipProduct: !!globalConfig.skipProduct,
+          },
         }),
       })
       const data = await res.json()
@@ -338,11 +368,17 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
       // Storyboard mode = ONE grid image built from all 9 panels.
       // Per-shot mode = single image from this shot's image_prompt.
       const rawPrompt = shot.raw.panels
-        ? buildStoryboardGridPrompt(shot.raw.panels, globalConfig.ar, shot.raw.concept)
+        ? buildStoryboardGridPrompt(shot.raw.panels, globalConfig.ar, shot.raw.concept, {
+            skipDialog: !!globalConfig.skipDialog,
+            skipOnscreen: !!globalConfig.skipOnscreen,
+            skipProduct: !!globalConfig.skipProduct,
+          })
         : (shot.raw.image_prompt || shot.raw.shot_label)
       // Apply style preset (UGC/animation/3D/cinematic_ad/short_movie/TVC/etc) for higher quality output
       const basePrompt = applyStylePreset(globalConfig.style, rawPrompt)
-      const fullPrompt = `${basePrompt}. ${globalConfig.ar} composition. CONTINUITY: keep characters & product identical to references.${directive} ${IMG_QUALITY}`
+      // Skip product directive when user opts out — avoids brand packaging injection.
+      const noProductHint = globalConfig.skipProduct ? ' NO product, NO brand packaging, NO logo, NO product CTA.' : ''
+      const fullPrompt = `${basePrompt}. ${globalConfig.ar} composition. CONTINUITY: keep characters identical to references.${globalConfig.skipProduct ? noProductHint : directive} ${IMG_QUALITY}`
       const imgInput = buildImgInput(globalConfig.imgModel, { prompt: fullPrompt, refUrls, ar: globalConfig.ar })
       const imgResult = await falRun(globalConfig.imgModel, imgInput, { onProgress: (p) => patchShot(idx, { image: { status: p } }), workspaceId })
       const imageUrl = imgResult.images?.[0]?.url
@@ -365,16 +401,41 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
 
       // Storyboard: dialogue = all panel dialogs concatenated; flows across 9 scenes.
       // Per-shot: dialogue = this shot's single line.
+      //
+      // CONTINUOUS SHOT MODE: when user enables `continuousShot`, revert to v2's
+      // minimal prompt — no "multi-scene / 9 panels" language, no dialog
+      // concatenation. Just video_motion + stability. Video model interprets the
+      // grid as one reference image and produces a continuous take instead of
+      // cutting between 9 scenes.
+      //
+      // The grid image is still used as start frame (carries the visual story),
+      // but the *prompt* no longer commands the model to "transition through 9
+      // distinct scenes" — that command was the cause of the cuts in v3.
       let motion
       if (shot.raw.panels) {
-        const allDialogs = shot.raw.panels.map((p) => p.dialog).filter(Boolean).join(' ')
-        const flow = shot.raw.video_motion || 'Smooth transitions through 9 storyboard scenes'
-        motion = allDialogs
-          ? `${flow}. Continuous multi-scene sequence flowing through 9 storyboard panels in order. The narrator/subjects speak naturally in ${globalConfig.lang}: "${allDialogs}". ${VID_STABILITY}`
-          : `${flow}. Continuous sequence through 9 storyboard panels. ${VID_STABILITY}`
+        const continuous = globalConfig.continuousShot
+        const allDialogs = (globalConfig.skipDialog
+          ? []
+          : shot.raw.panels.map((p) => p.dialog).filter(Boolean)).join(' ')
+
+        if (continuous) {
+          // v2-style minimal prompt — let the start frame (grid) carry the visual
+          // story; the prompt only adds motion/style direction.
+          const flow = (shot.raw.video_motion || 'Natural cinematic motion, smooth continuous take').replace(/9 (panels?|beats?|scenes?|storyboards?)/gi, '').replace(/multi-scene/gi, '')
+          motion = allDialogs && !globalConfig.skipDialog
+            ? `${flow}. Single continuous take, no cuts. The subject speaks in fluent native ${globalConfig.lang}: "${allDialogs}". ${VID_STABILITY}`
+            : `${flow}. Single continuous take, no cuts, no scene changes. ${VID_STABILITY}`
+        } else {
+          // Original multi-scene behaviour (still works fine if user wants distinct cuts).
+          const flow = shot.raw.video_motion || 'Smooth transitions through 9 storyboard scenes'
+          motion = allDialogs
+            ? `${flow}. Continuous multi-scene sequence flowing through 9 storyboard panels in order. The narrator/subjects speak naturally in ${globalConfig.lang}: "${allDialogs}". ${VID_STABILITY}`
+            : `${flow}. Continuous sequence through 9 storyboard panels. ${VID_STABILITY}`
+        }
       } else {
-        motion = shot.raw.dialogue
-          ? `${shot.raw.video_motion}. The subject speaks in fluent native ${globalConfig.lang}: "${shot.raw.dialogue}". ${VID_STABILITY}`
+        const dialogue = globalConfig.skipDialog ? null : shot.raw.dialogue
+        motion = dialogue
+          ? `${shot.raw.video_motion}. The subject speaks in fluent native ${globalConfig.lang}: "${dialogue}". ${VID_STABILITY}`
           : `${shot.raw.video_motion || 'Natural cinematic motion'}. ${VID_STABILITY}`
       }
       // Apply style preset to motion as well (animation style, cinematic, etc influence camera + render style)
@@ -1064,6 +1125,21 @@ function Sel({ label, value, onChange, options }) {
         {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
       </select>
     </div>
+  )
+}
+
+function ToggleCard({ label, sub, on, onClick }) {
+  return (
+    <button onClick={onClick} type="button"
+      className={`text-left p-2 rounded border transition-all ${on
+        ? 'border-[var(--accent)] bg-[var(--accent)]/15 ring-1 ring-[var(--accent)]'
+        : 'border-[var(--border)] bg-[var(--surface2)] hover:border-[var(--muted)]'}`}>
+      <div className="text-xs font-semibold flex items-center gap-1.5">
+        <span className={`text-[10px] ${on ? 'text-[var(--accent)]' : 'text-[var(--muted2)]'}`}>{on ? '✓' : '○'}</span>
+        {label}
+      </div>
+      {sub && <div className="text-[9px] text-[var(--muted2)] mt-0.5 line-clamp-2">{sub}</div>}
+    </button>
   )
 }
 
