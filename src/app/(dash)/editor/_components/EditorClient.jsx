@@ -1350,7 +1350,7 @@ function VideoClipPanel({ clip, isBase, isFirst, totalDur, onUpdate, onDelete, p
             </Field>
           </div>
           <Field label={`Width: ${clip.position.w_pct}%`}>
-            <LiveRange min={10} max={100} step={1} value={clip.position.w_pct} onCommit={(v) => updPos('w_pct', Math.round(v))} />
+            <LiveRange min={10} max={400} step={1} value={clip.position.w_pct} onCommit={(v) => updPos('w_pct', Math.round(v))} />
           </Field>
           <Field label={`Opacity: ${Math.round(clip.position.opacity * 100)}%`}>
             <LiveRange min={0} max={1} step={0.05} value={clip.position.opacity} onCommit={(v) => updPos('opacity', v)} />
@@ -1504,7 +1504,7 @@ function ImagePanel({ clip, duration, onUpdate, onDelete }) {
         <Field label={`X: ${clip.x_pct}%`}><LiveRange min={0} max={100} step={1} value={clip.x_pct} onCommit={(v) => onUpdate({ x_pct: Math.round(v) })} /></Field>
         <Field label={`Y: ${clip.y_pct}%`}><LiveRange min={0} max={100} step={1} value={clip.y_pct} onCommit={(v) => onUpdate({ y_pct: Math.round(v) })} /></Field>
       </div>
-      <Field label={`Width: ${clip.w_pct}%`}><LiveRange min={5} max={100} step={1} value={clip.w_pct} onCommit={(v) => onUpdate({ w_pct: Math.round(v) })} /></Field>
+      <Field label={`Width: ${clip.w_pct}%`}><LiveRange min={5} max={400} step={1} value={clip.w_pct} onCommit={(v) => onUpdate({ w_pct: Math.round(v) })} /></Field>
       <Field label={`Opacity: ${Math.round(clip.opacity * 100)}%`}><LiveRange min={0} max={1} step={0.05} value={clip.opacity} onCommit={(v) => onUpdate({ opacity: v })} /></Field>
     </div>
   )
