@@ -251,27 +251,37 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
     } catch (e) { setErr('Upload audio: ' + e.message) }
   }
 
-  async function autoSubtitle() {
+  async function autoSubtitle({ karaoke = false } = {}) {
     if (baseClips.length === 0) { setErr('Tambah base clip dulu'); return }
-    setTranscribing(true); setTranscribeProgress('Transcribing via Gemini...'); setErr('')
+    setTranscribing(true); setErr('')
+    pushHistory(project)
+    let allNewClips = []
     try {
-      const firstClip = baseClips[0]
-      const res = await fetch('/api/transcribe', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: firstClip.src_url }),
-      })
-      const data = await res.json()
-      if (!data.ok) throw new Error(data.error)
-      if (!data.segments?.length) { setTranscribeProgress('Gak ada speech ke-detect'); setTranscribing(false); return }
-      const offset = firstClip.in_track || 0
-      const newClips = data.segments.map((s) => ({
-        id: uid(), kind: 'text', text: s.text.toUpperCase(),
-        start: offset + s.start, end: offset + s.end,
-        x_pct: 50, y_pct: 75, size: 56, color: '#ffffff', weight: 900,
-        bg: 'rgba(0,0,0,0.85)', align: 'center', animation: 'fade',
-      }))
-      patch((p) => ({ ...p, text_clips: [...p.text_clips, ...newClips] }))
-      setTranscribeProgress(`✓ Generated ${newClips.length} subtitle clips dari clip 1`)
+      // Iterate ALL base clips — transcribe per clip + offset segments by clip's in_track
+      for (let i = 0; i < baseClips.length; i++) {
+        const clip = baseClips[i]
+        setTranscribeProgress(`Transcribing clip ${i + 1}/${baseClips.length}...`)
+        const res = await fetch('/api/transcribe', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'x-word-level': karaoke ? 'true' : 'false' },
+          body: JSON.stringify({ url: clip.src_url }),
+        })
+        const data = await res.json()
+        if (!data.ok) throw new Error(`Clip ${i + 1}: ${data.error}`)
+        if (!data.segments?.length) continue
+        const offset = clip.in_track || 0
+        const clipsForThis = data.segments.map((s) => ({
+          id: uid(), kind: 'text', text: s.text.toUpperCase(),
+          start: offset + s.start, end: offset + s.end,
+          x_pct: 50, y_pct: 75, size: 56, color: '#ffffff', weight: 900,
+          bg: 'rgba(0,0,0,0.85)', align: 'center',
+          animation: karaoke ? 'karaoke' : 'fade',
+          // Karaoke: per-word data for highlight
+          words: karaoke && s.words ? s.words.map((w) => ({ ...w, start: offset + w.start, end: offset + w.end })) : null,
+        }))
+        allNewClips.push(...clipsForThis)
+      }
+      patch((p) => ({ ...p, text_clips: [...p.text_clips, ...allNewClips] }))
+      setTranscribeProgress(`✓ Generated ${allNewClips.length} subtitle clips dari ${baseClips.length} base clip${baseClips.length > 1 ? 's' : ''}${karaoke ? ' (karaoke)' : ''}`)
     } catch (e) { setErr(`Auto-subtitle gagal: ${e.message}`); setTranscribeProgress('') }
     setTranscribing(false)
   }
@@ -605,9 +615,13 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
 
           <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-2 space-y-1">
             <div className="text-[10px] uppercase font-semibold text-[var(--muted)] mb-1">+ Overlay & audio</div>
-            <button onClick={autoSubtitle} disabled={transcribing || baseClips.length === 0}
+            <button onClick={() => autoSubtitle({ karaoke: false })} disabled={transcribing || baseClips.length === 0}
               className="w-full text-xs px-2 py-1.5 rounded bg-gradient-to-r from-pink-500 to-purple-500 hover:opacity-90 text-white font-bold disabled:opacity-50">
-              {transcribing ? '⏳ Transcribing...' : '✨ Auto-subtitle (Gemini)'}
+              {transcribing ? '⏳ Transcribing...' : `✨ Auto-subtitle (${baseClips.length} clip)`}
+            </button>
+            <button onClick={() => autoSubtitle({ karaoke: true })} disabled={transcribing || baseClips.length === 0}
+              className="w-full text-xs px-2 py-1.5 rounded bg-gradient-to-r from-yellow-400 to-pink-500 hover:opacity-90 text-white font-bold disabled:opacity-50">
+              🎤 Karaoke subtitle (word-level)
             </button>
             <button onClick={applyTikTokStyle} disabled={!project.text_clips.length}
               className="w-full text-xs px-2 py-1.5 rounded bg-pink-500/20 border border-pink-500/40 hover:bg-pink-500/30 text-pink-200 disabled:opacity-50">
@@ -687,7 +701,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                   )
                 })}
 
-                {/* Text overlays */}
+                {/* Text overlays — supports fade, pop, karaoke (word-level highlight) */}
                 {project.text_clips.map((c) => {
                   if (currentTime < c.start || currentTime > c.end) return null
                   const on = selected?.kind === 'text' && selected.id === c.id
@@ -706,6 +720,8 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                       opacity = p
                     }
                   }
+                  // Karaoke: highlight current word(s) in different color
+                  const isKaraoke = c.animation === 'karaoke' && Array.isArray(c.words) && c.words.length > 0
                   return (
                     <div key={c.id} onClick={(e) => { e.stopPropagation(); setSelected({ kind: 'text', id: c.id }) }}
                       style={{
@@ -715,7 +731,16 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                         background: c.bg, padding: '4px 10px', borderRadius: 4, textAlign: c.align, whiteSpace: 'pre', cursor: 'pointer',
                         textShadow: '0 1px 3px rgba(0,0,0,0.8)', outline: on ? '2px solid var(--accent)' : 'none',
                         opacity, zIndex: 100,
-                      }}>{c.text}</div>
+                      }}>
+                      {isKaraoke ? c.words.map((w, i) => {
+                        const active = currentTime >= w.start && currentTime <= w.end
+                        return (
+                          <span key={i} style={{ color: active ? '#fbbf24' : c.color, transition: 'color 0.05s' }}>
+                            {w.word}{i < c.words.length - 1 ? ' ' : ''}
+                          </span>
+                        )
+                      }) : c.text}
+                    </div>
                   )
                 })}
 

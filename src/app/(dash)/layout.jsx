@@ -6,6 +6,7 @@ import SignOutButton from './_components/SignOutButton'
 import ActiveBrandWidget from './_components/ActiveBrandWidget'
 import CostWidget from './_components/CostWidget'
 import GlobalSearch from './_components/GlobalSearch'
+import HelpModal from './_components/HelpModal'
 
 export default async function DashLayout({ children }) {
   const supabase = await createClient()
@@ -79,6 +80,7 @@ export default async function DashLayout({ children }) {
         <NavLink href="/scheduled" label="📅 Scheduled" />
         <NavLink href="/posting" label="📮 Posting" />
         <NavLink href="/dashboard" label="📊 Dashboard" />
+        <NavLink href="/team" label="👥 Team" />
         <div className="text-[9px] uppercase text-[var(--muted2)] font-bold tracking-wider mt-4 mb-1 px-3">Library</div>
         <NavLink href="/brands" label="🏷 Brands" />
         <NavLink href="/personas" label="🎭 Personas" />
@@ -93,6 +95,7 @@ export default async function DashLayout({ children }) {
       </aside>
       <main className="flex-1 p-8 overflow-y-auto">{children}</main>
       <GlobalSearch workspaceId={activeWs.id} />
+      <HelpModal />
     </div>
   )
 }
