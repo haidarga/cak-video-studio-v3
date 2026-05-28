@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 // Workspace API keys management. Never displays the actual key values —
 // only whether they're set. User types a new value to overwrite, empty to clear.
@@ -10,6 +10,71 @@ export default function SettingsClient({ initialStatus, initialBudget }) {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
+
+  // Postiz accounts state — N akun per workspace (multi-instance support).
+  const [accounts, setAccounts] = useState([])
+  const [acctLoading, setAcctLoading] = useState(true)
+  const [newAcct, setNewAcct] = useState({ label: '', url: '', api_key: '' })
+  const [editingAcct, setEditingAcct] = useState(null) // { id, label, url, api_key }
+
+  async function loadAccounts() {
+    setAcctLoading(true)
+    try {
+      const r = await fetch('/api/workspace/postiz-accounts')
+      const j = await r.json()
+      if (j.ok) setAccounts(j.accounts || [])
+    } catch (e) { setErr('Load accounts: ' + e.message) }
+    setAcctLoading(false)
+  }
+  useEffect(() => { loadAccounts() }, [])
+
+  async function addAccount() {
+    if (!newAcct.url.trim() || !newAcct.api_key.trim()) { setErr('URL + API key wajib'); return }
+    setBusy(true); setMsg(''); setErr('')
+    try {
+      const r = await fetch('/api/workspace/postiz-accounts', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newAcct),
+      })
+      const j = await r.json()
+      if (!j.ok) throw new Error(j.error)
+      setNewAcct({ label: '', url: '', api_key: '' })
+      await loadAccounts()
+      setMsg('Postiz account ditambahin ✓'); setTimeout(() => setMsg(''), 2500)
+    } catch (e) { setErr(e.message) }
+    setBusy(false)
+  }
+  async function saveAcctEdit() {
+    if (!editingAcct) return
+    setBusy(true); setMsg(''); setErr('')
+    try {
+      const body = { id: editingAcct.id, label: editingAcct.label, url: editingAcct.url }
+      if (editingAcct.api_key) body.api_key = editingAcct.api_key
+      const r = await fetch('/api/workspace/postiz-accounts', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      })
+      const j = await r.json()
+      if (!j.ok) throw new Error(j.error)
+      setEditingAcct(null)
+      await loadAccounts()
+      setMsg('Updated ✓'); setTimeout(() => setMsg(''), 2500)
+    } catch (e) { setErr(e.message) }
+    setBusy(false)
+  }
+  async function deleteAccount(id, label) {
+    if (!confirm(`Hapus Postiz account "${label}"? Personas yang ke-link bakal kehilangan channel routing-nya.`)) return
+    setBusy(true); setMsg(''); setErr('')
+    try {
+      const r = await fetch('/api/workspace/postiz-accounts', {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }),
+      })
+      const j = await r.json()
+      if (!j.ok) throw new Error(j.error)
+      await loadAccounts()
+      setMsg('Deleted ✓'); setTimeout(() => setMsg(''), 2500)
+    } catch (e) { setErr(e.message) }
+    setBusy(false)
+  }
 
   async function saveBudget() {
     setBusy(true); setMsg(''); setErr('')
@@ -129,25 +194,62 @@ export default function SettingsClient({ initialStatus, initialBudget }) {
         </div>
 
         <div className="pt-3 border-t border-[var(--border)]">
-          <div className="text-xs font-semibold mb-2">📮 Postiz (multi-channel publish)</div>
-          <div className="space-y-2">
-            <input value={keys.postiz_url} onChange={(e) => patch('postiz_url', e.target.value)}
-              placeholder="https://your-postiz-instance.com"
-              className="w-full text-sm px-3 py-2 rounded bg-[var(--surface2)] border border-[var(--border)]" />
-            <input type="password" value={keys.postiz_key} onChange={(e) => patch('postiz_key', e.target.value)}
-              placeholder={status.has_postiz ? '••••••••' : 'Postiz API key'}
-              className="w-full text-sm px-3 py-2 rounded bg-[var(--surface2)] border border-[var(--border)]" />
-            <div className="flex gap-2">
-              <button onClick={() => save()} disabled={busy} className="text-xs px-3 py-1.5 rounded bg-[var(--accent)] text-white font-semibold disabled:opacity-50">
-                Save Postiz
-              </button>
-              {status.has_postiz && (
-                <button onClick={() => clearKey('postiz_key')} disabled={busy} className="text-xs px-3 py-1.5 rounded text-red-400 border border-[var(--border)]">
-                  Clear
-                </button>
-              )}
-              <span className="text-xs text-[var(--muted)] self-center">Status: {status.has_postiz ? '✓ Set' : '❌ Not set'}</span>
+          <div className="text-xs font-semibold mb-1 flex items-center gap-2">
+            📮 Postiz Accounts
+            <span className="text-[9px] font-normal text-[var(--muted2)]">multi-instance (1 workspace bisa nyambung ke N Postiz)</span>
+          </div>
+          <div className="text-[10px] text-[var(--muted2)] mb-2">
+            Tiap Postiz instance = 1 row. Label-in (misal "IG Postiz", "TikTok Postiz") biar pas pilih channel di Mirror tau yang mana. Persona yang lu link ke channel otomatis pakai creds account ini.
+          </div>
+
+          {/* Existing accounts list */}
+          {acctLoading ? (
+            <div className="text-xs text-[var(--muted)] py-2">Loading...</div>
+          ) : accounts.length === 0 ? (
+            <div className="text-xs text-[var(--muted)] py-3 px-3 border border-dashed border-[var(--border)] rounded">Belum ada Postiz account. Tambahin di bawah ⬇</div>
+          ) : (
+            <div className="space-y-2 mb-3">
+              {accounts.map((a) => editingAcct?.id === a.id ? (
+                <div key={a.id} className="p-3 rounded bg-[var(--surface2)] border border-[var(--accent)] space-y-1.5">
+                  <input value={editingAcct.label} onChange={(e) => setEditingAcct({ ...editingAcct, label: e.target.value })} placeholder="Label" className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface)] border border-[var(--border)]" />
+                  <input value={editingAcct.url} onChange={(e) => setEditingAcct({ ...editingAcct, url: e.target.value })} placeholder="https://..." className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface)] border border-[var(--border)] font-mono" />
+                  <input type="password" value={editingAcct.api_key || ''} onChange={(e) => setEditingAcct({ ...editingAcct, api_key: e.target.value })} placeholder="•••••••• (kosongin = keep)" className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface)] border border-[var(--border)] font-mono" />
+                  <div className="flex gap-1.5">
+                    <button onClick={saveAcctEdit} disabled={busy} className="text-[10px] px-2 py-1 rounded bg-[var(--accent)] text-white font-semibold disabled:opacity-50">Save</button>
+                    <button onClick={() => setEditingAcct(null)} className="text-[10px] px-2 py-1 rounded text-[var(--muted)] hover:bg-[var(--surface3)]">Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <div key={a.id} className="p-2 rounded bg-[var(--surface2)] border border-[var(--border)] flex items-center justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-semibold flex items-center gap-1.5">
+                      📮 {a.label} <span className="text-[9px] text-green-400">{a.has_key ? '✓ Set' : '⚠ Missing key'}</span>
+                    </div>
+                    <div className="text-[10px] text-[var(--muted)] font-mono truncate">{a.url}</div>
+                  </div>
+                  <button onClick={() => setEditingAcct({ id: a.id, label: a.label, url: a.url, api_key: '' })} className="text-[10px] px-2 py-1 rounded bg-[var(--surface3)] hover:bg-[var(--surface)]">Edit</button>
+                  <button onClick={() => deleteAccount(a.id, a.label)} className="text-[10px] px-2 py-1 rounded text-red-400 border border-[var(--border)] hover:bg-red-900/20">✕</button>
+                </div>
+              ))}
             </div>
+          )}
+
+          {/* Add form */}
+          <div className="p-3 rounded bg-[var(--surface2)]/30 border border-dashed border-[var(--border)] space-y-1.5">
+            <div className="text-[10px] uppercase font-semibold text-[var(--muted)]">+ Tambah Postiz account</div>
+            <input value={newAcct.label} onChange={(e) => setNewAcct({ ...newAcct, label: e.target.value })}
+              placeholder='Label (misal "IG Postiz")'
+              className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface)] border border-[var(--border)]" />
+            <input value={newAcct.url} onChange={(e) => setNewAcct({ ...newAcct, url: e.target.value })}
+              placeholder="https://your-postiz-or-proxy-url"
+              className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface)] border border-[var(--border)] font-mono" />
+            <input type="password" value={newAcct.api_key} onChange={(e) => setNewAcct({ ...newAcct, api_key: e.target.value })}
+              placeholder="Postiz API key"
+              className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface)] border border-[var(--border)] font-mono" />
+            <button onClick={addAccount} disabled={busy || !newAcct.url || !newAcct.api_key}
+              className="text-xs px-3 py-1.5 rounded bg-[var(--accent)] text-white font-semibold disabled:opacity-40">
+              + Tambah
+            </button>
           </div>
         </div>
       </section>

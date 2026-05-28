@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { getPostizPost, getPostizIntegration } from '@/lib/postiz'
+import { getActiveWorkspace } from '@/lib/workspace'
 
 // GET /api/postiz/check?scheduled_post_id=xxx
 // Re-queries Postiz to find the CURRENT state of a post (QUEUE/PUBLISHED/ERROR)
@@ -19,7 +21,7 @@ export async function GET(req) {
   // Pull our row to get external_id (postiz postId) + channel id
   const { data: sp, error } = await supabase
     .from('scheduled_posts')
-    .select('id, external_id, external_response, status, personas(postiz_channel_id, postiz_platform)')
+    .select('id, workspace_id, external_id, external_response, status, target_postiz_account_id, personas(postiz_channel_id, postiz_platform, postiz_account_id)')
     .eq('id', scheduledPostId).single()
   if (error || !sp) return NextResponse.json({ ok: false, error: 'scheduled post not found' }, { status: 404 })
 
@@ -32,9 +34,25 @@ export async function GET(req) {
 
   const integrationId = sp.personas?.postiz_channel_id
 
+  // Resolve creds — per-row override else persona's account else workspace's first.
+  const accountId = sp.target_postiz_account_id || sp.personas?.postiz_account_id
+  const admin = createAdminClient()
+  let credsRow
+  if (accountId) {
+    const { data } = await admin.from('postiz_accounts').select('url, api_key').eq('id', accountId).maybeSingle()
+    credsRow = data
+  }
+  if (!credsRow) {
+    const { data } = await admin.from('postiz_accounts').select('url, api_key')
+      .eq('workspace_id', sp.workspace_id).order('created_at', { ascending: true }).limit(1).maybeSingle()
+    credsRow = data
+  }
+  if (!credsRow) return NextResponse.json({ ok: false, error: 'Workspace gak punya Postiz account.' }, { status: 400 })
+  const creds = { url: credsRow.url, key: credsRow.api_key }
+
   const [post, integration] = await Promise.all([
-    postId ? getPostizPost(postId).catch((e) => ({ error: String(e?.message || e) })) : Promise.resolve(null),
-    integrationId ? getPostizIntegration(integrationId).catch((e) => ({ error: String(e?.message || e) })) : Promise.resolve(null),
+    postId ? getPostizPost(creds, postId).catch((e) => ({ error: String(e?.message || e) })) : Promise.resolve(null),
+    integrationId ? getPostizIntegration(creds, integrationId).catch((e) => ({ error: String(e?.message || e) })) : Promise.resolve(null),
   ])
 
   return NextResponse.json({

@@ -3,15 +3,14 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createPostizPost } from '@/lib/postiz'
 
-// Vercel Pro: allow up to 60s — we need time to download media + relay-upload
-// to Postiz before creating the post.
+// Vercel Pro: allow up to 60s — butuh waktu buat download media + relay-upload.
 export const maxDuration = 60
 
 // POST /api/postiz/post — actually push a scheduled_posts row to Postiz.
 // Body: { scheduled_post_id }
-// Reads the row, validates persona has postiz_channel_id, downloads media,
-// relays it to Postiz /upload, then creates the post with platform-specific
-// settings. Updates row with response.
+// Picks the right Postiz creds via target_postiz_account_id (per-row override)
+// or persona's postiz_account_id. Single-account compat fallback: first account
+// of the workspace.
 export async function POST(req) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -22,14 +21,14 @@ export async function POST(req) {
 
   const { data: sp, error } = await supabase
     .from('scheduled_posts')
-    .select('*, results(id, type, url, label), personas(id, name, postiz_channel_id, postiz_platform)')
+    .select('*, results(id, type, url, label), personas(id, name, postiz_channel_id, postiz_platform, postiz_account_id)')
     .eq('id', scheduled_post_id).single()
   if (error || !sp) return NextResponse.json({ ok: false, error: 'scheduled post not found' }, { status: 404 })
 
-  // Mirror upload: prefer target_channel_id (per-row override) atas persona's
-  // default postiz_channel_id. Sama untuk platform.
+  // Mirror upload: prefer target_* (per-row override) atas persona's default.
   const channelId = sp.target_channel_id || sp.personas?.postiz_channel_id
   const platform = sp.target_platform || sp.personas?.postiz_platform || null
+  const accountId = sp.target_postiz_account_id || sp.personas?.postiz_account_id
   if (!channelId) {
     return NextResponse.json({ ok: false, error: `Belum ada target channel. Pilih channel di Schedule modal atau link persona ke channel di /posting.` }, { status: 400 })
   }
@@ -39,12 +38,32 @@ export async function POST(req) {
   }
   const content = sp.caption || sp.results?.label || ''
 
-  // Use admin client so the update bypasses RLS (server-side trust).
   const admin = createAdminClient()
+
+  // Resolve creds — by account_id if available, else fall back to workspace's
+  // first account (single-Postiz legacy behaviour).
+  let credsRow
+  if (accountId) {
+    const { data } = await admin.from('postiz_accounts').select('url, api_key').eq('id', accountId).maybeSingle()
+    credsRow = data
+  }
+  if (!credsRow) {
+    const { data } = await admin.from('postiz_accounts').select('url, api_key')
+      .eq('workspace_id', sp.workspace_id).order('created_at', { ascending: true }).limit(1).maybeSingle()
+    credsRow = data
+  }
+  if (!credsRow) {
+    await admin.from('scheduled_posts').update({
+      status: 'failed', error: 'Workspace gak punya Postiz account. Tambahin di /settings → Postiz Accounts.',
+    }).eq('id', sp.id)
+    return NextResponse.json({ ok: false, error: 'Workspace gak punya Postiz account. Tambahin di /settings.' }, { status: 400 })
+  }
+
   await admin.from('scheduled_posts').update({ status: 'posting', error: null }).eq('id', sp.id)
 
   try {
     const postizResult = await createPostizPost({
+      creds: { url: credsRow.url, key: credsRow.api_key },
       channelId,
       content,
       mediaUrl,
@@ -52,7 +71,6 @@ export async function POST(req) {
       platform,
     })
 
-    // Try to extract a returned id (Postiz response shape varies by version)
     const externalId =
       postizResult?.id
       || postizResult?.posts?.[0]?.id
@@ -71,10 +89,7 @@ export async function POST(req) {
     return NextResponse.json({ ok: true, result: postizResult, scheduled: isScheduled })
   } catch (e) {
     const msg = String(e?.message || e).slice(0, 1000)
-    await admin.from('scheduled_posts').update({
-      status: 'failed',
-      error: msg,
-    }).eq('id', sp.id)
+    await admin.from('scheduled_posts').update({ status: 'failed', error: msg }).eq('id', sp.id)
     return NextResponse.json({ ok: false, error: msg }, { status: 500 })
   }
 }

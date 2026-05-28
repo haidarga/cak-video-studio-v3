@@ -108,6 +108,7 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
         created_by: userId,
         target_channel_id: String(target.id),
         target_platform: target.platform || null,
+        target_postiz_account_id: target.account_id || null,
       }).select('id').single()
       if (error) { setErr(`Insert (${target.name || target.id}): ${error.message}`); continue }
 
@@ -659,6 +660,7 @@ function ScheduleModal({ result, onClose, onSubmit, channels, channelsLoading })
             setBusy(true)
             const targets = channels?.filter((c) => selectedIds.has(String(c.id))).map((c) => ({
               id: c.id, platform: c.platform, name: c.name,
+              account_id: c.account_id || null,
               // Per-channel caption override if user customized via captionOverrides state
               caption: captionOverrides[String(c.id)] || null,
             })) || []
@@ -747,7 +749,7 @@ function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubm
   const targets = useMemo(() => {
     if (!channels) return []
     return channels.filter((c) => selectedChannelIds.has(String(c.id))).map((c) => ({
-      id: c.id, platform: c.platform, name: c.name,
+      id: c.id, platform: c.platform, name: c.name, account_id: c.account_id || null,
     }))
   }, [channels, selectedChannelIds])
 
@@ -909,7 +911,10 @@ function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubm
                                 : <div className="w-6 h-6 rounded-full bg-[var(--surface2)] flex-shrink-0" />}
                               <div className="min-w-0 flex-1">
                                 <div className="font-semibold truncate">{c.name}</div>
-                                {c.username && <div className="text-[9px] text-[var(--muted)] truncate">@{c.username}</div>}
+                                <div className="text-[9px] text-[var(--muted)] truncate flex items-center gap-1">
+                                  {c.username && <>@{c.username}</>}
+                                  {c.account_label && <span className="text-[var(--accent)]">· 📮 {c.account_label}</span>}
+                                </div>
                               </div>
                             </label>
                           )
