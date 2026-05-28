@@ -1,11 +1,13 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { callGeminiJSON } from '@/lib/gemini-server'
+import { getActiveWorkspace } from '@/lib/workspace'
 
 export async function POST(req) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
+  const wsId = await getActiveWorkspace(supabase, user)
 
   const { name, category, guardrails } = await req.json()
   if (!name?.trim()) return NextResponse.json({ ok: false, error: 'brand name required' }, { status: 400 })
@@ -34,6 +36,7 @@ PENTING:
 
   try {
     const draft = await callGeminiJSON({
+      workspaceId: wsId,
       contents: [{ parts: [{ text: prompt }] }],
       temperature: 0.8,
       maxOutputTokens: 4096,

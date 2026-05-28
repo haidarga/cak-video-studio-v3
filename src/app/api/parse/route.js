@@ -1,7 +1,8 @@
-// POST /api/parse — parse naskah pake Gemini, return shot list or storyboard panels.
+// POST /api/parse — parse naskah pake LLM (workspace-configured), return shot list or storyboard panels.
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { callGeminiJSON } from '@/lib/gemini-server'
+import { getActiveWorkspace } from '@/lib/workspace'
 
 export async function POST(req) {
   const { naskah, lang = 'Indonesian', mode = 'shots', ar = '9:16', refLabels = [], brand = null, constraints = {} } = await req.json()
@@ -10,6 +11,7 @@ export async function POST(req) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
+  const wsId = await getActiveWorkspace(supabase, user)
 
   const refHint = refLabels.length
     ? `\nAvailable reference labels (use exact names in chars_in_shot when applicable): ${refLabels.join(', ')}`
@@ -63,6 +65,7 @@ ${naskah}`
 
   try {
     const parsed = await callGeminiJSON({
+      workspaceId: wsId,
       contents: [{ parts: [{ text: prompt }] }],
       temperature: 0.7,
       maxOutputTokens: 16384,

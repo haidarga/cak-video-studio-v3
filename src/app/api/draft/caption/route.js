@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { callGemini } from '@/lib/gemini-server'
+import { getActiveWorkspace } from '@/lib/workspace'
 
 // POST /api/draft/caption — auto-draft a social media caption for a result
 // using brand + persona + content context (storyboard concept, dialogs, etc).
@@ -8,6 +9,7 @@ export async function POST(req) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
+  const wsId = await getActiveWorkspace(supabase, user)
 
   const { result_id } = await req.json()
   if (!result_id) return NextResponse.json({ ok: false, error: 'result_id required' }, { status: 400 })
@@ -73,6 +75,7 @@ OUTPUT (JSON only):
 
   try {
     const rawText = await callGemini({
+      workspaceId: wsId,
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { temperature: 0.85, maxOutputTokens: 2048, responseMimeType: 'application/json' },
     })

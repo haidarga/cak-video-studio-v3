@@ -17,6 +17,94 @@ export default function SettingsClient({ initialStatus, initialBudget }) {
   const [newAcct, setNewAcct] = useState({ label: '', url: '', api_key: '' })
   const [editingAcct, setEditingAcct] = useState(null) // { id, label, url, api_key }
 
+  // LLM config state — default model + fallback chain (configurable per workspace)
+  const [llm, setLlm] = useState(null) // { default, fallback }
+  const [llmCatalog, setLlmCatalog] = useState({})
+  const [hasOpenaiKey, setHasOpenaiKey] = useState(false)
+  const [openaiKeyInput, setOpenaiKeyInput] = useState('')
+  const [llmDraft, setLlmDraft] = useState({ provider: 'google', model: '' })
+
+  async function loadLlm() {
+    try {
+      const r = await fetch('/api/workspace/llm-settings')
+      const j = await r.json()
+      if (j.ok) {
+        setLlm(j.config)
+        setLlmCatalog(j.catalog || {})
+        setHasOpenaiKey(j.has_openai_key)
+        // Init draft to first available model of first provider
+        const firstProv = Object.keys(j.catalog || {})[0] || 'google'
+        const firstModel = j.catalog?.[firstProv]?.models?.[0]?.id || ''
+        setLlmDraft({ provider: firstProv, model: firstModel })
+      }
+    } catch (e) { setErr('Load LLM: ' + e.message) }
+  }
+  useEffect(() => { loadLlm() }, [])
+
+  async function saveLlm(nextConfig) {
+    setBusy(true); setMsg(''); setErr('')
+    try {
+      const r = await fetch('/api/workspace/llm-settings', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: nextConfig }),
+      })
+      const j = await r.json()
+      if (!j.ok) throw new Error(j.error)
+      setLlm(nextConfig)
+      setMsg('LLM config saved ✓'); setTimeout(() => setMsg(''), 2500)
+    } catch (e) { setErr(e.message) }
+    setBusy(false)
+  }
+
+  function llmSetDefault(provider, model) {
+    if (!llm) return
+    saveLlm({ ...llm, default: { provider, model } })
+  }
+  function llmAddFallback() {
+    if (!llm || !llmDraft.provider || !llmDraft.model) return
+    saveLlm({ ...llm, fallback: [...(llm.fallback || []), { ...llmDraft }] })
+  }
+  function llmRemoveFallback(idx) {
+    if (!llm) return
+    saveLlm({ ...llm, fallback: llm.fallback.filter((_, i) => i !== idx) })
+  }
+  function llmMoveFallback(idx, dir) {
+    if (!llm) return
+    const arr = [...llm.fallback]
+    const swapIdx = idx + dir
+    if (swapIdx < 0 || swapIdx >= arr.length) return
+    ;[arr[idx], arr[swapIdx]] = [arr[swapIdx], arr[idx]]
+    saveLlm({ ...llm, fallback: arr })
+  }
+  async function saveOpenaiKey() {
+    if (!openaiKeyInput.trim() && hasOpenaiKey === false) { setErr('Isi key dulu'); return }
+    setBusy(true); setMsg(''); setErr('')
+    try {
+      const r = await fetch('/api/workspace/llm-settings', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ openai_key: openaiKeyInput }),
+      })
+      const j = await r.json()
+      if (!j.ok) throw new Error(j.error)
+      setOpenaiKeyInput('')
+      await loadLlm()
+      setMsg('OpenAI key saved ✓'); setTimeout(() => setMsg(''), 2500)
+    } catch (e) { setErr(e.message) }
+    setBusy(false)
+  }
+  async function clearOpenaiKey() {
+    if (!confirm('Hapus OpenAI key?')) return
+    setBusy(true)
+    try {
+      await fetch('/api/workspace/llm-settings', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ openai_key: '' }),
+      })
+      await loadLlm()
+    } catch (e) { setErr(e.message) }
+    setBusy(false)
+  }
+
   async function loadAccounts() {
     setAcctLoading(true)
     try {
@@ -253,7 +341,132 @@ export default function SettingsClient({ initialStatus, initialBudget }) {
           </div>
         </div>
       </section>
+
+      {/* ── LLM CONFIG — Default Model + Fallback Chain ───────────────── */}
+      <section className="bg-[var(--surface)] border border-[var(--border)] rounded-lg p-5 space-y-4">
+        <div>
+          <div className="text-xs font-semibold mb-1 flex items-center gap-2">
+            🤖 LLM Models <span className="text-[9px] font-normal text-[var(--muted2)]">untuk parse, caption draft, transcribe</span>
+          </div>
+          <div className="text-[10px] text-[var(--muted2)]">
+            Pilih default model + fallback chain. Saat default-nya kena rate-limit / 503, system auto cascade ke fallback berikutnya. Lu udah punya Pro tier? Set <code>gemini-2.5-pro</code> di fallback supaya jarang fail.
+          </div>
+        </div>
+
+        {!llm ? (
+          <div className="text-xs text-[var(--muted)]">Loading LLM config...</div>
+        ) : (
+          <>
+            {/* DEFAULT MODEL */}
+            <div className="pt-2 border-t border-[var(--border)]">
+              <div className="text-[10px] uppercase font-semibold text-[var(--muted)] mb-2">⭐ Default Model</div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <ProviderSel value={llm.default.provider}
+                  onChange={(p) => {
+                    const firstModel = llmCatalog[p]?.models?.[0]?.id || ''
+                    llmSetDefault(p, firstModel)
+                  }}
+                  catalog={llmCatalog} />
+                <ModelSel value={llm.default.model} provider={llm.default.provider}
+                  onChange={(m) => llmSetDefault(llm.default.provider, m)}
+                  catalog={llmCatalog} />
+                <span className="text-[10px] text-[var(--muted2)]">
+                  Saat ini: <code className="text-[var(--accent)]">{llm.default.provider}/{llm.default.model}</code>
+                </span>
+              </div>
+            </div>
+
+            {/* FALLBACK CHAIN */}
+            <div className="pt-2 border-t border-[var(--border)]">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[10px] uppercase font-semibold text-[var(--muted)]">🔁 Fallback Chain</div>
+                <span className="text-[9px] text-[var(--muted2)]">{(llm.fallback || []).length} level · dicoba berurutan</span>
+              </div>
+              {(llm.fallback || []).length === 0 ? (
+                <div className="text-[10px] text-[var(--muted)] p-3 border border-dashed border-[var(--border)] rounded">
+                  Belum ada fallback. Saat default kena 503, gen-nya bakal langsung fail.
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  {llm.fallback.map((f, i) => (
+                    <div key={i} className="flex items-center gap-2 p-2 rounded bg-[var(--surface2)] border border-[var(--border)] text-xs">
+                      <span className="w-5 h-5 rounded-full bg-[var(--accent)]/20 text-[var(--accent)] flex items-center justify-center font-bold text-[10px]">{i + 1}</span>
+                      <code className="flex-1 text-[10px] font-mono">
+                        <span className="text-[var(--muted)]">{f.provider}</span>
+                        <span className="text-[var(--muted2)]"> / </span>
+                        <span>{f.model}</span>
+                      </code>
+                      <button onClick={() => llmMoveFallback(i, -1)} disabled={i === 0 || busy} className="text-[10px] px-1.5 py-0.5 rounded text-[var(--muted)] hover:bg-[var(--surface3)] disabled:opacity-30">↑</button>
+                      <button onClick={() => llmMoveFallback(i, 1)} disabled={i === llm.fallback.length - 1 || busy} className="text-[10px] px-1.5 py-0.5 rounded text-[var(--muted)] hover:bg-[var(--surface3)] disabled:opacity-30">↓</button>
+                      <button onClick={() => llmRemoveFallback(i)} disabled={busy} className="text-[10px] px-1.5 py-0.5 rounded text-red-400 hover:bg-red-900/20">✕</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Add level */}
+              <div className="mt-2 flex items-center gap-2 flex-wrap p-2 rounded bg-[var(--surface2)]/40 border border-dashed border-[var(--border)]">
+                <ProviderSel value={llmDraft.provider}
+                  onChange={(p) => {
+                    const firstModel = llmCatalog[p]?.models?.[0]?.id || ''
+                    setLlmDraft({ provider: p, model: firstModel })
+                  }}
+                  catalog={llmCatalog} />
+                <ModelSel value={llmDraft.model} provider={llmDraft.provider}
+                  onChange={(m) => setLlmDraft({ ...llmDraft, model: m })}
+                  catalog={llmCatalog} />
+                <button onClick={llmAddFallback} disabled={busy || !llmDraft.model}
+                  className="text-[10px] px-3 py-1.5 rounded bg-[var(--accent)] text-white font-semibold disabled:opacity-40">
+                  + Add Level
+                </button>
+              </div>
+            </div>
+
+            {/* OPENAI KEY (optional, for openai fallback levels) */}
+            <div className="pt-2 border-t border-[var(--border)]">
+              <div className="text-[10px] uppercase font-semibold text-[var(--muted)] mb-2 flex items-center gap-2">
+                🔑 OpenAI Key <span className="text-[9px] font-normal text-[var(--muted2)]">(perlu kalau ada fallback ke OpenAI)</span>
+                <span className={`text-[10px] font-semibold ${hasOpenaiKey ? 'text-green-400' : 'text-[var(--muted2)]'}`}>
+                  {hasOpenaiKey ? '✓ Set' : '❌ Not set'}
+                </span>
+              </div>
+              <div className="flex gap-2">
+                <input type="password" value={openaiKeyInput} onChange={(e) => setOpenaiKeyInput(e.target.value)}
+                  placeholder={hasOpenaiKey ? '•••••••• (isi ulang buat ganti)' : 'sk-...'}
+                  className="flex-1 text-xs px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)] font-mono" />
+                <button onClick={saveOpenaiKey} disabled={busy || !openaiKeyInput} className="text-[10px] px-3 py-1.5 rounded bg-[var(--accent)] text-white font-semibold disabled:opacity-40">Save</button>
+                {hasOpenaiKey && (
+                  <button onClick={clearOpenaiKey} disabled={busy} className="text-[10px] px-2 py-1.5 rounded text-red-400 border border-[var(--border)]">Clear</button>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+      </section>
     </div>
+  )
+}
+
+function ProviderSel({ value, onChange, catalog }) {
+  return (
+    <select value={value} onChange={(e) => onChange(e.target.value)}
+      className="text-xs px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)]">
+      {Object.entries(catalog).map(([key, c]) => (
+        <option key={key} value={key}>{c.label}</option>
+      ))}
+    </select>
+  )
+}
+
+function ModelSel({ value, provider, onChange, catalog }) {
+  const models = catalog?.[provider]?.models || []
+  return (
+    <select value={value} onChange={(e) => onChange(e.target.value)}
+      className="text-xs px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] min-w-[200px]">
+      {models.map((m) => (
+        <option key={m.id} value={m.id}>{m.label} — {m.cost}</option>
+      ))}
+    </select>
   )
 }
 

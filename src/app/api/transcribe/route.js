@@ -67,6 +67,7 @@ ATURAN:
 - Pakai casing natural (gak ALL CAPS)`
 
     const parsed = await callGeminiJSON({
+      workspaceId: wsId,
       contents: [{
         parts: [
           { text: prompt },
