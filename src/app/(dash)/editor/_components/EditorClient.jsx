@@ -14,6 +14,7 @@ const DEFAULT_POSITION = { x_pct: 75, y_pct: 25, w_pct: 35, opacity: 1 }
 const DEFAULT_PROJECT = {
   name: 'Untitled project',
   ar: '9:16',
+  persona_id: null,
   video_clips: [],
   text_clips: [],
   image_clips: [],
@@ -79,7 +80,8 @@ function normalizeProject(raw) {
   return DEFAULT_PROJECT
 }
 
-export default function EditorClient({ workspaceId, userId, results, projects }) {
+export default function EditorClient({ workspaceId, userId, results: initialResults, projects, personas = [] }) {
+  const [results, setResults] = useState(initialResults)
   const supabase = createClient()
   const [project, setProject] = useState(DEFAULT_PROJECT)
   const [projectId, setProjectId] = useState(null)
@@ -97,6 +99,8 @@ export default function EditorClient({ workspaceId, userId, results, projects })
   const overlayRefs = useRef(new Map()) // clip.id -> HTMLVideoElement
   const imageInputRef = useRef(null)
   const audioInputRef = useRef(null)
+  const videoInputRef = useRef(null)
+  const [uploadingVideo, setUploadingVideo] = useState(null) // { name, sizeMB, stage }
 
   const videoSources = useMemo(() => results.filter((r) => r.type === 'video' && r.url), [results])
   const totalDur = useMemo(() => totalDuration(project.video_clips), [project.video_clips])
@@ -174,6 +178,37 @@ export default function EditorClient({ workspaceId, userId, results, projects })
       patch((p) => ({ ...p, image_clips: [...p.image_clips, c] }))
       setSelected({ kind: 'image', id: c.id })
     } catch (e) { setErr('Upload image: ' + e.message) }
+  }
+
+  async function onVideoFile(e) {
+    const f = e.target.files?.[0]; if (!f) return; e.target.value = ''
+    if (!f.type.startsWith('video/')) { setErr('File harus video (MP4/WebM/MOV)'); return }
+    const sizeMB = f.size / 1024 / 1024
+    if (sizeMB > 200) { setErr(`File ${sizeMB.toFixed(1)}MB > 200MB max. Compress dulu.`); return }
+    setUploadingVideo({ name: f.name, sizeMB: sizeMB.toFixed(1), stage: 'uploading' }); setErr('')
+    try {
+      const ext = (f.name.split('.').pop() || 'mp4').toLowerCase()
+      const path = `${workspaceId}/editor-upload-${Date.now()}.${ext}`
+      const { error: upErr } = await supabase.storage.from('refs').upload(path, f, { contentType: f.type, cacheControl: '3600' })
+      if (upErr) throw upErr
+      const { data: { publicUrl } } = supabase.storage.from('refs').getPublicUrl(path)
+
+      setUploadingVideo((s) => ({ ...s, stage: 'inserting' }))
+      // INSERT to results so it appears in media library + persona-filtered.
+      // Default persona = project.persona_id (if set).
+      const { data: row, error: insErr } = await supabase.from('results').insert({
+        workspace_id: workspaceId, type: 'video', url: publicUrl,
+        label: f.name.replace(/\.[^.]+$/, ''), ar: project.ar || '9:16',
+        group_label: 'editor_upload',
+        meta: { source: 'editor_upload', original_name: f.name, size_bytes: f.size },
+        persona_id: project.persona_id || null,
+        created_by: userId,
+      }).select('id, type, url, label, ar, qc_status, group_label, created_at, personas(id, name, username, avatar_url)').single()
+      if (insErr) throw insErr
+      // Inject ke local results state at top, so user bisa langsung pick
+      setResults((prev) => [row, ...prev])
+      setUploadingVideo(null)
+    } catch (e) { setErr('Upload video: ' + e.message); setUploadingVideo(null) }
   }
 
   async function onAudioFile(e) {
@@ -279,6 +314,7 @@ export default function EditorClient({ workspaceId, userId, results, projects })
         workspace_id: workspaceId, type: 'video', url: publicUrl,
         label: project.name + ' (edited)', ar: project.ar,
         group_label: 'editor', qc_status: 'pending',
+        persona_id: project.persona_id || null,
         meta: {
           source: 'editor', editor_project_id: projectId, format: ext, duration: totalDur,
           base_clips: baseClips.length, overlay_clips: overlayList.length,
@@ -302,6 +338,26 @@ export default function EditorClient({ workspaceId, userId, results, projects })
     v.volume = Math.min(1, baseInfo.clip.volume ?? 1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseInfo?.clip?.id])
+
+  // Keyboard shortcuts: Delete = delete selected clip; Space = play/pause
+  useEffect(() => {
+    function onKey(e) {
+      // Ignore when typing in text inputs
+      const tag = e.target?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable) return
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
+        e.preventDefault()
+        if (selected.kind === 'video') removeVideoClip(selected.id)
+        else deleteClip(selected.kind, selected.id)
+      } else if (e.key === ' ') {
+        e.preventDefault()
+        togglePlay()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, playing])
 
   // Sync overlay video elements
   useEffect(() => {
@@ -382,7 +438,15 @@ export default function EditorClient({ workspaceId, userId, results, projects })
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <input value={project.name} onChange={(e) => patch({ name: e.target.value })} placeholder="Project name"
-            className="text-sm px-3 py-1.5 rounded bg-[var(--surface)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] w-56" />
+            className="text-sm px-3 py-1.5 rounded bg-[var(--surface)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] w-48" />
+          <select value={project.persona_id || ''} onChange={(e) => patch({ persona_id: e.target.value || null })}
+            className="text-sm px-3 py-1.5 rounded bg-[var(--surface)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)]"
+            title="Tag this project ke persona — auto group di /qc">
+            <option value="">🎭 — pilih persona —</option>
+            {personas.map((p) => (
+              <option key={p.id} value={p.id}>{p.name} {p.username ? `(@${p.username})` : ''}</option>
+            ))}
+          </select>
           <button onClick={newProject} className="px-3 py-1.5 text-xs rounded bg-[var(--surface)] border border-[var(--border)] hover:bg-[var(--surface2)]">+ New</button>
           <button onClick={saveProject} disabled={saving || project.video_clips.length === 0} className="px-3 py-1.5 text-xs rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)] disabled:opacity-50">
             {saving ? '⏳ Save...' : '💾 Save'}
@@ -407,10 +471,23 @@ export default function EditorClient({ workspaceId, userId, results, projects })
         {/* LEFT */}
         <div className="space-y-3">
           <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-2">
-            <div className="text-[10px] uppercase font-semibold text-[var(--muted)] mb-2">+ Tambah video clip</div>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[10px] uppercase font-semibold text-[var(--muted)]">+ Tambah video clip</div>
+              <button onClick={() => videoInputRef.current?.click()} disabled={!!uploadingVideo}
+                className="text-[10px] px-2 py-1 rounded bg-cyan-500/30 border border-cyan-500/60 hover:bg-cyan-500/50 text-cyan-200 font-bold disabled:opacity-50"
+                title="Upload video dari file manager">
+                {uploadingVideo ? '⏳' : '📤 Upload'}
+              </button>
+              <input ref={videoInputRef} type="file" accept="video/*" className="hidden" onChange={onVideoFile} />
+            </div>
+            {uploadingVideo && (
+              <div className="text-[9px] text-cyan-300 bg-cyan-900/20 border border-cyan-700/40 rounded px-1.5 py-1 mb-2">
+                ⏳ {uploadingVideo.stage === 'inserting' ? 'Saving...' : `Uploading ${uploadingVideo.name} (${uploadingVideo.sizeMB}MB)`}
+              </div>
+            )}
             <div className="space-y-2 max-h-72 overflow-auto">
               {videoSources.length === 0 ? (
-                <div className="text-[10px] text-[var(--muted)] p-2">Belum ada video.</div>
+                <div className="text-[10px] text-[var(--muted)] p-2">Belum ada video. Klik <strong>📤 Upload</strong> atau gen di /generate.</div>
               ) : videoSources.map((r) => (
                 <div key={r.id} className="bg-[var(--surface2)] rounded p-1.5 border border-[var(--border)]">
                   <div className="flex gap-2 mb-1.5">
@@ -575,7 +652,8 @@ export default function EditorClient({ workspaceId, userId, results, projects })
           {project.video_clips.length > 0 && (
             <Timeline project={project} baseClips={baseClips} overlayList={overlayList} overlayTrackIdxs={overlayTrackIdxs}
               totalDur={totalDur} currentTime={currentTime}
-              selected={selected} onSelect={setSelected} onSeek={seekTo} onUpdateClip={updateClip} />
+              selected={selected} onSelect={setSelected} onSeek={seekTo} onUpdateClip={updateClip}
+              onDeleteClip={removeVideoClip} />
           )}
         </div>
 
@@ -623,7 +701,7 @@ export default function EditorClient({ workspaceId, userId, results, projects })
   )
 }
 
-function Timeline({ project, baseClips, overlayList, overlayTrackIdxs, totalDur, currentTime, selected, onSelect, onSeek, onUpdateClip }) {
+function Timeline({ project, baseClips, overlayList, overlayTrackIdxs, totalDur, currentTime, selected, onSelect, onSeek, onUpdateClip, onDeleteClip }) {
   const trackRef = useRef(null)
   const dragRef = useRef(null)
   const pctToTime = (pct) => (pct / 100) * totalDur
@@ -641,13 +719,29 @@ function Timeline({ project, baseClips, overlayList, overlayTrackIdxs, totalDur,
       const pct = Math.max(0, Math.min(100, (x / rect.width) * 100))
       const t = pctToTime(pct)
       if (kind === 'clipMove' && clipKind === 'video') {
-        // Move video clip (overlay only — base is sequential)
         const c = startClip
-        if ((c.track_idx || 0) === 0) return // don't move base
+        if ((c.track_idx || 0) === 0) return // base sequential, no drag-move
         const dur = clipDuration(c)
         const dx = (ev.clientX - origin.x) / rect.width * totalDur
         const ns = Math.max(0, Math.min(totalDur - dur, (c.in_track || 0) + dx))
         onUpdateClip(clipKind, clipId, { in_track: ns })
+      } else if (kind === 'clipStart' && clipKind === 'video') {
+        // Trim video clip in source — drag left edge changes src_in
+        const c = startClip
+        const dx = (ev.clientX - origin.x) / rect.width * totalDur
+        // For BASE clip: keep in_track but adjust src_in (effectively content trim)
+        // For OVERLAY: adjust src_in and shift in_track to compensate so visual start stays
+        const newSrcIn = Math.max(0, Math.min(c.src_out - 0.2, (c.src_in || 0) + dx * (c.speed || 1)))
+        if ((c.track_idx || 0) === 0) {
+          onUpdateClip(clipKind, clipId, { src_in: newSrcIn })
+        } else {
+          onUpdateClip(clipKind, clipId, { src_in: newSrcIn, in_track: Math.max(0, (c.in_track || 0) + dx) })
+        }
+      } else if (kind === 'clipEnd' && clipKind === 'video') {
+        const c = startClip
+        const dx = (ev.clientX - origin.x) / rect.width * totalDur
+        const newSrcOut = Math.max(c.src_in + 0.2, Math.min(c.src_duration || c.src_out + 100, (c.src_out || 0) + dx * (c.speed || 1)))
+        onUpdateClip(clipKind, clipId, { src_out: newSrcOut })
       } else if (kind === 'clipMove' && clipKind !== 'video') {
         const c = startClip
         const len = c.end - c.start
@@ -702,7 +796,11 @@ function Timeline({ project, baseClips, overlayList, overlayTrackIdxs, totalDur,
                     className={`absolute top-0.5 bottom-0.5 rounded text-[9px] text-white font-semibold flex items-center px-1.5 cursor-grab bg-yellow-600 ${isSel ? 'ring-2 ring-white' : ''}`}
                     style={{ left: `${timeToPct(start)}%`, width: `${Math.max(2, timeToPct(dur))}%` }}
                     title={c.src_label}>
-                    <span className="truncate px-1">🎬 {c.src_label?.slice(0, 14) || '—'}</span>
+                    <div onMouseDown={(e) => startDrag(e, 'clipStart', 'video', c.id)} className="absolute left-0 top-0 bottom-0 w-1.5 bg-white/30 cursor-ew-resize rounded-l" title="Drag = trim start" />
+                    <div onMouseDown={(e) => startDrag(e, 'clipEnd', 'video', c.id)} className="absolute right-0 top-0 bottom-0 w-1.5 bg-white/30 cursor-ew-resize rounded-r" title="Drag = trim end" />
+                    <span className="truncate px-1 flex-1">🎬 {c.src_label?.slice(0, 14) || '—'}</span>
+                    {isSel && <button onClick={(e) => { e.stopPropagation(); onDeleteClip?.(c.id) }}
+                      className="absolute -top-2 -right-2 w-4 h-4 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center hover:bg-red-600">×</button>}
                   </div>
                 )
               })}
@@ -726,7 +824,11 @@ function Timeline({ project, baseClips, overlayList, overlayTrackIdxs, totalDur,
                   style={{ left: `${timeToPct(start)}%`, width: `${Math.max(2, timeToPct(dur))}%` }}
                   title={c.src_label}>
                   {hasTrans && <div className="absolute -left-2 top-1/2 -translate-y-1/2 w-3 h-3 bg-yellow-400 rounded-full text-black text-[8px] flex items-center justify-center font-bold" title={`${c.transition_in.type} ${c.transition_in.duration}s`}>×</div>}
-                  <span className="truncate px-1">📹 {i + 1}. {c.src_label?.slice(0, 14) || '—'}</span>
+                  <div onMouseDown={(e) => startDrag(e, 'clipStart', 'video', c.id)} className="absolute left-0 top-0 bottom-0 w-1.5 bg-white/30 cursor-ew-resize rounded-l" title="Drag = trim start" />
+                  <div onMouseDown={(e) => startDrag(e, 'clipEnd', 'video', c.id)} className="absolute right-0 top-0 bottom-0 w-1.5 bg-white/30 cursor-ew-resize rounded-r" title="Drag = trim end" />
+                  <span className="truncate px-1 flex-1">📹 {i + 1}. {c.src_label?.slice(0, 14) || '—'}</span>
+                  {isSel && <button onClick={(e) => { e.stopPropagation(); onDeleteClip?.(c.id) }}
+                    className="absolute -top-2 -right-2 w-4 h-4 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center hover:bg-red-600">×</button>}
                 </div>
               )
             })}

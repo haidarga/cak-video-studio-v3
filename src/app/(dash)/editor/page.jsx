@@ -18,21 +18,17 @@ export default async function EditorPage() {
   const ws = ms?.[0]?.workspaces
   if (!ws) redirect('/')
 
-  // Load source candidates (any result in this workspace, prioritized: approved video > video > image)
-  const { data: results } = await supabase
-    .from('results')
-    .select('id, type, url, label, ar, qc_status, group_label, created_at, personas(name, username)')
-    .eq('workspace_id', ws.id)
-    .order('created_at', { ascending: false })
-    .limit(120)
-
-  // Recent editor projects in this workspace
-  const { data: projects } = await supabase
-    .from('editor_projects')
-    .select('id, name, source_result_id, updated_at')
-    .eq('workspace_id', ws.id)
-    .order('updated_at', { ascending: false })
-    .limit(20)
+  const [{ data: results }, { data: projects }, { data: personas }] = await Promise.all([
+    supabase.from('results')
+      .select('id, type, url, label, ar, qc_status, group_label, created_at, personas(id, name, username, avatar_url)')
+      .eq('workspace_id', ws.id).order('created_at', { ascending: false }).limit(120),
+    supabase.from('editor_projects')
+      .select('id, name, source_result_id, updated_at')
+      .eq('workspace_id', ws.id).order('updated_at', { ascending: false }).limit(20),
+    supabase.from('personas')
+      .select('id, name, username, avatar_url')
+      .eq('workspace_id', ws.id).order('name'),
+  ])
 
   return (
     <EditorClient
@@ -40,6 +36,7 @@ export default async function EditorPage() {
       userId={user.id}
       results={results || []}
       projects={projects || []}
+      personas={personas || []}
     />
   )
 }
