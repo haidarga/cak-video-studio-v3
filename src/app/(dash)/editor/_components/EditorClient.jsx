@@ -1,19 +1,20 @@
 'use client'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { renderProject, totalDuration, clipDuration, clipInTrack, activeClipAt } from '@/lib/editor-render'
+import { renderProject, totalDuration, clipDuration, activeBaseClipAt, activeOverlaysAt } from '@/lib/editor-render'
 
-// Editor v3 final: multi-clip video sequencing + transitions (cut/fade/crossfade)
-// + filters (brightness/contrast/saturation/blur) per clip + speed + volume +
-// text + image overlay + music underlay + ffmpeg.wasm MP4 export.
+// Editor v4 — multi-track stacking (base + B-roll overlays).
+// Video clips have track_idx (0=base sequential, 1+ = overlay PiP) +
+// in_track (explicit timeline position) + position (for overlays).
 
 const DEFAULT_FILTERS = { brightness: 0, contrast: 1, saturation: 1, blur: 0 }
 const DEFAULT_TRANSITION = { type: 'cut', duration: 0.5 }
+const DEFAULT_POSITION = { x_pct: 75, y_pct: 25, w_pct: 35, opacity: 1 }
 
 const DEFAULT_PROJECT = {
   name: 'Untitled project',
   ar: '9:16',
-  video_clips: [], // { id, src_url, src_label, src_duration, src_in, src_out, speed, volume, filters, transition_in }
+  video_clips: [],
   text_clips: [],
   image_clips: [],
   audio_clips: [],
@@ -23,19 +24,38 @@ function uid() { return Math.random().toString(36).slice(2, 10) }
 
 function normalizeProject(raw) {
   if (!raw) return DEFAULT_PROJECT
-  // v3 native
-  if (Array.isArray(raw.video_clips)) {
+  // v4 native (has track_idx + in_track)
+  if (Array.isArray(raw.video_clips) && raw.video_clips.length > 0 && raw.video_clips[0].track_idx != null) {
     return {
-      ...DEFAULT_PROJECT,
-      ...raw,
+      ...DEFAULT_PROJECT, ...raw,
       video_clips: raw.video_clips.map((c) => ({
         ...c,
         filters: { ...DEFAULT_FILTERS, ...(c.filters || {}) },
         transition_in: { ...DEFAULT_TRANSITION, ...(c.transition_in || {}) },
+        position: { ...DEFAULT_POSITION, ...(c.position || {}) },
       })),
     }
   }
-  // v2 had single `source`
+  // v3 (array, no track_idx) — backfill: all base track, sequential in_track
+  if (Array.isArray(raw.video_clips)) {
+    let acc = 0
+    const next = raw.video_clips.map((c) => {
+      const dur = (c.src_out - c.src_in) / (c.speed || 1)
+      const ck = {
+        ...c, track_idx: 0, in_track: acc,
+        filters: { ...DEFAULT_FILTERS, ...(c.filters || {}) },
+        transition_in: { ...DEFAULT_TRANSITION, ...(c.transition_in || {}) },
+        position: { ...DEFAULT_POSITION },
+      }
+      acc += dur
+      if (raw.video_clips[raw.video_clips.indexOf(c) + 1]?.transition_in?.type && raw.video_clips[raw.video_clips.indexOf(c) + 1].transition_in.type !== 'cut') {
+        acc -= raw.video_clips[raw.video_clips.indexOf(c) + 1].transition_in.duration || 0.5
+      }
+      return ck
+    })
+    return { ...DEFAULT_PROJECT, ...raw, video_clips: next }
+  }
+  // v2/v1 — single source
   if (raw.source) {
     return {
       ...DEFAULT_PROJECT,
@@ -46,70 +66,77 @@ function normalizeProject(raw) {
         src_in: raw.source.trim_start || 0,
         src_out: raw.source.trim_end || 60,
         speed: raw.source.speed || 1, volume: raw.source.volume || 1,
+        track_idx: 0, in_track: 0,
         filters: { ...DEFAULT_FILTERS },
         transition_in: { ...DEFAULT_TRANSITION },
+        position: { ...DEFAULT_POSITION },
       }] : [],
       text_clips: raw.text_clips || [],
       image_clips: raw.image_clips || [],
       audio_clips: raw.audio_clips || [],
     }
   }
-  // v1
-  return {
-    ...DEFAULT_PROJECT,
-    name: raw.name || 'Untitled', ar: raw.ar || '9:16',
-    video_clips: raw.source_url ? [{
-      id: uid(), src_url: raw.source_url, src_label: '(legacy v1)',
-      src_duration: raw.trim_end || 60,
-      src_in: raw.trim_start || 0,
-      src_out: raw.trim_end || 60,
-      speed: 1, volume: 1,
-      filters: { ...DEFAULT_FILTERS },
-      transition_in: { ...DEFAULT_TRANSITION },
-    }] : [],
-    text_clips: raw.text_clips || [],
-    image_clips: [], audio_clips: [],
-  }
+  return DEFAULT_PROJECT
 }
 
 export default function EditorClient({ workspaceId, userId, results, projects }) {
   const supabase = createClient()
   const [project, setProject] = useState(DEFAULT_PROJECT)
   const [projectId, setProjectId] = useState(null)
-  const [selected, setSelected] = useState(null) // { kind, id }
+  const [selected, setSelected] = useState(null)
   const [currentTime, setCurrentTime] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [exportProgress, setExportProgress] = useState('')
   const [err, setErr] = useState('')
   const [saving, setSaving] = useState(false)
-  const videoRef = useRef(null)
+  const [transcribing, setTranscribing] = useState(false)
+  const [transcribeProgress, setTranscribeProgress] = useState('')
   const playRafRef = useRef(null)
+  const baseVideoRef = useRef(null) // single video element for base track
+  const overlayRefs = useRef(new Map()) // clip.id -> HTMLVideoElement
   const imageInputRef = useRef(null)
   const audioInputRef = useRef(null)
 
   const videoSources = useMemo(() => results.filter((r) => r.type === 'video' && r.url), [results])
   const totalDur = useMemo(() => totalDuration(project.video_clips), [project.video_clips])
-  const activeClipInfo = useMemo(() => activeClipAt(currentTime, project.video_clips), [currentTime, project.video_clips])
-  const activeClip = activeClipInfo ? project.video_clips[activeClipInfo.index] : null
+  const baseClips = useMemo(() => project.video_clips.filter((c) => (c.track_idx || 0) === 0).sort((a, b) => (a.in_track || 0) - (b.in_track || 0)), [project.video_clips])
+  const overlayList = useMemo(() => project.video_clips.filter((c) => (c.track_idx || 0) > 0), [project.video_clips])
+  const baseInfo = useMemo(() => activeBaseClipAt(currentTime, project.video_clips), [currentTime, project.video_clips])
+  const activeOverlaysList = useMemo(() => activeOverlaysAt(currentTime, project.video_clips), [currentTime, project.video_clips])
+
+  // Find next available track_idx for new overlay
+  function nextOverlayTrack() {
+    const used = new Set(project.video_clips.filter((c) => (c.track_idx || 0) > 0).map((c) => c.track_idx))
+    let n = 1
+    while (used.has(n)) n++
+    return n
+  }
+  function nextBaseInTrack() {
+    if (baseClips.length === 0) return 0
+    const last = baseClips[baseClips.length - 1]
+    return (last.in_track || 0) + clipDuration(last)
+  }
 
   function patch(p) { setProject((cur) => ({ ...cur, ...(typeof p === 'function' ? p(cur) : p) })) }
 
-  async function addVideoClip(result) {
+  async function addVideoClip(result, asOverlay) {
     setErr('')
-    // Probe duration via a temporary video element
     const probe = document.createElement('video')
-    probe.src = result.url
-    probe.crossOrigin = 'anonymous'
+    probe.src = result.url; probe.crossOrigin = 'anonymous'
     const dur = await new Promise((res) => { probe.onloadedmetadata = () => res(probe.duration || 10); probe.onerror = () => res(10) })
     const c = {
       id: uid(), src_url: result.url, src_label: result.label || 'untitled',
-      src_duration: dur, src_in: 0, src_out: dur, speed: 1, volume: 1,
+      src_duration: dur, src_in: 0, src_out: dur,
+      speed: 1, volume: asOverlay ? 0.5 : 1,
+      track_idx: asOverlay ? nextOverlayTrack() : 0,
+      in_track: asOverlay ? currentTime : nextBaseInTrack(),
       filters: { ...DEFAULT_FILTERS },
-      transition_in: project.video_clips.length === 0 ? { ...DEFAULT_TRANSITION } : { type: 'crossfade', duration: 0.5 },
+      transition_in: { ...DEFAULT_TRANSITION, type: baseClips.length === 0 || asOverlay ? 'cut' : 'crossfade' },
+      position: { ...DEFAULT_POSITION },
     }
     patch((p) => ({ ...p, video_clips: [...p.video_clips, c] }))
-    if (project.video_clips.length === 0) {
+    if (project.video_clips.length === 0 && !asOverlay) {
       setProject((p) => ({ ...p, name: result.label ? `${result.label} (edit)` : p.name, ar: result.ar || p.ar }))
     }
     setSelected({ kind: 'video', id: c.id })
@@ -120,83 +147,15 @@ export default function EditorClient({ workspaceId, userId, results, projects })
     if (selected?.id === id) setSelected(null)
   }
 
-  function moveVideoClip(id, dir) {
-    patch((p) => {
-      const idx = p.video_clips.findIndex((c) => c.id === id)
-      if (idx < 0) return p
-      const nidx = dir === 'up' ? idx - 1 : idx + 1
-      if (nidx < 0 || nidx >= p.video_clips.length) return p
-      const next = [...p.video_clips]
-      ;[next[idx], next[nidx]] = [next[nidx], next[idx]]
-      return { ...p, video_clips: next }
-    })
-  }
-
   function addTextClip() {
     const c = {
       id: uid(), kind: 'text', text: 'Tap to edit',
       start: Math.max(0, currentTime), end: Math.min(totalDur || 5, (currentTime || 0) + 2),
       x_pct: 50, y_pct: 80, size: 48, color: '#ffffff', weight: 700,
-      bg: 'rgba(0,0,0,0.6)', align: 'center',
+      bg: 'rgba(0,0,0,0.6)', align: 'center', animation: 'fade',
     }
     patch((p) => ({ ...p, text_clips: [...p.text_clips, c] }))
     setSelected({ kind: 'text', id: c.id })
-  }
-
-  const [transcribing, setTranscribing] = useState(false)
-  const [transcribeProgress, setTranscribeProgress] = useState('')
-  async function autoSubtitle() {
-    if (project.video_clips.length === 0) { setErr('Tambah video clip dulu'); return }
-    setTranscribing(true); setTranscribeProgress('Transcribing via Gemini (kirim video ke STT)...'); setErr('')
-    try {
-      // Transcribe first clip only (simpler). Multi-clip subtitle would need
-      // per-clip transcribe + offset accumulation; future iteration.
-      const firstClip = project.video_clips[0]
-      const res = await fetch('/api/transcribe', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: firstClip.src_url }),
-      })
-      const data = await res.json()
-      if (!data.ok) throw new Error(data.error)
-      if (!data.segments || data.segments.length === 0) {
-        setTranscribeProgress('Gak ada speech ke-detect di video. Coba video yang ada dialog/VO.')
-        setTranscribing(false)
-        return
-      }
-
-      // Convert segments → TikTok-viral style text clips
-      // Bottom-center, large bold white text, black pill background
-      const offset = clipInTrack(project.video_clips, 0) // 0 untuk first clip
-      const newClips = data.segments.map((s) => ({
-        id: uid(), kind: 'text',
-        text: s.text.toUpperCase(),
-        start: offset + s.start,
-        end: offset + s.end,
-        x_pct: 50, y_pct: 75,
-        size: 56, color: '#ffffff', weight: 900,
-        bg: 'rgba(0,0,0,0.85)',
-        align: 'center',
-        animation: 'fade',  // TikTok-style fade-in/out at boundaries
-      }))
-      patch((p) => ({ ...p, text_clips: [...p.text_clips, ...newClips] }))
-      setTranscribeProgress(`✓ Generated ${newClips.length} subtitle clips dari clip 1 (${data.language || 'auto'})`)
-    } catch (e) {
-      setErr(`Auto-subtitle gagal: ${e.message}`)
-      setTranscribeProgress('')
-    }
-    setTranscribing(false)
-  }
-
-  function applyTikTokStyle() {
-    // Quick preset: re-style all existing text clips to TikTok-viral look
-    patch((p) => ({
-      ...p,
-      text_clips: p.text_clips.map((c) => ({
-        ...c, text: c.text.toUpperCase(), size: 56, weight: 900,
-        color: '#ffffff', bg: 'rgba(0,0,0,0.85)', align: 'center',
-        x_pct: 50, y_pct: 75,
-      })),
-    }))
   }
 
   async function onImageFile(e) {
@@ -231,12 +190,46 @@ export default function EditorClient({ workspaceId, userId, results, projects })
     } catch (e) { setErr('Upload audio: ' + e.message) }
   }
 
+  async function autoSubtitle() {
+    if (baseClips.length === 0) { setErr('Tambah base clip dulu'); return }
+    setTranscribing(true); setTranscribeProgress('Transcribing via Gemini...'); setErr('')
+    try {
+      const firstClip = baseClips[0]
+      const res = await fetch('/api/transcribe', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: firstClip.src_url }),
+      })
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error)
+      if (!data.segments?.length) { setTranscribeProgress('Gak ada speech ke-detect'); setTranscribing(false); return }
+      const offset = firstClip.in_track || 0
+      const newClips = data.segments.map((s) => ({
+        id: uid(), kind: 'text', text: s.text.toUpperCase(),
+        start: offset + s.start, end: offset + s.end,
+        x_pct: 50, y_pct: 75, size: 56, color: '#ffffff', weight: 900,
+        bg: 'rgba(0,0,0,0.85)', align: 'center', animation: 'fade',
+      }))
+      patch((p) => ({ ...p, text_clips: [...p.text_clips, ...newClips] }))
+      setTranscribeProgress(`✓ Generated ${newClips.length} subtitle clips dari clip 1`)
+    } catch (e) { setErr(`Auto-subtitle gagal: ${e.message}`); setTranscribeProgress('') }
+    setTranscribing(false)
+  }
+
+  function applyTikTokStyle() {
+    patch((p) => ({
+      ...p,
+      text_clips: p.text_clips.map((c) => ({
+        ...c, text: c.text.toUpperCase(), size: 56, weight: 900,
+        color: '#ffffff', bg: 'rgba(0,0,0,0.85)', align: 'center',
+        x_pct: 50, y_pct: 75, animation: 'fade',
+      })),
+    }))
+  }
+
   function updateClip(kind, id, p) {
     setProject((proj) => ({
       ...proj,
-      [`${kind}_clips`]: proj[`${kind}_clips`].map((c) =>
-        c.id === id ? { ...c, ...(typeof p === 'function' ? p(c) : p) } : c
-      ),
+      [`${kind}_clips`]: proj[`${kind}_clips`].map((c) => c.id === id ? { ...c, ...(typeof p === 'function' ? p(c) : p) } : c),
     }))
   }
   function deleteClip(kind, id) {
@@ -250,7 +243,7 @@ export default function EditorClient({ workspaceId, userId, results, projects })
     try {
       if (projectId) {
         const { error } = await supabase.from('editor_projects')
-          .update({ name: project.name, source_result_id: null, config: project, updated_at: new Date().toISOString() })
+          .update({ name: project.name, config: project, updated_at: new Date().toISOString() })
           .eq('id', projectId)
         if (error) throw error
       } else {
@@ -263,7 +256,6 @@ export default function EditorClient({ workspaceId, userId, results, projects })
     } catch (e) { setErr(e.message) }
     setSaving(false)
   }
-
   async function loadProject(id) {
     setErr('')
     const { data, error } = await supabase.from('editor_projects').select('*').eq('id', id).single()
@@ -271,7 +263,6 @@ export default function EditorClient({ workspaceId, userId, results, projects })
     setProject(normalizeProject(data.config))
     setProjectId(data.id); setSelected(null); setCurrentTime(0)
   }
-
   function newProject() { setProject(DEFAULT_PROJECT); setProjectId(null); setSelected(null); setCurrentTime(0) }
 
   async function exportVideo() {
@@ -289,61 +280,71 @@ export default function EditorClient({ workspaceId, userId, results, projects })
         label: project.name + ' (edited)', ar: project.ar,
         group_label: 'editor', qc_status: 'pending',
         meta: {
-          source: 'editor', editor_project_id: projectId, format: ext,
-          duration: totalDur, video_clips: project.video_clips.length,
+          source: 'editor', editor_project_id: projectId, format: ext, duration: totalDur,
+          base_clips: baseClips.length, overlay_clips: overlayList.length,
           text_clips: project.text_clips.length, image_clips: project.image_clips.length, audio_clips: project.audio_clips.length,
         },
         created_by: userId,
       })
       if (insErr) throw insErr
       setExportProgress(`✓ Done! ${ext.toUpperCase()} ${(blob.size / 1024 / 1024).toFixed(1)}MB — cek di /qc`)
-    } catch (e) {
-      setErr('Export gagal: ' + e.message)
-      setExportProgress('')
-    }
+    } catch (e) { setErr('Export gagal: ' + e.message); setExportProgress('') }
     setExporting(false)
   }
 
-  // Preview playback: drive video element from currentTime + activeClip
+  // Sync base video element when active base clip changes
   useEffect(() => {
-    const v = videoRef.current
-    if (!v || !activeClip) return
-    if (v.src !== activeClip.src_url) {
-      v.src = activeClip.src_url
-      v.load()
-    }
-    const targetTime = activeClipInfo.srcTime
-    if (Math.abs(v.currentTime - targetTime) > 0.3) {
-      v.currentTime = targetTime
-    }
-    v.playbackRate = activeClip.speed || 1
-    v.volume = Math.min(1, activeClip.volume ?? 1)
+    const v = baseVideoRef.current
+    if (!v || !baseInfo) return
+    if (v.src !== baseInfo.clip.src_url) { v.src = baseInfo.clip.src_url; v.load() }
+    if (Math.abs(v.currentTime - baseInfo.srcTime) > 0.3) v.currentTime = baseInfo.srcTime
+    v.playbackRate = baseInfo.clip.speed || 1
+    v.volume = Math.min(1, baseInfo.clip.volume ?? 1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeClip?.id])
+  }, [baseInfo?.clip?.id])
+
+  // Sync overlay video elements
+  useEffect(() => {
+    overlayList.forEach((c) => {
+      const v = overlayRefs.current.get(c.id)
+      if (!v) return
+      const isActive = currentTime >= (c.in_track || 0) && currentTime < (c.in_track || 0) + clipDuration(c)
+      if (!isActive) { if (!v.paused) v.pause(); return }
+      const desired = (c.src_in || 0) + (currentTime - (c.in_track || 0)) * (c.speed || 1)
+      if (Math.abs(v.currentTime - desired) > 0.5) v.currentTime = desired
+      v.playbackRate = c.speed || 1
+      v.volume = Math.min(1, c.volume ?? 0.5)
+    })
+  }, [currentTime, overlayList])
 
   function startPlayback() {
-    if (!project.video_clips.length) return
-    const v = videoRef.current; if (!v) return
+    if (project.video_clips.length === 0) return
     setPlaying(true)
-    const startWallTime = performance.now()
-    const startTimelineTime = currentTime >= totalDur ? 0 : currentTime
+    const startWall = performance.now()
+    const startT = currentTime >= totalDur ? 0 : currentTime
     if (currentTime >= totalDur) setCurrentTime(0)
     function loop() {
-      const elapsed = (performance.now() - startWallTime) / 1000
-      const t = Math.min(totalDur, startTimelineTime + elapsed)
+      const elapsed = (performance.now() - startWall) / 1000
+      const t = Math.min(totalDur, startT + elapsed)
       setCurrentTime(t)
       if (t >= totalDur) { setPlaying(false); return }
-      // Sync video element to active clip
-      const info = activeClipAt(t, project.video_clips)
-      if (info) {
-        const vid = videoRef.current
-        if (vid) {
-          const clip = project.video_clips[info.index]
-          if (vid.src !== clip.src_url) { vid.src = clip.src_url; vid.load() }
-          if (Math.abs(vid.currentTime - info.srcTime) > 0.5) vid.currentTime = info.srcTime
-          if (vid.paused) vid.play().catch(() => {})
-        }
+      // Sync base video
+      const bi = activeBaseClipAt(t, project.video_clips)
+      if (bi && baseVideoRef.current) {
+        const v = baseVideoRef.current
+        if (v.src !== bi.clip.src_url) { v.src = bi.clip.src_url; v.load() }
+        if (Math.abs(v.currentTime - bi.srcTime) > 0.5) v.currentTime = bi.srcTime
+        if (v.paused) v.play().catch(() => {})
       }
+      // Sync overlay videos
+      project.video_clips.forEach((c) => {
+        if ((c.track_idx || 0) === 0) return
+        const v = overlayRefs.current.get(c.id)
+        if (!v) return
+        const isActive = t >= (c.in_track || 0) && t < (c.in_track || 0) + clipDuration(c)
+        if (!isActive) { if (!v.paused) v.pause(); return }
+        if (v.paused) v.play().catch(() => {})
+      })
       playRafRef.current = requestAnimationFrame(loop)
     }
     playRafRef.current = requestAnimationFrame(loop)
@@ -351,38 +352,33 @@ export default function EditorClient({ workspaceId, userId, results, projects })
   function stopPlayback() {
     setPlaying(false)
     if (playRafRef.current) { cancelAnimationFrame(playRafRef.current); playRafRef.current = null }
-    if (videoRef.current) videoRef.current.pause()
+    if (baseVideoRef.current) baseVideoRef.current.pause()
+    overlayList.forEach((c) => { const v = overlayRefs.current.get(c.id); if (v) v.pause() })
   }
   function togglePlay() { playing ? stopPlayback() : startPlayback() }
-
   function seekTo(t) {
     const nt = Math.max(0, Math.min(totalDur, t))
     setCurrentTime(nt)
-    if (playing) {
-      stopPlayback()
-      setTimeout(startPlayback, 50)
-    } else {
-      // Sync video immediately
-      const info = activeClipAt(nt, project.video_clips)
-      if (info && videoRef.current) {
-        const clip = project.video_clips[info.index]
-        if (videoRef.current.src !== clip.src_url) { videoRef.current.src = clip.src_url; videoRef.current.load() }
-        videoRef.current.currentTime = info.srcTime
-      }
-    }
+    if (playing) { stopPlayback(); setTimeout(startPlayback, 50) }
   }
 
   const aspectClass = project.ar === '16:9' ? 'aspect-video' : project.ar === '1:1' ? 'aspect-square' : 'aspect-[9/16]'
-  const videoFilter = activeClip?.filters
-    ? `brightness(${1 + (activeClip.filters.brightness || 0)}) contrast(${activeClip.filters.contrast || 1}) saturate(${activeClip.filters.saturation || 1}) blur(${activeClip.filters.blur || 0}px)`
+  const baseFilter = baseInfo?.clip?.filters
+    ? `brightness(${1 + (baseInfo.clip.filters.brightness || 0)}) contrast(${baseInfo.clip.filters.contrast || 1}) saturate(${baseInfo.clip.filters.saturation || 1}) blur(${baseInfo.clip.filters.blur || 0}px)`
     : 'none'
+
+  // Distinct track indices for timeline rendering (overlay tracks)
+  const overlayTrackIdxs = useMemo(() => {
+    const s = new Set(overlayList.map((c) => c.track_idx))
+    return Array.from(s).sort((a, b) => b - a) // higher first (top of timeline)
+  }, [overlayList])
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold">✂️ Editor <span className="text-xs text-[var(--muted2)] font-normal">v3 full</span></h1>
-          <p className="text-xs text-[var(--muted)]">Multi-clip · Transitions · Filters · Text · Image · Music · MP4</p>
+          <h1 className="text-2xl font-bold">✂️ Editor <span className="text-xs text-[var(--muted2)] font-normal">v4 multi-track</span></h1>
+          <p className="text-xs text-[var(--muted)]">Multi-track stacking · B-roll overlay · Transitions · Filters · Subtitle · MP4</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <input value={project.name} onChange={(e) => patch({ name: e.target.value })} placeholder="Project name"
@@ -399,49 +395,61 @@ export default function EditorClient({ workspaceId, userId, results, projects })
       </div>
 
       {err && <div className="text-xs text-red-400 bg-red-900/20 border border-red-900/40 p-3 rounded">⚠ {err}</div>}
-      {exporting && exportProgress && (
-        <div className="text-xs text-orange-400 bg-orange-900/20 border border-orange-700/40 p-3 rounded whitespace-pre-wrap">⏳ {exportProgress}</div>
-      )}
-      {!exporting && exportProgress.startsWith('✓') && (
-        <div className="text-xs text-green-400 bg-green-900/20 border border-green-700/40 p-3 rounded">{exportProgress}</div>
-      )}
+      {exporting && exportProgress && <div className="text-xs text-orange-400 bg-orange-900/20 border border-orange-700/40 p-3 rounded whitespace-pre-wrap">⏳ {exportProgress}</div>}
+      {!exporting && exportProgress.startsWith('✓') && <div className="text-xs text-green-400 bg-green-900/20 border border-green-700/40 p-3 rounded">{exportProgress}</div>}
       {transcribeProgress && (
         <div className={`text-xs p-3 rounded border ${transcribeProgress.startsWith('✓') ? 'text-green-400 bg-green-900/20 border-green-700/40' : 'text-pink-300 bg-pink-900/20 border-pink-700/40'}`}>
           {transcribing ? '⏳ ' : ''}{transcribeProgress}
         </div>
       )}
 
-      <div className="grid grid-cols-[230px_1fr_310px] gap-3" style={{ minHeight: 650 }}>
+      <div className="grid grid-cols-[240px_1fr_310px] gap-3" style={{ minHeight: 700 }}>
         {/* LEFT */}
         <div className="space-y-3">
           <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-2">
             <div className="text-[10px] uppercase font-semibold text-[var(--muted)] mb-2">+ Tambah video clip</div>
-            <div className="space-y-1 max-h-64 overflow-auto">
+            <div className="space-y-2 max-h-72 overflow-auto">
               {videoSources.length === 0 ? (
-                <div className="text-[10px] text-[var(--muted)] p-2">Belum ada video. Generate di /generate dulu.</div>
+                <div className="text-[10px] text-[var(--muted)] p-2">Belum ada video.</div>
               ) : videoSources.map((r) => (
-                <button key={r.id} onClick={() => addVideoClip(r)} className="w-full text-left p-1.5 rounded border border-[var(--border)] hover:bg-[var(--surface2)] hover:border-[var(--accent)]">
-                  <div className="flex gap-2">
+                <div key={r.id} className="bg-[var(--surface2)] rounded p-1.5 border border-[var(--border)]">
+                  <div className="flex gap-2 mb-1.5">
                     <video src={r.url} muted className="w-10 aspect-[9/16] object-cover rounded bg-black flex-shrink-0" />
                     <div className="min-w-0 flex-1">
                       <div className="text-[11px] font-semibold truncate">{r.label || 'untitled'}</div>
-                      <div className="text-[9px] text-[var(--muted)] truncate">+ tambah ke sequence</div>
+                      <div className="text-[9px] text-[var(--muted)] truncate">{r.personas?.name || '—'}</div>
                     </div>
                   </div>
-                </button>
+                  <div className="grid grid-cols-2 gap-1">
+                    <button onClick={() => addVideoClip(r, false)}
+                      className="text-[10px] px-1.5 py-1 rounded bg-[var(--accent)]/30 border border-[var(--accent)]/60 text-white hover:bg-[var(--accent)]/50 font-semibold"
+                      title="Append to base track (sequential)">
+                      📹 Base
+                    </button>
+                    <button onClick={() => addVideoClip(r, true)} disabled={baseClips.length === 0}
+                      className="text-[10px] px-1.5 py-1 rounded bg-yellow-500/30 border border-yellow-500/60 text-yellow-200 hover:bg-yellow-500/50 font-semibold disabled:opacity-50"
+                      title="Add as B-roll overlay (picture-in-picture)">
+                      🎬 B-roll
+                    </button>
+                  </div>
+                </div>
               ))}
+            </div>
+            <div className="text-[9px] text-[var(--muted2)] mt-1.5 px-1">
+              <strong>📹 Base</strong>: full-frame sequential.<br />
+              <strong>🎬 B-roll</strong>: overlay PiP, layered on top.
             </div>
           </div>
 
           <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-2 space-y-1">
             <div className="text-[10px] uppercase font-semibold text-[var(--muted)] mb-1">+ Overlay & audio</div>
-            <button onClick={autoSubtitle} disabled={transcribing || !project.video_clips.length}
+            <button onClick={autoSubtitle} disabled={transcribing || baseClips.length === 0}
               className="w-full text-xs px-2 py-1.5 rounded bg-gradient-to-r from-pink-500 to-purple-500 hover:opacity-90 text-white font-bold disabled:opacity-50">
               {transcribing ? '⏳ Transcribing...' : '✨ Auto-subtitle (Gemini)'}
             </button>
             <button onClick={applyTikTokStyle} disabled={!project.text_clips.length}
               className="w-full text-xs px-2 py-1.5 rounded bg-pink-500/20 border border-pink-500/40 hover:bg-pink-500/30 text-pink-200 disabled:opacity-50">
-              🔥 Apply TikTok style ke {project.text_clips.length} text
+              🔥 TikTok style ke {project.text_clips.length} text
             </button>
             <button onClick={addTextClip} disabled={!project.video_clips.length} className="w-full text-xs px-2 py-1.5 rounded bg-purple-500/20 border border-purple-500/40 hover:bg-purple-500/30 text-purple-200 disabled:opacity-50">📝 + Text overlay</button>
             <button onClick={() => imageInputRef.current?.click()} disabled={!project.video_clips.length} className="w-full text-xs px-2 py-1.5 rounded bg-blue-500/20 border border-blue-500/40 hover:bg-blue-500/30 text-blue-200 disabled:opacity-50">🖼 Image / Logo</button>
@@ -470,9 +478,30 @@ export default function EditorClient({ workspaceId, userId, results, projects })
           <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-3">
             <div className="relative mx-auto bg-black rounded overflow-hidden" style={{ maxWidth: 360 }}>
               <div className={`${aspectClass} relative w-full`}>
-                <video ref={videoRef} className="w-full h-full object-contain" playsInline crossOrigin="anonymous" muted={false}
-                  style={{ filter: videoFilter }} />
+                {/* Base video */}
+                <video ref={baseVideoRef} className="w-full h-full object-contain" playsInline crossOrigin="anonymous" muted={false}
+                  style={{ filter: baseFilter }} />
 
+                {/* Overlay videos (B-roll) */}
+                {overlayList.map((c) => {
+                  const isActive = currentTime >= (c.in_track || 0) && currentTime < (c.in_track || 0) + clipDuration(c)
+                  const on = selected?.kind === 'video' && selected.id === c.id
+                  const pos = c.position || DEFAULT_POSITION
+                  return (
+                    <video key={c.id} ref={(el) => { if (el) overlayRefs.current.set(c.id, el); else overlayRefs.current.delete(c.id) }}
+                      src={c.src_url} crossOrigin="anonymous" muted={!isActive}
+                      onClick={(e) => { e.stopPropagation(); setSelected({ kind: 'video', id: c.id }) }}
+                      style={{
+                        position: 'absolute', left: `${pos.x_pct}%`, top: `${pos.y_pct}%`,
+                        transform: 'translate(-50%, -50%)', width: `${pos.w_pct}%`, opacity: isActive ? (pos.opacity ?? 1) : 0,
+                        pointerEvents: isActive ? 'auto' : 'none', cursor: 'pointer',
+                        outline: on ? '2px solid var(--accent)' : 'none', zIndex: c.track_idx + 5,
+                        filter: c.filters ? `brightness(${1 + (c.filters.brightness || 0)}) contrast(${c.filters.contrast || 1}) saturate(${c.filters.saturation || 1}) blur(${c.filters.blur || 0}px)` : 'none',
+                      }} />
+                  )
+                })}
+
+                {/* Image overlays */}
                 {project.image_clips.map((c) => {
                   if (currentTime < c.start || currentTime > c.end) return null
                   const on = selected?.kind === 'image' && selected.id === c.id
@@ -482,28 +511,28 @@ export default function EditorClient({ workspaceId, userId, results, projects })
                       style={{
                         position: 'absolute', left: `${c.x_pct}%`, top: `${c.y_pct}%`,
                         transform: 'translate(-50%, -50%)', width: `${c.w_pct}%`, opacity: c.opacity,
-                        outline: on ? '2px solid var(--accent)' : 'none', cursor: 'pointer', pointerEvents: 'auto',
+                        outline: on ? '2px solid var(--accent)' : 'none', cursor: 'pointer', pointerEvents: 'auto', zIndex: 50,
                       }} />
                   )
                 })}
+
+                {/* Text overlays */}
                 {project.text_clips.map((c) => {
                   if (currentTime < c.start || currentTime > c.end) return null
                   const on = selected?.kind === 'text' && selected.id === c.id
-                  // Compute fade opacity based on entrance/exit animation
                   const animDur = 0.25
-                  let opacity = 1
+                  let opacity = 1, scale = 1
                   if (c.animation === 'fade') {
                     const sinceStart = currentTime - c.start
                     const tillEnd = c.end - currentTime
                     if (sinceStart < animDur) opacity = sinceStart / animDur
                     else if (tillEnd < animDur) opacity = tillEnd / animDur
-                  }
-                  let scale = 1
-                  if (c.animation === 'pop') {
+                  } else if (c.animation === 'pop') {
                     const sinceStart = currentTime - c.start
                     if (sinceStart < animDur) {
                       const p = sinceStart / animDur
                       scale = 0.5 + p * 0.5 + Math.sin(p * Math.PI) * 0.15
+                      opacity = p
                     }
                   }
                   return (
@@ -513,15 +542,16 @@ export default function EditorClient({ workspaceId, userId, results, projects })
                         transform: `translate(-50%, -50%) scale(${scale})`,
                         color: c.color, fontWeight: c.weight, fontSize: `${c.size * 0.4}px`,
                         background: c.bg, padding: '4px 10px', borderRadius: 4, textAlign: c.align, whiteSpace: 'pre', cursor: 'pointer',
-                        textShadow: '0 1px 3px rgba(0,0,0,0.8)',
-                        outline: on ? '2px solid var(--accent)' : 'none',
-                        opacity,
+                        textShadow: '0 1px 3px rgba(0,0,0,0.8)', outline: on ? '2px solid var(--accent)' : 'none',
+                        opacity, zIndex: 100,
                       }}>{c.text}</div>
                   )
                 })}
-                {activeClip && (
-                  <div className="absolute bottom-1 left-1 text-[9px] bg-black/70 text-white px-1.5 py-0.5 rounded">
-                    Clip {activeClipInfo.index + 1}/{project.video_clips.length}
+
+                {baseInfo && (
+                  <div className="absolute bottom-1 left-1 text-[9px] bg-black/70 text-white px-1.5 py-0.5 rounded z-[200]">
+                    Base {baseInfo.index + 1}/{baseClips.length}
+                    {activeOverlaysList.length > 0 && ` · +${activeOverlaysList.length} overlay`}
                   </div>
                 )}
               </div>
@@ -536,7 +566,6 @@ export default function EditorClient({ workspaceId, userId, results, projects })
                 {currentTime.toFixed(2)}s / {totalDur.toFixed(2)}s
               </div>
             </div>
-
             {totalDur > 0 && (
               <input type="range" min={0} max={totalDur} step={0.01} value={currentTime}
                 onChange={(e) => seekTo(parseFloat(e.target.value))} className="w-full mt-2" />
@@ -544,7 +573,8 @@ export default function EditorClient({ workspaceId, userId, results, projects })
           </div>
 
           {project.video_clips.length > 0 && (
-            <Timeline project={project} totalDur={totalDur} currentTime={currentTime}
+            <Timeline project={project} baseClips={baseClips} overlayList={overlayList} overlayTrackIdxs={overlayTrackIdxs}
+              totalDur={totalDur} currentTime={currentTime}
               selected={selected} onSelect={setSelected} onSeek={seekTo} onUpdateClip={updateClip} />
           )}
         </div>
@@ -553,11 +583,10 @@ export default function EditorClient({ workspaceId, userId, results, projects })
         <div className="space-y-3">
           {selected?.kind === 'video' ? (
             <VideoClipPanel clip={project.video_clips.find((c) => c.id === selected.id)}
-              isFirst={project.video_clips[0]?.id === selected.id}
-              onUpdate={(p) => updateClip('video', selected.id, p)}
-              onDelete={() => removeVideoClip(selected.id)}
-              onMoveUp={() => moveVideoClip(selected.id, 'up')}
-              onMoveDown={() => moveVideoClip(selected.id, 'down')} />
+              onUpdate={(p) => updateClip('video', selected.id, p)} onDelete={() => removeVideoClip(selected.id)}
+              isBase={project.video_clips.find((c) => c.id === selected.id)?.track_idx === 0}
+              isFirst={baseClips[0]?.id === selected.id}
+              totalDur={totalDur} />
           ) : selected?.kind === 'text' ? (
             <TextPanel clip={project.text_clips.find((c) => c.id === selected.id)} duration={totalDur}
               onUpdate={(p) => updateClip('text', selected.id, p)} onDelete={() => deleteClip('text', selected.id)} />
@@ -578,7 +607,7 @@ export default function EditorClient({ workspaceId, userId, results, projects })
             <div className="text-[10px] uppercase font-semibold text-[var(--muted)] mb-2">Project</div>
             <div>Total: <strong>{totalDur.toFixed(2)}s</strong> @ {project.ar}</div>
             <div className="text-[10px] text-[var(--muted2)] mt-1">
-              {project.video_clips.length} clip · {project.text_clips.length} text · {project.image_clips.length} img · {project.audio_clips.length} music
+              {baseClips.length} base · {overlayList.length} overlay · {project.text_clips.length} text · {project.image_clips.length} img · {project.audio_clips.length} music
             </div>
             <Field label="Aspect ratio" className="mt-2">
               <select value={project.ar} onChange={(e) => patch({ ar: e.target.value })} className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)]">
@@ -594,7 +623,7 @@ export default function EditorClient({ workspaceId, userId, results, projects })
   )
 }
 
-function Timeline({ project, totalDur, currentTime, selected, onSelect, onSeek, onUpdateClip }) {
+function Timeline({ project, baseClips, overlayList, overlayTrackIdxs, totalDur, currentTime, selected, onSelect, onSeek, onUpdateClip }) {
   const trackRef = useRef(null)
   const dragRef = useRef(null)
   const pctToTime = (pct) => (pct / 100) * totalDur
@@ -611,7 +640,15 @@ function Timeline({ project, totalDur, currentTime, selected, onSelect, onSeek, 
       const x = ev.clientX - rect.left
       const pct = Math.max(0, Math.min(100, (x / rect.width) * 100))
       const t = pctToTime(pct)
-      if (kind === 'clipMove' && clipKind !== 'video') {
+      if (kind === 'clipMove' && clipKind === 'video') {
+        // Move video clip (overlay only — base is sequential)
+        const c = startClip
+        if ((c.track_idx || 0) === 0) return // don't move base
+        const dur = clipDuration(c)
+        const dx = (ev.clientX - origin.x) / rect.width * totalDur
+        const ns = Math.max(0, Math.min(totalDur - dur, (c.in_track || 0) + dx))
+        onUpdateClip(clipKind, clipId, { in_track: ns })
+      } else if (kind === 'clipMove' && clipKind !== 'video') {
         const c = startClip
         const len = c.end - c.start
         const dx = (ev.clientX - origin.x) / rect.width * totalDur
@@ -636,22 +673,51 @@ function Timeline({ project, totalDur, currentTime, selected, onSelect, onSeek, 
     onSeek(pctToTime((x / rect.width) * 100))
   }
 
+  function clipDuration(c) {
+    const len = Math.max(0, (c.src_out ?? 0) - (c.src_in ?? 0))
+    return len / Math.max(0.01, c.speed || 1)
+  }
+
   return (
     <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-3 select-none">
       <div className="flex items-center justify-between mb-2">
-        <div className="text-[10px] uppercase font-semibold text-[var(--muted)]">Timeline · multi-track</div>
-        <div className="text-[9px] text-[var(--muted2)]">Klik clip = select · drag pill (non-video) = move</div>
+        <div className="text-[10px] uppercase font-semibold text-[var(--muted)]">Timeline · multi-track stacking</div>
+        <div className="text-[9px] text-[var(--muted2)]">B-roll on top · drag overlay pill to reposition</div>
       </div>
 
       <div ref={trackRef} className="relative cursor-pointer" onClick={onTrackClick}>
-        {/* VIDEO track */}
-        <div className="flex items-center gap-2 mb-1.5">
-          <div className="w-12 text-[9px] text-[var(--muted)] font-semibold flex-shrink-0">📹 video</div>
+        {/* Overlay video tracks (rendered top-to-bottom, higher track_idx first) */}
+        {overlayTrackIdxs.map((trackIdx) => (
+          <div key={`ov-${trackIdx}`} className="flex items-center gap-2 mb-1">
+            <div className="w-14 text-[9px] text-yellow-400 font-bold flex-shrink-0">🎬 ov{trackIdx}</div>
+            <div className="relative flex-1 h-7 bg-yellow-900/15 rounded">
+              {overlayList.filter((c) => c.track_idx === trackIdx).map((c) => {
+                const isSel = selected?.kind === 'video' && selected.id === c.id
+                const start = c.in_track || 0
+                const dur = clipDuration(c)
+                return (
+                  <div key={c.id}
+                    onMouseDown={(e) => { startDrag(e, 'clipMove', 'video', c.id); onSelect({ kind: 'video', id: c.id }) }}
+                    onClick={(e) => { e.stopPropagation(); onSelect({ kind: 'video', id: c.id }) }}
+                    className={`absolute top-0.5 bottom-0.5 rounded text-[9px] text-white font-semibold flex items-center px-1.5 cursor-grab bg-yellow-600 ${isSel ? 'ring-2 ring-white' : ''}`}
+                    style={{ left: `${timeToPct(start)}%`, width: `${Math.max(2, timeToPct(dur))}%` }}
+                    title={c.src_label}>
+                    <span className="truncate px-1">🎬 {c.src_label?.slice(0, 14) || '—'}</span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        ))}
+
+        {/* Base video track */}
+        <div className="flex items-center gap-2 mb-1.5 border-t border-[var(--border)] pt-1.5">
+          <div className="w-14 text-[9px] text-[var(--accent)] font-bold flex-shrink-0">📹 base</div>
           <div className="relative flex-1 h-8 bg-[var(--accent)]/10 rounded">
-            {project.video_clips.map((c, i) => {
-              const start = clipInTrack(project.video_clips, i)
-              const dur = clipDuration(c)
+            {baseClips.map((c, i) => {
               const isSel = selected?.kind === 'video' && selected.id === c.id
+              const start = c.in_track || 0
+              const dur = clipDuration(c)
               const hasTrans = i > 0 && c.transition_in && c.transition_in.type !== 'cut'
               return (
                 <div key={c.id}
@@ -667,19 +733,19 @@ function Timeline({ project, totalDur, currentTime, selected, onSelect, onSeek, 
           </div>
         </div>
 
-        {/* OVERLAYS */}
+        {/* Overlay tracks (image/text/audio) */}
         {[
-          { kind: 'image', label: '🖼 image', color: 'bg-blue-900/20', pillBg: 'bg-blue-600' },
-          { kind: 'text', label: '📝 text', color: 'bg-purple-900/20', pillBg: 'bg-purple-600' },
-          { kind: 'audio', label: '🎵 audio', color: 'bg-orange-900/20', pillBg: 'bg-orange-600' },
+          { kind: 'image', label: '🖼 img', color: 'bg-blue-900/20', pillBg: 'bg-blue-600' },
+          { kind: 'text', label: '📝 txt', color: 'bg-purple-900/20', pillBg: 'bg-purple-600' },
+          { kind: 'audio', label: '🎵 aud', color: 'bg-orange-900/20', pillBg: 'bg-orange-600' },
         ].map((trk) => {
           const items = trk.kind === 'audio'
             ? (project.audio_clips || []).map((c) => ({ ...c, end: c.start + c.duration }))
             : (project[`${trk.kind}_clips`] || [])
           return (
-            <div key={trk.kind} className="flex items-center gap-2 mb-1.5">
-              <div className="w-12 text-[9px] text-[var(--muted)] font-semibold flex-shrink-0">{trk.label}</div>
-              <div className={`relative flex-1 h-7 ${trk.color} rounded`}>
+            <div key={trk.kind} className="flex items-center gap-2 mb-1">
+              <div className="w-14 text-[9px] text-[var(--muted)] font-semibold flex-shrink-0">{trk.label}</div>
+              <div className={`relative flex-1 h-6 ${trk.color} rounded`}>
                 {items.map((c) => {
                   const isSel = selected?.kind === trk.kind && selected.id === c.id
                   return (
@@ -690,7 +756,7 @@ function Timeline({ project, totalDur, currentTime, selected, onSelect, onSeek, 
                       style={{ left: `${timeToPct(c.start)}%`, width: `${Math.max(2, timeToPct(c.end - c.start))}%` }}>
                       <div onMouseDown={(e) => startDrag(e, 'clipStart', trk.kind, c.id)} className="absolute left-0 top-0 bottom-0 w-1.5 bg-white/30 cursor-ew-resize rounded-l" />
                       <div onMouseDown={(e) => startDrag(e, 'clipEnd', trk.kind, c.id)} className="absolute right-0 top-0 bottom-0 w-1.5 bg-white/30 cursor-ew-resize rounded-r" />
-                      <span className="truncate px-1">{trk.kind === 'text' ? `📝 ${c.text?.slice(0, 14)}` : trk.kind === 'image' ? `🖼 ${c.src_name?.slice(0, 12)}` : `🎵 ${c.src_name?.slice(0, 12)}`}</span>
+                      <span className="truncate px-1">{trk.kind === 'text' ? `📝 ${c.text?.slice(0, 10)}` : trk.kind === 'image' ? `🖼 ${c.src_name?.slice(0, 10)}` : `🎵 ${c.src_name?.slice(0, 10)}`}</span>
                     </div>
                   )
                 })}
@@ -700,12 +766,12 @@ function Timeline({ project, totalDur, currentTime, selected, onSelect, onSeek, 
         })}
 
         {/* Playhead */}
-        <div className="absolute top-0 bottom-0 w-px bg-red-500 z-30 pointer-events-none" style={{ left: `calc(48px + (100% - 48px) * ${timeToPct(currentTime) / 100})` }}>
+        <div className="absolute top-0 bottom-0 w-px bg-red-500 z-30 pointer-events-none" style={{ left: `calc(56px + (100% - 56px) * ${timeToPct(currentTime) / 100})` }}>
           <div className="absolute -top-1 -left-1 w-2 h-2 bg-red-500 rounded-full" />
         </div>
       </div>
 
-      <div className="relative h-3 mt-1 ml-12">
+      <div className="relative h-3 mt-1 ml-14">
         {[0, 0.25, 0.5, 0.75, 1].map((p, i) => (
           <span key={i} className="absolute text-[9px] text-[var(--muted)] font-mono" style={{ left: `${p * 100}%`, transform: 'translateX(-50%)' }}>
             {(p * totalDur).toFixed(1)}s
@@ -716,21 +782,27 @@ function Timeline({ project, totalDur, currentTime, selected, onSelect, onSeek, 
   )
 }
 
-function VideoClipPanel({ clip, isFirst, onUpdate, onDelete, onMoveUp, onMoveDown }) {
+function VideoClipPanel({ clip, isBase, isFirst, totalDur, onUpdate, onDelete }) {
   if (!clip) return null
   const updFilter = (k, v) => onUpdate({ filters: { ...clip.filters, [k]: v } })
   const updTrans = (k, v) => onUpdate({ transition_in: { ...clip.transition_in, [k]: v } })
+  const updPos = (k, v) => onUpdate({ position: { ...clip.position, [k]: v } })
   return (
     <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-3 space-y-2 text-xs max-h-[80vh] overflow-y-auto">
       <div className="flex items-center justify-between">
-        <div className="text-[10px] uppercase font-semibold text-[var(--muted)]">📹 Video clip</div>
-        <div className="flex gap-1">
-          <button onClick={onMoveUp} className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--surface2)] hover:bg-[var(--border)]" title="Move up">▲</button>
-          <button onClick={onMoveDown} className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--surface2)] hover:bg-[var(--border)]" title="Move down">▼</button>
-          <button onClick={onDelete} className="text-[10px] px-1.5 py-0.5 rounded text-red-400 hover:bg-[var(--surface2)]">Hapus</button>
+        <div className="text-[10px] uppercase font-semibold">
+          {isBase ? <span className="text-[var(--accent)]">📹 Base clip</span> : <span className="text-yellow-400">🎬 B-roll overlay (track {clip.track_idx})</span>}
         </div>
+        <button onClick={onDelete} className="text-[10px] px-1.5 py-0.5 rounded text-red-400 hover:bg-[var(--surface2)]">Hapus</button>
       </div>
       <div className="text-[9px] text-[var(--muted)] truncate">{clip.src_label}</div>
+
+      {!isBase && (
+        <Field label={`Mulai di: ${(clip.in_track || 0).toFixed(2)}s`}>
+          <input type="range" min={0} max={totalDur || 30} step={0.05} value={clip.in_track || 0}
+            onChange={(e) => onUpdate({ in_track: parseFloat(e.target.value) })} className="w-full" />
+        </Field>
+      )}
 
       <Field label={`Trim in: ${(clip.src_in || 0).toFixed(2)}s`}>
         <input type="range" min={0} max={clip.src_duration} step={0.05} value={clip.src_in} onChange={(e) => onUpdate({ src_in: parseFloat(e.target.value) })} className="w-full" />
@@ -745,15 +817,41 @@ function VideoClipPanel({ clip, isFirst, onUpdate, onDelete, onMoveUp, onMoveDow
         <input type="range" min={0} max={1.5} step={0.05} value={clip.volume} onChange={(e) => onUpdate({ volume: parseFloat(e.target.value) })} className="w-full" />
       </Field>
 
-      {!isFirst && (
+      {!isBase && (
+        <div className="pt-2 border-t border-[var(--border)]">
+          <div className="text-[10px] uppercase font-semibold text-yellow-400 mb-1.5">📍 Position (Picture-in-Picture)</div>
+          <div className="grid grid-cols-2 gap-2">
+            <Field label={`X: ${clip.position.x_pct}%`}>
+              <input type="range" min={0} max={100} value={clip.position.x_pct} onChange={(e) => updPos('x_pct', parseInt(e.target.value))} className="w-full" />
+            </Field>
+            <Field label={`Y: ${clip.position.y_pct}%`}>
+              <input type="range" min={0} max={100} value={clip.position.y_pct} onChange={(e) => updPos('y_pct', parseInt(e.target.value))} className="w-full" />
+            </Field>
+          </div>
+          <Field label={`Width: ${clip.position.w_pct}%`}>
+            <input type="range" min={10} max={100} value={clip.position.w_pct} onChange={(e) => updPos('w_pct', parseInt(e.target.value))} className="w-full" />
+          </Field>
+          <Field label={`Opacity: ${Math.round(clip.position.opacity * 100)}%`}>
+            <input type="range" min={0} max={1} step={0.05} value={clip.position.opacity} onChange={(e) => updPos('opacity', parseFloat(e.target.value))} className="w-full" />
+          </Field>
+          <div className="grid grid-cols-3 gap-1 mt-2">
+            <button onClick={() => onUpdate({ position: { ...clip.position, x_pct: 25, y_pct: 25, w_pct: 40 } })} className="text-[9px] px-1 py-1 rounded bg-[var(--surface2)] hover:bg-[var(--border)]">↖ TL</button>
+            <button onClick={() => onUpdate({ position: { ...clip.position, x_pct: 50, y_pct: 50, w_pct: 60 } })} className="text-[9px] px-1 py-1 rounded bg-[var(--surface2)] hover:bg-[var(--border)]">⊕ Center</button>
+            <button onClick={() => onUpdate({ position: { ...clip.position, x_pct: 75, y_pct: 25, w_pct: 40 } })} className="text-[9px] px-1 py-1 rounded bg-[var(--surface2)] hover:bg-[var(--border)]">↗ TR</button>
+            <button onClick={() => onUpdate({ position: { ...clip.position, x_pct: 25, y_pct: 75, w_pct: 40 } })} className="text-[9px] px-1 py-1 rounded bg-[var(--surface2)] hover:bg-[var(--border)]">↙ BL</button>
+            <button onClick={() => onUpdate({ position: { ...clip.position, x_pct: 50, y_pct: 50, w_pct: 100, opacity: 1 } })} className="text-[9px] px-1 py-1 rounded bg-[var(--surface2)] hover:bg-[var(--border)]">⊟ Full</button>
+            <button onClick={() => onUpdate({ position: { ...clip.position, x_pct: 75, y_pct: 75, w_pct: 40 } })} className="text-[9px] px-1 py-1 rounded bg-[var(--surface2)] hover:bg-[var(--border)]">↘ BR</button>
+          </div>
+        </div>
+      )}
+
+      {isBase && !isFirst && (
         <div className="pt-2 border-t border-[var(--border)]">
           <div className="text-[10px] uppercase font-semibold text-yellow-400 mb-1.5">🎬 Transition (from previous)</div>
           <div className="grid grid-cols-2 gap-2">
             <Field label="Type">
               <select value={clip.transition_in.type} onChange={(e) => updTrans('type', e.target.value)} className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)]">
-                <option value="cut">Cut (none)</option>
-                <option value="fade">Fade</option>
-                <option value="crossfade">Crossfade</option>
+                <option value="cut">Cut</option><option value="fade">Fade</option><option value="crossfade">Crossfade</option>
               </select>
             </Field>
             <Field label={`Duration: ${clip.transition_in.duration}s`}>
@@ -785,7 +883,7 @@ function VideoClipPanel({ clip, isFirst, onUpdate, onDelete, onMoveUp, onMoveDow
 function TextPanel({ clip, duration, onUpdate, onDelete }) {
   if (!clip) return null
   return (
-    <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-3 space-y-2 text-xs">
+    <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-3 space-y-2 text-xs max-h-[80vh] overflow-y-auto">
       <div className="flex items-center justify-between">
         <div className="text-[10px] uppercase font-semibold text-[var(--muted)]">📝 Text overlay</div>
         <button onClick={onDelete} className="text-[10px] text-red-400 hover:underline">Hapus</button>
@@ -810,12 +908,9 @@ function TextPanel({ clip, duration, onUpdate, onDelete }) {
         <Field label="Color"><input type="color" value={clip.color} onChange={(e) => onUpdate({ color: e.target.value })} className="w-full h-8 rounded cursor-pointer" /></Field>
         <Field label="BG">
           <select value={clip.bg} onChange={(e) => onUpdate({ bg: e.target.value })} className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)]">
-            <option value="transparent">Transparent</option>
-            <option value="rgba(0,0,0,0.6)">Black 60%</option>
-            <option value="rgba(0,0,0,0.85)">Black 85%</option>
-            <option value="rgba(255,255,255,0.85)">White 85%</option>
-            <option value="rgba(255,87,87,0.85)">Red</option>
-            <option value="rgba(255,193,7,0.85)">Yellow</option>
+            <option value="transparent">Transparent</option><option value="rgba(0,0,0,0.6)">Black 60%</option>
+            <option value="rgba(0,0,0,0.85)">Black 85%</option><option value="rgba(255,255,255,0.85)">White 85%</option>
+            <option value="rgba(255,87,87,0.85)">Red</option><option value="rgba(255,193,7,0.85)">Yellow</option>
           </select>
         </Field>
       </div>
@@ -834,9 +929,7 @@ function TextPanel({ clip, duration, onUpdate, onDelete }) {
       </div>
       <Field label="Animation">
         <select value={clip.animation || 'none'} onChange={(e) => onUpdate({ animation: e.target.value === 'none' ? null : e.target.value })} className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)]">
-          <option value="none">None (static)</option>
-          <option value="fade">Fade in/out</option>
-          <option value="pop">Pop (scale + fade)</option>
+          <option value="none">None (static)</option><option value="fade">Fade in/out</option><option value="pop">Pop (scale + fade)</option>
         </select>
       </Field>
     </div>
