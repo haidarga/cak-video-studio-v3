@@ -25,6 +25,7 @@ export const VIDEO_COSTS_PER_SECOND = {
   'fal-ai/bytedance/seedance/v1/lite/image-to-video': 0.16,
   'bytedance/seedance-2.0/fast/image-to-video': 0.24,
   'fal-ai/bytedance/seedance/v1/pro/image-to-video': 0.25,
+  'fal-ai/kling-video/v3/pro/image-to-video': 0.28,
   'fal-ai/veo3/fast': 0.20,
   'fal-ai/veo3': 0.50,
   _default: 0.10,

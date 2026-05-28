@@ -133,6 +133,7 @@ export const VIDEO_MODELS = [
   { v: 'fal-ai/kling-video/o3/standard/image-to-video', l: 'Kling O3 — ~$0.11/dtk (audio)' },
   { v: 'alibaba/happy-horse/image-to-video', l: 'Happy Horse 1.0 — ~$0.14/dtk' },
   { v: 'bytedance/seedance-2.0/fast/image-to-video', l: 'Seedance 2 Fast — ~$0.24/dtk' },
+  { v: 'fal-ai/kling-video/v3/pro/image-to-video', l: 'Kling v3 Pro — ~$0.28/dtk (best quality)' },
 ]
 export const IMAGE_MODELS = [
   { v: 'fal-ai/nano-banana-2/edit', l: 'Nano Banana 2 — fast multi-ref' },
