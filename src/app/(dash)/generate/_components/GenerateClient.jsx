@@ -9,9 +9,57 @@ import {
 import { imageCost, videoCost, fmtCost } from '@/lib/cost-table'
 import { STYLE_PRESETS, applyStylePreset } from '@/lib/style-presets'
 
-export default function GenerateClient({ workspaceId, userId, activeBrand, personas, workspaceRefs }) {
+export default function GenerateClient({ workspaceId, userId, activeBrand, personas: initialPersonas, workspaceRefs: initialRefs }) {
   const supabase = createClient()
+  // Mirror server-fetched data to local state so realtime can keep it fresh.
+  // Without this, mutations made elsewhere (other tab, /qc, /refs, persona
+  // edit) require a full page refresh to reflect — which is what the user
+  // was complaining about.
+  const [personas, setPersonas] = useState(initialPersonas)
+  const [workspaceRefs, setWorkspaceRefs] = useState(initialRefs)
   const [selectedIds, setSelectedIds] = useState(new Set())
+
+  // Realtime sync: any change to personas / refs / persona_refs (link table)
+  // for this workspace triggers a targeted refetch. Single channel covers all
+  // tables — cheap on the wire, no re-subscribe per route.
+  useEffect(() => {
+    if (!workspaceId) return
+    let pendingPersonas = null
+    let pendingRefs = null
+    function reloadPersonas() {
+      if (pendingPersonas) return
+      pendingPersonas = setTimeout(async () => {
+        pendingPersonas = null
+        const { data } = await supabase
+          .from('personas')
+          .select('id, name, username, avatar_url, role_label, postiz_channel_id, voice_id, voice_name, persona_refs(refs(id, fal_url, label, knowledge, kind))')
+          .eq('workspace_id', workspaceId).order('created_at', { ascending: false })
+        if (data) setPersonas(data)
+      }, 400)
+    }
+    function reloadRefs() {
+      if (pendingRefs) return
+      pendingRefs = setTimeout(async () => {
+        pendingRefs = null
+        const { data } = await supabase.from('refs')
+          .select('id, fal_url, label, knowledge, kind')
+          .eq('workspace_id', workspaceId).order('created_at', { ascending: false })
+        if (data) setWorkspaceRefs(data)
+      }, 400)
+    }
+    const ch = supabase.channel('gen-' + workspaceId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'personas', filter: `workspace_id=eq.${workspaceId}` }, reloadPersonas)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'refs', filter: `workspace_id=eq.${workspaceId}` }, reloadRefs)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'persona_refs' }, reloadPersonas)
+      .subscribe()
+    return () => {
+      supabase.removeChannel(ch)
+      if (pendingPersonas) { clearTimeout(pendingPersonas); pendingPersonas = null }
+      if (pendingRefs) { clearTimeout(pendingRefs); pendingRefs = null }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId])
+
   const [globalConfig, setGlobalConfig] = useState({
     mode: 'shots', ar: '9:16', lang: 'Indonesian',
     imgModel: IMAGE_MODELS[0].v, vidModel: VIDEO_MODELS[0].v,
@@ -1033,12 +1081,31 @@ function StyleRefsPicker({ workspaceId, userId, selectedIds, onChange }) {
   useEffect(() => {
     if (!workspaceId) return
     setLoading(true)
-    supabase.from('refs')
-      .select('id, fal_url, label, knowledge, kind')
-      .eq('workspace_id', workspaceId)
-      .eq('kind', 'style')
-      .order('created_at', { ascending: false })
-      .then(({ data }) => { setRefs(data || []); setLoading(false) })
+    async function load() {
+      const { data, error } = await supabase.from('refs')
+        .select('id, fal_url, label, knowledge, kind')
+        .eq('workspace_id', workspaceId)
+        .eq('kind', 'style')
+        .order('created_at', { ascending: false })
+      if (error) {
+        // 400 dari sini berarti ref_kind enum belum punya 'style' value.
+        // Sebelum migration 0015 di-apply, fail gracefully — tampilin empty
+        // list bukannya throw. Migrasi enum: alter type ref_kind add value 'style'.
+        if (error.code === 'PGRST204' || /invalid input value for enum/i.test(error.message)) {
+          setErr('Style refs disabled — apply migration 0015_ref_kind_style.sql di Supabase SQL Editor.')
+        }
+        setRefs([])
+      } else {
+        setRefs(data || [])
+      }
+      setLoading(false)
+    }
+    load()
+    // Realtime sync: kalau user upload style ref atau hapus, list auto-update.
+    const ch = supabase.channel('styleref-' + workspaceId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'refs', filter: `workspace_id=eq.${workspaceId}` }, () => load())
+      .subscribe()
+    return () => { supabase.removeChannel(ch) }
   }, [workspaceId, supabase])
 
   function toggle(id) {
