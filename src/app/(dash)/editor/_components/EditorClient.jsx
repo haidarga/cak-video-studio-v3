@@ -610,9 +610,30 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
   }
 
   const aspectClass = project.ar === '16:9' ? 'aspect-video' : project.ar === '1:1' ? 'aspect-square' : 'aspect-[9/16]'
-  const baseFilter = baseInfo?.clip?.filters
-    ? `brightness(${1 + (baseInfo.clip.filters.brightness || 0)}) contrast(${baseInfo.clip.filters.contrast || 1}) saturate(${baseInfo.clip.filters.saturation || 1}) blur(${baseInfo.clip.filters.blur || 0}px)`
-    : 'none'
+  // Build CSS filter string ONLY when filter values are non-default. Applying
+  // `filter: brightness(1) contrast(1) saturate(1) blur(0px)` (identity) still
+  // forces the browser to composite every video frame through a filter chain,
+  // which kills preview FPS on weaker GPUs. Returning 'none' when all values
+  // are default lets the browser short-circuit the filter pass entirely.
+  const baseFilter = useMemo(() => {
+    const f = baseInfo?.clip?.filters
+    if (!f) return 'none'
+    const isDefault = (f.brightness || 0) === 0
+      && (f.contrast || 1) === 1
+      && (f.saturation || 1) === 1
+      && (f.blur || 0) === 0
+    if (isDefault) return 'none'
+    return `brightness(${1 + (f.brightness || 0)}) contrast(${f.contrast || 1}) saturate(${f.saturation || 1}) blur(${f.blur || 0}px)`
+  }, [baseInfo?.clip?.filters?.brightness, baseInfo?.clip?.filters?.contrast, baseInfo?.clip?.filters?.saturation, baseInfo?.clip?.filters?.blur])
+
+  // Cache overlay filter strings the same way — `filter: none` everywhere by
+  // default keeps the composite cheap.
+  function overlayFilter(c) {
+    const f = c?.filters
+    if (!f) return 'none'
+    if ((f.brightness || 0) === 0 && (f.contrast || 1) === 1 && (f.saturation || 1) === 1 && (f.blur || 0) === 0) return 'none'
+    return `brightness(${1 + (f.brightness || 0)}) contrast(${f.contrast || 1}) saturate(${f.saturation || 1}) blur(${f.blur || 0}px)`
+  }
 
   // Distinct track indices for timeline rendering (overlay tracks)
   const overlayTrackIdxs = useMemo(() => {
@@ -799,7 +820,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                         transform: 'translate(-50%, -50%)', width: `${pos.w_pct}%`, opacity: isActive ? (pos.opacity ?? 1) : 0,
                         pointerEvents: isActive ? 'auto' : 'none', cursor: 'pointer',
                         outline: on ? '2px solid var(--accent)' : 'none', zIndex: c.track_idx + 5,
-                        filter: c.filters ? `brightness(${1 + (c.filters.brightness || 0)}) contrast(${c.filters.contrast || 1}) saturate(${c.filters.saturation || 1}) blur(${c.filters.blur || 0}px)` : 'none',
+                        filter: overlayFilter(c),
                       }} />
                   )
                 })}
@@ -1167,19 +1188,19 @@ function VideoClipPanel({ clip, isBase, isFirst, totalDur, onUpdate, onDelete })
 
       {!isBase && (
         <Field label={`Mulai di: ${(clip.in_track || 0).toFixed(2)}s`}>
-          <input type="range" min={0} max={totalDur || 30} step={0.05} value={clip.in_track || 0}
-            onChange={(e) => onUpdate({ in_track: parseFloat(e.target.value) })} className="w-full" />
+          <LiveRange min={0} max={totalDur || 30} step={0.05} value={clip.in_track || 0}
+            onCommit={(v) => onUpdate({ in_track: v })} />
         </Field>
       )}
 
       <Field label={`Trim in: ${(clip.src_in || 0).toFixed(2)}s`}>
-        <input type="range" min={0} max={clip.src_duration} step={0.05} value={clip.src_in} onChange={(e) => onUpdate({ src_in: parseFloat(e.target.value) })} className="w-full" />
+        <LiveRange min={0} max={clip.src_duration} step={0.05} value={clip.src_in} onCommit={(v) => onUpdate({ src_in: v })} />
       </Field>
       <Field label={`Trim out: ${(clip.src_out || 0).toFixed(2)}s of ${clip.src_duration?.toFixed(1)}s`}>
-        <input type="range" min={0} max={clip.src_duration} step={0.05} value={clip.src_out} onChange={(e) => onUpdate({ src_out: parseFloat(e.target.value) })} className="w-full" />
+        <LiveRange min={0} max={clip.src_duration} step={0.05} value={clip.src_out} onCommit={(v) => onUpdate({ src_out: v })} />
       </Field>
       <Field label={`Speed: ${clip.speed}x`}>
-        <input type="range" min={0.25} max={3} step={0.05} value={clip.speed} onChange={(e) => onUpdate({ speed: parseFloat(e.target.value) })} className="w-full" />
+        <LiveRange min={0.25} max={3} step={0.05} value={clip.speed} onCommit={(v) => onUpdate({ speed: v })} />
       </Field>
       <Field label="Speed ramp (linear in→out)">
         <div className="grid grid-cols-2 gap-1">
@@ -1193,7 +1214,7 @@ function VideoClipPanel({ clip, isBase, isFirst, totalDur, onUpdate, onDelete })
         <div className="text-[9px] text-[var(--muted2)] mt-0.5">Kosong = constant speed (use ↑). Isi = ramp linear dari In ke Out.</div>
       </Field>
       <Field label={`Volume: ${Math.round(clip.volume * 100)}%`}>
-        <input type="range" min={0} max={1.5} step={0.05} value={clip.volume} onChange={(e) => onUpdate({ volume: parseFloat(e.target.value) })} className="w-full" />
+        <LiveRange min={0} max={1.5} step={0.05} value={clip.volume} onCommit={(v) => onUpdate({ volume: v })} />
       </Field>
 
       {/* Cloned voice — present when result has cloned_audio_url. Lets user
@@ -1221,17 +1242,17 @@ function VideoClipPanel({ clip, isBase, isFirst, totalDur, onUpdate, onDelete })
           <div className="text-[10px] uppercase font-semibold text-yellow-400 mb-1.5">📍 Position (Picture-in-Picture)</div>
           <div className="grid grid-cols-2 gap-2">
             <Field label={`X: ${clip.position.x_pct}%`}>
-              <input type="range" min={0} max={100} value={clip.position.x_pct} onChange={(e) => updPos('x_pct', parseInt(e.target.value))} className="w-full" />
+              <LiveRange min={0} max={100} step={1} value={clip.position.x_pct} onCommit={(v) => updPos('x_pct', Math.round(v))} />
             </Field>
             <Field label={`Y: ${clip.position.y_pct}%`}>
-              <input type="range" min={0} max={100} value={clip.position.y_pct} onChange={(e) => updPos('y_pct', parseInt(e.target.value))} className="w-full" />
+              <LiveRange min={0} max={100} step={1} value={clip.position.y_pct} onCommit={(v) => updPos('y_pct', Math.round(v))} />
             </Field>
           </div>
           <Field label={`Width: ${clip.position.w_pct}%`}>
-            <input type="range" min={10} max={100} value={clip.position.w_pct} onChange={(e) => updPos('w_pct', parseInt(e.target.value))} className="w-full" />
+            <LiveRange min={10} max={100} step={1} value={clip.position.w_pct} onCommit={(v) => updPos('w_pct', Math.round(v))} />
           </Field>
           <Field label={`Opacity: ${Math.round(clip.position.opacity * 100)}%`}>
-            <input type="range" min={0} max={1} step={0.05} value={clip.position.opacity} onChange={(e) => updPos('opacity', parseFloat(e.target.value))} className="w-full" />
+            <LiveRange min={0} max={1} step={0.05} value={clip.position.opacity} onCommit={(v) => updPos('opacity', v)} />
           </Field>
           <div className="grid grid-cols-3 gap-1 mt-2">
             <button onClick={() => onUpdate({ position: { ...clip.position, x_pct: 25, y_pct: 25, w_pct: 40 } })} className="text-[9px] px-1 py-1 rounded bg-[var(--surface2)] hover:bg-[var(--border)]">↖ TL</button>
@@ -1283,7 +1304,7 @@ function VideoClipPanel({ clip, isBase, isFirst, totalDur, onUpdate, onDelete })
               </select>
             </Field>
             <Field label={`Duration: ${clip.transition_in.duration}s`}>
-              <input type="range" min={0.1} max={2} step={0.1} value={clip.transition_in.duration} onChange={(e) => updTrans('duration', parseFloat(e.target.value))} className="w-full" disabled={clip.transition_in.type === 'cut'} />
+              <LiveRange min={0.1} max={2} step={0.1} value={clip.transition_in.duration} onCommit={(v) => updTrans('duration', v)} disabled={clip.transition_in.type === 'cut'} />
             </Field>
           </div>
         </div>
@@ -1292,16 +1313,16 @@ function VideoClipPanel({ clip, isBase, isFirst, totalDur, onUpdate, onDelete })
       <div className="pt-2 border-t border-[var(--border)]">
         <div className="text-[10px] uppercase font-semibold text-cyan-400 mb-1.5">🎨 Filters</div>
         <Field label={`Brightness: ${clip.filters.brightness > 0 ? '+' : ''}${(clip.filters.brightness * 100).toFixed(0)}%`}>
-          <input type="range" min={-0.5} max={0.5} step={0.05} value={clip.filters.brightness} onChange={(e) => updFilter('brightness', parseFloat(e.target.value))} className="w-full" />
+          <LiveRange min={-0.5} max={0.5} step={0.05} value={clip.filters.brightness} onCommit={(v) => updFilter('brightness', v)} />
         </Field>
         <Field label={`Contrast: ${clip.filters.contrast.toFixed(2)}x`}>
-          <input type="range" min={0.5} max={2} step={0.05} value={clip.filters.contrast} onChange={(e) => updFilter('contrast', parseFloat(e.target.value))} className="w-full" />
+          <LiveRange min={0.5} max={2} step={0.05} value={clip.filters.contrast} onCommit={(v) => updFilter('contrast', v)} />
         </Field>
         <Field label={`Saturation: ${clip.filters.saturation.toFixed(2)}x`}>
-          <input type="range" min={0} max={3} step={0.05} value={clip.filters.saturation} onChange={(e) => updFilter('saturation', parseFloat(e.target.value))} className="w-full" />
+          <LiveRange min={0} max={3} step={0.05} value={clip.filters.saturation} onCommit={(v) => updFilter('saturation', v)} />
         </Field>
         <Field label={`Blur: ${clip.filters.blur}px`}>
-          <input type="range" min={0} max={20} step={1} value={clip.filters.blur} onChange={(e) => updFilter('blur', parseInt(e.target.value))} className="w-full" />
+          <LiveRange min={0} max={20} step={1} value={clip.filters.blur} onCommit={(v) => updFilter('blur', Math.round(v))} />
         </Field>
       </div>
     </div>
@@ -1321,17 +1342,17 @@ function TextPanel({ clip, duration, onUpdate, onDelete }) {
       </Field>
       <div className="grid grid-cols-2 gap-2">
         <Field label={`Start: ${clip.start.toFixed(2)}s`}>
-          <input type="range" min={0} max={duration} step={0.05} value={clip.start} onChange={(e) => onUpdate({ start: parseFloat(e.target.value) })} className="w-full" />
+          <LiveRange min={0} max={duration} step={0.05} value={clip.start} onCommit={(v) => onUpdate({ start: v })} />
         </Field>
         <Field label={`End: ${clip.end.toFixed(2)}s`}>
-          <input type="range" min={0} max={duration} step={0.05} value={clip.end} onChange={(e) => onUpdate({ end: parseFloat(e.target.value) })} className="w-full" />
+          <LiveRange min={0} max={duration} step={0.05} value={clip.end} onCommit={(v) => onUpdate({ end: v })} />
         </Field>
       </div>
       <div className="grid grid-cols-2 gap-2">
-        <Field label={`X: ${clip.x_pct}%`}><input type="range" min={0} max={100} value={clip.x_pct} onChange={(e) => onUpdate({ x_pct: parseInt(e.target.value) })} className="w-full" /></Field>
-        <Field label={`Y: ${clip.y_pct}%`}><input type="range" min={0} max={100} value={clip.y_pct} onChange={(e) => onUpdate({ y_pct: parseInt(e.target.value) })} className="w-full" /></Field>
+        <Field label={`X: ${clip.x_pct}%`}><LiveRange min={0} max={100} step={1} value={clip.x_pct} onCommit={(v) => onUpdate({ x_pct: Math.round(v) })} /></Field>
+        <Field label={`Y: ${clip.y_pct}%`}><LiveRange min={0} max={100} step={1} value={clip.y_pct} onCommit={(v) => onUpdate({ y_pct: Math.round(v) })} /></Field>
       </div>
-      <Field label={`Size: ${clip.size}px`}><input type="range" min={16} max={120} value={clip.size} onChange={(e) => onUpdate({ size: parseInt(e.target.value) })} className="w-full" /></Field>
+      <Field label={`Size: ${clip.size}px`}><LiveRange min={16} max={120} step={1} value={clip.size} onCommit={(v) => onUpdate({ size: Math.round(v) })} /></Field>
       <div className="grid grid-cols-2 gap-2">
         <Field label="Color"><input type="color" value={clip.color} onChange={(e) => onUpdate({ color: e.target.value })} className="w-full h-8 rounded cursor-pointer" /></Field>
         <Field label="BG">
@@ -1375,15 +1396,15 @@ function ImagePanel({ clip, duration, onUpdate, onDelete }) {
       <img src={clip.src_url} alt="" className="w-full max-h-24 object-contain bg-black/30 rounded" />
       <div className="text-[9px] text-[var(--muted)] truncate">{clip.src_name}</div>
       <div className="grid grid-cols-2 gap-2">
-        <Field label={`Start: ${clip.start.toFixed(2)}s`}><input type="range" min={0} max={duration} step={0.05} value={clip.start} onChange={(e) => onUpdate({ start: parseFloat(e.target.value) })} className="w-full" /></Field>
-        <Field label={`End: ${clip.end.toFixed(2)}s`}><input type="range" min={0} max={duration} step={0.05} value={clip.end} onChange={(e) => onUpdate({ end: parseFloat(e.target.value) })} className="w-full" /></Field>
+        <Field label={`Start: ${clip.start.toFixed(2)}s`}><LiveRange min={0} max={duration} step={0.05} value={clip.start} onCommit={(v) => onUpdate({ start: v })} /></Field>
+        <Field label={`End: ${clip.end.toFixed(2)}s`}><LiveRange min={0} max={duration} step={0.05} value={clip.end} onCommit={(v) => onUpdate({ end: v })} /></Field>
       </div>
       <div className="grid grid-cols-2 gap-2">
-        <Field label={`X: ${clip.x_pct}%`}><input type="range" min={0} max={100} value={clip.x_pct} onChange={(e) => onUpdate({ x_pct: parseInt(e.target.value) })} className="w-full" /></Field>
-        <Field label={`Y: ${clip.y_pct}%`}><input type="range" min={0} max={100} value={clip.y_pct} onChange={(e) => onUpdate({ y_pct: parseInt(e.target.value) })} className="w-full" /></Field>
+        <Field label={`X: ${clip.x_pct}%`}><LiveRange min={0} max={100} step={1} value={clip.x_pct} onCommit={(v) => onUpdate({ x_pct: Math.round(v) })} /></Field>
+        <Field label={`Y: ${clip.y_pct}%`}><LiveRange min={0} max={100} step={1} value={clip.y_pct} onCommit={(v) => onUpdate({ y_pct: Math.round(v) })} /></Field>
       </div>
-      <Field label={`Width: ${clip.w_pct}%`}><input type="range" min={5} max={100} value={clip.w_pct} onChange={(e) => onUpdate({ w_pct: parseInt(e.target.value) })} className="w-full" /></Field>
-      <Field label={`Opacity: ${Math.round(clip.opacity * 100)}%`}><input type="range" min={0} max={1} step={0.05} value={clip.opacity} onChange={(e) => onUpdate({ opacity: parseFloat(e.target.value) })} className="w-full" /></Field>
+      <Field label={`Width: ${clip.w_pct}%`}><LiveRange min={5} max={100} step={1} value={clip.w_pct} onCommit={(v) => onUpdate({ w_pct: Math.round(v) })} /></Field>
+      <Field label={`Opacity: ${Math.round(clip.opacity * 100)}%`}><LiveRange min={0} max={1} step={0.05} value={clip.opacity} onCommit={(v) => onUpdate({ opacity: v })} /></Field>
     </div>
   )
 }
@@ -1398,10 +1419,10 @@ function AudioPanel({ clip, duration, onUpdate, onDelete }) {
       </div>
       <audio src={clip.src_url} controls className="w-full" />
       <div className="text-[9px] text-[var(--muted)] truncate">{clip.src_name}</div>
-      <Field label={`Mulai di: ${clip.start.toFixed(2)}s`}><input type="range" min={0} max={duration} step={0.1} value={clip.start} onChange={(e) => onUpdate({ start: parseFloat(e.target.value) })} className="w-full" /></Field>
-      <Field label={`Volume: ${Math.round(clip.volume * 100)}%`}><input type="range" min={0} max={1.5} step={0.05} value={clip.volume} onChange={(e) => onUpdate({ volume: parseFloat(e.target.value) })} className="w-full" /></Field>
+      <Field label={`Mulai di: ${clip.start.toFixed(2)}s`}><LiveRange min={0} max={duration} step={0.1} value={clip.start} onCommit={(v) => onUpdate({ start: v })} /></Field>
+      <Field label={`Volume: ${Math.round(clip.volume * 100)}%`}><LiveRange min={0} max={1.5} step={0.05} value={clip.volume} onCommit={(v) => onUpdate({ volume: v })} /></Field>
       <Field label={`BGM duck saat 🎙 voice main: ${Math.round((clip.bgm_duck ?? 0.25) * 100)}%`}>
-        <input type="range" min={0} max={1} step={0.05} value={clip.bgm_duck ?? 0.25} onChange={(e) => onUpdate({ bgm_duck: parseFloat(e.target.value) })} className="w-full" />
+        <LiveRange min={0} max={1} step={0.05} value={clip.bgm_duck ?? 0.25} onCommit={(v) => onUpdate({ bgm_duck: v })} />
         <div className="text-[9px] text-[var(--muted2)] mt-0.5">Volume BGM otomatis turun ke level ini saat clip yang pakai cloned voice lagi main.</div>
       </Field>
     </div>
@@ -1414,5 +1435,33 @@ function Field({ label, children, className = '' }) {
       <div className="text-[9px] uppercase text-[var(--muted)] font-semibold mb-1">{label}</div>
       {children}
     </div>
+  )
+}
+
+// Local-state range slider that commits to parent only on drag release.
+// Inspector sliders used to fire onChange on every pixel of drag → parent
+// state → re-render entire EditorClient (1418 LOC) → re-paint video. Now
+// drag updates LOCAL state only (smooth), commit happens on mouseup / touchend
+// / blur — drops re-renders during drag by ~95%.
+function LiveRange({ value, onCommit, min, max, step, className = 'w-full', disabled }) {
+  const [local, setLocal] = useState(value)
+  const draggingRef = useRef(false)
+  // Sync external value changes (e.g. realtime update from another tab)
+  // unless user is actively dragging — don't yank slider from under their finger.
+  useEffect(() => { if (!draggingRef.current) setLocal(value) }, [value])
+  function start() { draggingRef.current = true }
+  function commit(v) {
+    draggingRef.current = false
+    if (v !== value) onCommit(v)
+  }
+  return (
+    <input type="range" min={min} max={max} step={step} value={local} disabled={disabled}
+      onMouseDown={start}
+      onTouchStart={start}
+      onChange={(e) => setLocal(parseFloat(e.target.value))}
+      onMouseUp={(e) => commit(parseFloat(e.target.value))}
+      onTouchEnd={(e) => commit(parseFloat(e.target.value))}
+      onKeyUp={(e) => commit(parseFloat(e.target.value))}
+      className={className} />
   )
 }
