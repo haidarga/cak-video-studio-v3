@@ -132,6 +132,11 @@ body::after {
   animation: blob-float 24s ease-in-out infinite alternate;
   pointer-events: none;
   opacity: 0.9;
+  /* Force GPU layer + isolate from main paint flow — without this the blur+
+     animate combo causes whole-page repaints every frame on weaker GPUs. */
+  will-change: transform;
+  transform: translateZ(0);
+  contain: strict;
 }
 [data-theme="light"] body::after { opacity: 0.5; filter: blur(60px); }
 
@@ -139,6 +144,18 @@ body::after {
   0% { transform: translate3d(0,0,0) scale(1); }
   50% { transform: translate3d(40px,-30px,0) scale(1.08); }
   100% { transform: translate3d(-30px,40px,0) scale(.96); }
+}
+
+/* Respect reduced-motion — disable the blur animation entirely.
+   Blur(40px) + animation = the single biggest jank source on integrated GPUs. */
+@media (prefers-reduced-motion: reduce) {
+  body::after { animation: none !important; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* Typography */
@@ -160,10 +177,17 @@ h1, h2, h3, h4 {
 ::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg, #7c3aed, #be185d); }
 ::selection { background: rgba(217, 70, 239, 0.35); color: #fff; }
 
-/* Smooth transitions globally */
+/* Smooth transitions — only the properties that matter. `transition: all`
+   forces the browser to compute every animatable prop and was causing layout
+   thrash on hover even for properties that never change. */
 button, a, input, select, textarea {
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
+
+/* Smooth scroll in scroll containers + the main content area. Falls back
+   gracefully without reduced-motion (the media query above turns it off). */
+html { scroll-behavior: smooth; }
+main { scroll-behavior: smooth; }
 
 /* Focus rings — accent purple */
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
