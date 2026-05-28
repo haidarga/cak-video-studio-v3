@@ -1,19 +1,30 @@
-// Centralized Gemini caller with retry + fallback model.
+// Centralized Gemini caller with retry + multi-model fallback chain.
 //
-// Why this exists: Google's `gemini-2.5-flash` periodically hits capacity
-// limits and returns 503 UNAVAILABLE with "currently experiencing high demand".
-// Direct callers used to surface that raw string into the UI. This helper:
-//   1. Retries 3× with exponential backoff (1s → 2s → 4s) on 429/503
-//   2. Falls back to `gemini-2.0-flash` on persistent 503 (older but reliable)
-//   3. Normalizes errors so callers get a humane message
+// Pro tier user STILL hit 503 because Google's 2.5-flash + 2.0-flash sometimes
+// experience joint capacity issues during Asia peak hours (4-8 PM WIB). We
+// fan out to 4 models in cascade, picking each on transient failure:
 //
-// All Gemini routes should use this — direct fetch() calls bypass these
-// safeguards and will eventually break under traffic spikes.
+//   1. gemini-2.5-flash       — primary, fastest, cheapest
+//   2. gemini-2.0-flash       — older but mostly available
+//   3. gemini-2.5-pro         — Pro-tier only; way lower traffic since it's
+//                                priced higher (~$1.25/1M in)
+//   4. gemini-1.5-flash       — legacy, low traffic, very stable
+//
+// Each model gets 2 attempts with exponential backoff (1s → 3s). Total worst
+// case: 4 models × 2 attempts ≈ 4 × (call + 3s wait) ≈ 30-40 seconds.
+//
+// If ALL 4 models hit 503, then Google has a real outage and we surface a
+// humane error with the suggestion to check Google Cloud Status.
 
 const TRANSIENT_STATUS = new Set([408, 429, 500, 502, 503, 504])
-const PRIMARY_MODEL = 'gemini-2.5-flash'
-const FALLBACK_MODEL = 'gemini-2.0-flash'
-const MAX_RETRIES = 3
+const MODEL_CASCADE = [
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+  'gemini-2.5-pro',
+  'gemini-1.5-flash',
+]
+const ATTEMPTS_PER_MODEL = 2
+const BACKOFF_MS = [1000, 3000] // per-attempt-within-model delay
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
 
@@ -21,7 +32,7 @@ function isTransientError(err) {
   if (!err) return false
   if (TRANSIENT_STATUS.has(err.status)) return true
   const msg = String(err.message || '').toLowerCase()
-  return msg.includes('high demand') || msg.includes('unavailable') || msg.includes('overload') || msg.includes('rate limit') || msg.includes('quota')
+  return msg.includes('high demand') || msg.includes('unavailable') || msg.includes('overload') || msg.includes('rate limit') || msg.includes('quota') || msg.includes('exhausted')
 }
 
 async function callOnce(model, geminiKey, contents, generationConfig) {
@@ -36,6 +47,7 @@ async function callOnce(model, geminiKey, contents, generationConfig) {
     const err = new Error(data?.error?.message || `Gemini HTTP ${res.status}`)
     err.status = res.status
     err.body = data
+    err.model = model
     throw err
   }
   if (!data.candidates?.length) {
@@ -43,15 +55,33 @@ async function callOnce(model, geminiKey, contents, generationConfig) {
     const err = new Error(`Gemini blocked: ${reason}`)
     err.status = 400
     err.body = data
+    err.model = model
     throw err
   }
   return data.candidates[0].content.parts[0].text || ''
 }
 
-// Main entry. Returns the raw text from Gemini.
-// opts: { contents, generationConfig, maxRetries }
-//   contents = [{ parts: [...] }] (same shape as Google's API)
-export async function callGemini({ contents, generationConfig = {}, maxRetries = MAX_RETRIES } = {}) {
+// Try one model with N retries. Returns text on success, throws lastErr on full failure.
+async function tryModel(model, geminiKey, contents, generationConfig) {
+  let lastErr
+  for (let attempt = 0; attempt < ATTEMPTS_PER_MODEL; attempt++) {
+    try {
+      return await callOnce(model, geminiKey, contents, generationConfig)
+    } catch (e) {
+      lastErr = e
+      // Non-transient (e.g. 400 bad prompt, content blocked) — bail immediately.
+      // No point retrying the same model OR cascading to next.
+      if (!isTransientError(e)) throw e
+      if (attempt < ATTEMPTS_PER_MODEL - 1) await sleep(BACKOFF_MS[attempt] || 3000)
+    }
+  }
+  throw lastErr
+}
+
+// Main entry — cascades through MODEL_CASCADE on transient failures.
+// opts: { contents, generationConfig, modelOverride }
+//   modelOverride: optional single model to use (skip cascade)
+export async function callGemini({ contents, generationConfig = {}, modelOverride } = {}) {
   const geminiKey = process.env.GEMINI_KEY
   if (!geminiKey) {
     const e = new Error('GEMINI_KEY belum di-set di Vercel env vars')
@@ -60,46 +90,43 @@ export async function callGemini({ contents, generationConfig = {}, maxRetries =
   }
   if (!contents) throw new Error('contents required')
 
+  const models = modelOverride ? [modelOverride] : MODEL_CASCADE
   let lastErr
-  // Phase 1: retry primary model
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
+  const triedModels = []
+  for (const model of models) {
     try {
-      return await callOnce(PRIMARY_MODEL, geminiKey, contents, generationConfig)
+      const result = await tryModel(model, geminiKey, contents, generationConfig)
+      // Log which fallback was needed (helps diagnose Gemini outages over time)
+      if (triedModels.length > 0) {
+        console.warn(`[gemini] fallback succeeded on ${model} after: ${triedModels.join(', ')}`)
+      }
+      return result
     } catch (e) {
       lastErr = e
-      if (!isTransientError(e)) throw e // non-retryable — surface immediately
-      if (attempt < maxRetries - 1) {
-        const delayMs = 1000 * Math.pow(2, attempt) // 1s, 2s, 4s
-        await sleep(delayMs)
-      }
+      triedModels.push(model)
+      // Non-transient — surface immediately, don't waste calls on other models.
+      if (!isTransientError(e)) throw e
     }
   }
 
-  // Phase 2: fallback to older but more available model
-  try {
-    return await callOnce(FALLBACK_MODEL, geminiKey, contents, generationConfig)
-  } catch (e) {
-    // Final failure — humanize the message for the UI.
-    if (isTransientError(e) || isTransientError(lastErr)) {
-      const friendly = new Error('Gemini lagi sibuk — udah retry 3x + fallback model, semuanya gagal. Coba lagi 1-2 menit. Kalau persistent, cek status.cloud.google.com.')
-      // Mark as transient so API routes can return HTTP 200 with ok:false
-      // instead of 503 — keeps browser console clean (no scary red errors).
-      friendly.transient = true
-      friendly.status = 503
-      friendly.cause = e
-      throw friendly
-    }
-    throw e
-  }
+  // All models exhausted — surface humane error.
+  const friendly = new Error(
+    `Gemini lagi outage beneran — udah coba ${triedModels.length} model (${triedModels.join(' → ')}) semua 503. Cek status.cloud.google.com. Kalau Google OK tapi error masih persistent, mungkin quota project lu (cek aistudio.google.com).`
+  )
+  friendly.transient = true
+  friendly.status = 503
+  friendly.cause = lastErr
+  friendly.triedModels = triedModels
+  throw friendly
 }
 
 // JSON-mode convenience wrapper. Adds responseMimeType + parses + strips
 // stray markdown fences that Gemini sometimes leaks despite the JSON flag.
-export async function callGeminiJSON({ contents, temperature = 0.7, maxOutputTokens = 4096, maxRetries } = {}) {
+export async function callGeminiJSON({ contents, temperature = 0.7, maxOutputTokens = 4096, modelOverride } = {}) {
   const text = await callGemini({
     contents,
     generationConfig: { temperature, maxOutputTokens, responseMimeType: 'application/json' },
-    maxRetries,
+    modelOverride,
   })
   let clean = text.replace(/```json|```/g, '').trim()
   const first = clean.indexOf('{')
