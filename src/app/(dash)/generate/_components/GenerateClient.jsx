@@ -7,6 +7,7 @@ import {
   IMG_QUALITY, VID_STABILITY, VIDEO_MODELS, IMAGE_MODELS,
 } from '@/lib/fal-client'
 import { imageCost, videoCost, fmtCost } from '@/lib/cost-table'
+import { STYLE_PRESETS, applyStylePreset } from '@/lib/style-presets'
 
 export default function GenerateClient({ workspaceId, userId, activeBrand, personas, workspaceRefs }) {
   const supabase = createClient()
@@ -14,7 +15,19 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
   const [globalConfig, setGlobalConfig] = useState({
     mode: 'shots', ar: '9:16', lang: 'Indonesian',
     imgModel: IMAGE_MODELS[0].v, vidModel: VIDEO_MODELS[0].v,
+    style: 'ugc',
   })
+
+  // When style changes, auto-pick recommended models
+  function applyStyleAndModels(styleKey) {
+    const preset = STYLE_PRESETS[styleKey]
+    if (!preset) return
+    setGlobalConfig((c) => ({
+      ...c, style: styleKey,
+      imgModel: preset.recommended_img_model || c.imgModel,
+      vidModel: preset.recommended_vid_model || c.vidModel,
+    }))
+  }
   const [stateByPersona, setStateByPersona] = useState({})
   const [err, setErr] = useState('')
 
@@ -47,7 +60,30 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
       {err && <div className="text-xs text-red-400 bg-red-900/20 border border-red-900/40 p-3 rounded">⚠ {err}</div>}
 
       <section className="bg-[var(--surface)] border border-[var(--border)] rounded-lg p-4">
-        <h2 className="text-[10px] uppercase font-semibold tracking-wider text-[var(--muted)] mb-3">Global Config (berlaku ke semua persona)</h2>
+        <h2 className="text-[10px] uppercase font-semibold tracking-wider text-[var(--muted)] mb-3">Global Config</h2>
+
+        {/* Style preset grid — auto-picks optimal models per use case */}
+        <div className="mb-3">
+          <label className="block text-[10px] uppercase text-[var(--muted)] tracking-wider font-semibold mb-1.5">🎨 Style / Genre — auto-pick optimal model</label>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            {Object.entries(STYLE_PRESETS).map(([key, preset]) => {
+              const on = globalConfig.style === key
+              return (
+                <button key={key} onClick={() => applyStyleAndModels(key)}
+                  className={`text-left p-2 rounded border transition-all ${on ? 'border-[var(--accent)] bg-[var(--accent)]/10 ring-1 ring-[var(--accent)]' : 'border-[var(--border)] bg-[var(--surface2)] hover:border-[var(--muted)]'}`}>
+                  <div className="text-xs font-semibold">{preset.label}</div>
+                  <div className="text-[10px] text-[var(--muted)] mt-0.5 line-clamp-2">{preset.description}</div>
+                </button>
+              )
+            })}
+          </div>
+          {globalConfig.style && (
+            <div className="text-[10px] text-[var(--muted2)] mt-1.5">
+              Auto-applied to image prompt + video motion. Selected models updated below.
+            </div>
+          )}
+        </div>
+
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
           <Sel label="Mode" value={globalConfig.mode} onChange={(v) => setGlobalConfig({ ...globalConfig, mode: v })}
             options={[['shots', '🎬 Per-Shot (5-8 cut)'], ['storyboard', '🗂 Storyboard 3×3 (~15s)']]} />
@@ -244,9 +280,11 @@ function PersonaSection({ persona, workspaceRefs, state, onPatch, globalConfig, 
 
       // Storyboard mode = ONE grid image built from all 9 panels.
       // Per-shot mode = single image from this shot's image_prompt.
-      const basePrompt = shot.raw.panels
+      const rawPrompt = shot.raw.panels
         ? buildStoryboardGridPrompt(shot.raw.panels, globalConfig.ar, shot.raw.concept)
         : (shot.raw.image_prompt || shot.raw.shot_label)
+      // Apply style preset (UGC/animation/3D/cinematic_ad/short_movie/TVC/etc) for higher quality output
+      const basePrompt = applyStylePreset(globalConfig.style, rawPrompt)
       const fullPrompt = `${basePrompt}. ${globalConfig.ar} composition. CONTINUITY: keep characters & product identical to references.${directive} ${IMG_QUALITY}`
       const imgInput = buildImgInput(globalConfig.imgModel, { prompt: fullPrompt, refUrls, ar: globalConfig.ar })
       const imgResult = await falRun(globalConfig.imgModel, imgInput, { onProgress: (p) => patchShot(idx, { image: { status: p } }), workspaceId })
@@ -279,6 +317,8 @@ function PersonaSection({ persona, workspaceRefs, state, onPatch, globalConfig, 
           ? `${shot.raw.video_motion}. The subject speaks in fluent native ${globalConfig.lang}: "${shot.raw.dialogue}". ${VID_STABILITY}`
           : `${shot.raw.video_motion || 'Natural cinematic motion'}. ${VID_STABILITY}`
       }
+      // Apply style preset to motion as well (animation style, cinematic, etc influence camera + render style)
+      motion = applyStylePreset(globalConfig.style, motion)
       const vidInput = buildVidInput(globalConfig.vidModel, {
         prompt: motion, image_url: shot.image.url, reference_urls: refUrls,
         duration: shot.raw.duration || 5, aspect_ratio: globalConfig.ar,

@@ -47,6 +47,71 @@ function escapeDrawText(s) {
     .replace(/'/g, "'\\''").replace(/,/g, '\\,').replace(/\n/g, '\\n')
 }
 
+// ASS color: &H<AA><BB><GG><RR> (note BGR order, with alpha first)
+function hexToAss(hex, alpha = 0) {
+  const h = hex.replace('#', '').padStart(6, '0')
+  const r = h.slice(0, 2), g = h.slice(2, 4), b = h.slice(4, 6)
+  const a = alpha.toString(16).padStart(2, '0')
+  return `&H${a.toUpperCase()}${b}${g}${r}`.toUpperCase()
+}
+
+// Format seconds → "h:mm:ss.cc" (ASS timestamp)
+function fmtAssTime(s) {
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = s % 60
+  return `${h}:${m.toString().padStart(2, '0')}:${sec.toFixed(2).padStart(5, '0')}`
+}
+
+// Build ASS subtitle file content for karaoke text clips
+function buildAssForKaraoke(karaokeClips, canvasDims) {
+  if (karaokeClips.length === 0) return null
+  const [W, H] = canvasDims
+  const lines = []
+  lines.push('[Script Info]')
+  lines.push('ScriptType: v4.00+')
+  lines.push(`PlayResX: ${W}`)
+  lines.push(`PlayResY: ${H}`)
+  lines.push('WrapStyle: 2')
+  lines.push('ScaledBorderAndShadow: yes')
+  lines.push('')
+  lines.push('[V4+ Styles]')
+  lines.push('Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding')
+  // Primary (inactive) = white, Secondary (active karaoke fill) = amber #fbbf24
+  lines.push(`Style: Default,Arial,48,&H00FFFFFF,${hexToAss('#fbbf24')},&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,3,5,10,10,10,1`)
+  lines.push('')
+  lines.push('[Events]')
+  lines.push('Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text')
+
+  karaokeClips.forEach((c) => {
+    const start = fmtAssTime(c.start || 0)
+    const end = fmtAssTime(c.end || 1)
+    const x = Math.round((c.x_pct / 100) * W)
+    const y = Math.round((c.y_pct / 100) * H)
+    const anchor = c.align === 'left' ? 4 : c.align === 'right' ? 6 : 5
+    const fontSize = c.size || 56
+    const primary = hexToAss(c.color || '#ffffff')
+    const positionTag = `{\\an${anchor}\\pos(${x},${y})\\fs${fontSize}\\c${primary}\\3c&H000000&\\3a&H80&\\bord3\\shad3}`
+
+    // Build per-word \k tags (centiseconds)
+    const segStart = c.start || 0
+    let body = ''
+    c.words.forEach((w, i) => {
+      const wDur = Math.max(0.01, w.end - w.start)
+      // Account for any gap between segStart and first word
+      if (i === 0 && w.start > segStart + 0.05) {
+        const gapCs = Math.round((w.start - segStart) * 100)
+        body += `{\\k${gapCs}}`
+      }
+      const cs = Math.max(1, Math.round(wDur * 100))
+      body += `{\\kf${cs}}${w.word}${i < c.words.length - 1 ? ' ' : ''}`
+    })
+    lines.push(`Dialogue: 0,${start},${end},Default,,0,0,0,,${positionTag}${body}`)
+  })
+
+  return lines.join('\n')
+}
+
 // ── Helpers exported for client ─────────────────────────────────────
 export function clipDuration(c) {
   const len = Math.max(0, (c.src_out ?? 0) - (c.src_in ?? 0))
@@ -164,7 +229,18 @@ function buildFilterGraph(project, canvasDims, musicInputIdx) {
     } else {
       const dur = Math.max(0.1, tr.duration || 0.5)
       const offset = Math.max(0, accDur - dur)
-      lines.push(`${currentLabel}${nextLabel}xfade=transition=fade:duration=${dur.toFixed(3)}:offset=${offset.toFixed(3)}${out}`)
+      // Map our transition type to ffmpeg xfade transition name
+      const xfadeMap = {
+        fade: 'fade', crossfade: 'fade',
+        fadeblack: 'fadeblack', fadewhite: 'fadewhite',
+        wipeleft: 'wipeleft', wiperight: 'wiperight', wipeup: 'wipeup', wipedown: 'wipedown',
+        slideleft: 'slideleft', slideright: 'slideright', slideup: 'slideup', slidedown: 'slidedown',
+        circleopen: 'circleopen', circleclose: 'circleclose',
+        zoomin: 'zoomin', dissolve: 'dissolve', pixelize: 'pixelize',
+        radial: 'radial', hblur: 'hblur',
+      }
+      const xfadeType = xfadeMap[tr.type] || 'fade'
+      lines.push(`${currentLabel}${nextLabel}xfade=transition=${xfadeType}:duration=${dur.toFixed(3)}:offset=${offset.toFixed(3)}${out}`)
       accDur += clipDuration(c) - dur
     }
     currentLabel = out
@@ -200,8 +276,12 @@ function buildFilterGraph(project, canvasDims, musicInputIdx) {
     currentLabel = out
   })
 
-  // 5) Text overlays with optional fade animation
-  ;(project.text_clips || []).forEach((c, i) => {
+  // 5) Text overlays — split karaoke (ASS subtitles) vs regular (drawtext)
+  const allText = project.text_clips || []
+  const karaokeText = allText.filter((c) => c.animation === 'karaoke' && Array.isArray(c.words) && c.words.length > 0)
+  const regularText = allText.filter((c) => !(c.animation === 'karaoke' && Array.isArray(c.words)))
+
+  regularText.forEach((c, i) => {
     const x = Math.round((c.x_pct / 100) * W)
     const y = Math.round((c.y_pct / 100) * H)
     const fontSize = Math.round(c.size * (W / 720))
@@ -221,6 +301,13 @@ function buildFilterGraph(project, canvasDims, musicInputIdx) {
     lines.push(`${currentLabel}drawtext=text='${txt}':fontcolor=0x${color}:fontsize=${fontSize}:x=${xExpr}:y=${y}-text_h/2${boxColor}${alphaExpr}:enable='between(t,${start},${end})'${out}`)
     currentLabel = out
   })
+
+  // Apply ASS karaoke subtitle if any karaoke clips exist
+  if (karaokeText.length > 0) {
+    const out = `[okara]`
+    lines.push(`${currentLabel}subtitles=filename=subs.ass${out}`)
+    currentLabel = out
+  }
 
   lines.push(`${currentLabel}copy[vout]`)
 
@@ -310,6 +397,18 @@ export async function renderWithFFmpeg(project, onProgress) {
 
   const ar = project.ar || '9:16'
   const [W, H] = ar === '16:9' ? [1280, 720] : ar === '1:1' ? [1080, 1080] : [720, 1280]
+
+  // Write ASS subtitle file if karaoke clips exist
+  const karaokeClips = (project.text_clips || []).filter((c) => c.animation === 'karaoke' && Array.isArray(c.words) && c.words.length > 0)
+  if (karaokeClips.length > 0) {
+    const assContent = buildAssForKaraoke(karaokeClips, [W, H])
+    if (assContent) {
+      onProgress?.(`Writing karaoke subtitles (${karaokeClips.length} clips)...`)
+      const encoder = new TextEncoder()
+      await ff.writeFile('subs.ass', encoder.encode(assContent))
+    }
+  }
+
   const { graph } = buildFilterGraph(project, [W, H], musicInputIdx)
 
   const args = []

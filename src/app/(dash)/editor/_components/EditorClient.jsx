@@ -127,6 +127,28 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
   const imageInputRef = useRef(null)
   const audioInputRef = useRef(null)
   const videoInputRef = useRef(null)
+  const importInputRef = useRef(null)
+
+  function exportProjectJson() {
+    const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `${project.name.replace(/[^a-z0-9]/gi, '_')}.cakedit.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+  async function importProjectJson(e) {
+    const f = e.target.files?.[0]; if (!f) return; e.target.value = ''
+    try {
+      const txt = await f.text()
+      const parsed = JSON.parse(txt)
+      pushHistory(project)
+      setProject(normalizeProject(parsed))
+      setProjectId(null) // imported as new, not linked to existing DB row
+      setSelected(null); setCurrentTime(0)
+      setErr('')
+    } catch (e) { setErr('Import gagal: ' + e.message) }
+  }
   const [uploadingVideo, setUploadingVideo] = useState(null) // { name, sizeMB, stage }
 
   const videoSources = useMemo(() => results.filter((r) => r.type === 'video' && r.url), [results])
@@ -544,6 +566,9 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
           <button onClick={splitClipAtPlayhead} disabled={!selected || selected.kind !== 'video'} title="Split clip at playhead (S)" className="px-2 py-1.5 text-xs rounded bg-[var(--surface)] border border-[var(--border)] hover:bg-[var(--surface2)] disabled:opacity-30">✂ Split</button>
           <button onClick={newProject} className="px-3 py-1.5 text-xs rounded bg-[var(--surface)] border border-[var(--border)] hover:bg-[var(--surface2)]">+ New</button>
           <button onClick={cloneProject} disabled={project.video_clips.length === 0} title="Clone project as copy" className="px-3 py-1.5 text-xs rounded bg-[var(--surface)] border border-[var(--border)] hover:bg-[var(--surface2)] disabled:opacity-50">📋 Clone</button>
+          <button onClick={exportProjectJson} disabled={project.video_clips.length === 0} title="Export project as JSON" className="px-3 py-1.5 text-xs rounded bg-[var(--surface)] border border-[var(--border)] hover:bg-[var(--surface2)] disabled:opacity-50">⬇ JSON</button>
+          <button onClick={() => importInputRef.current?.click()} title="Import project from JSON" className="px-3 py-1.5 text-xs rounded bg-[var(--surface)] border border-[var(--border)] hover:bg-[var(--surface2)]">⬆ JSON</button>
+          <input ref={importInputRef} type="file" accept="application/json" className="hidden" onChange={importProjectJson} />
           <button onClick={saveProject} disabled={saving || project.video_clips.length === 0} className="px-3 py-1.5 text-xs rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)] disabled:opacity-50">
             {saving ? '⏳ Save...' : '💾 Save'}
           </button>
@@ -1102,7 +1127,36 @@ function VideoClipPanel({ clip, isBase, isFirst, totalDur, onUpdate, onDelete })
           <div className="grid grid-cols-2 gap-2">
             <Field label="Type">
               <select value={clip.transition_in.type} onChange={(e) => updTrans('type', e.target.value)} className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)]">
-                <option value="cut">Cut</option><option value="fade">Fade</option><option value="crossfade">Crossfade</option>
+                <option value="cut">Cut (no transition)</option>
+                <optgroup label="Fade">
+                  <option value="fade">Fade (default)</option>
+                  <option value="crossfade">Crossfade</option>
+                  <option value="fadeblack">Fade to black</option>
+                  <option value="fadewhite">Fade to white</option>
+                  <option value="dissolve">Dissolve</option>
+                </optgroup>
+                <optgroup label="Slide">
+                  <option value="slideleft">Slide ←</option>
+                  <option value="slideright">Slide →</option>
+                  <option value="slideup">Slide ↑</option>
+                  <option value="slidedown">Slide ↓</option>
+                </optgroup>
+                <optgroup label="Wipe">
+                  <option value="wipeleft">Wipe ←</option>
+                  <option value="wiperight">Wipe →</option>
+                  <option value="wipeup">Wipe ↑</option>
+                  <option value="wipedown">Wipe ↓</option>
+                </optgroup>
+                <optgroup label="Circle">
+                  <option value="circleopen">Circle open</option>
+                  <option value="circleclose">Circle close</option>
+                </optgroup>
+                <optgroup label="Effect">
+                  <option value="zoomin">Zoom in</option>
+                  <option value="pixelize">Pixelize</option>
+                  <option value="radial">Radial</option>
+                  <option value="hblur">Horizontal blur</option>
+                </optgroup>
               </select>
             </Field>
             <Field label={`Duration: ${clip.transition_in.duration}s`}>
