@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { getActiveWorkspace } from '@/lib/workspace'
+import { assertBudget } from '@/lib/budget-gate'
+import { GEMINI_COSTS } from '@/lib/cost-table'
 
 // Vercel: butuh waktu buat download video + transcribe
 export const maxDuration = 60
@@ -21,6 +24,10 @@ export async function POST(req) {
 
   const { url, language } = await req.json()
   if (!url) return NextResponse.json({ ok: false, error: 'url required' }, { status: 400 })
+
+  const wsId = await getActiveWorkspace(supabase, user)
+  const gate = await assertBudget(supabase, wsId, { projectedUsd: GEMINI_COSTS.transcribe })
+  if (!gate.ok) return NextResponse.json({ ok: false, error: gate.reason, gate }, { status: 402 })
 
   try {
     // 1. Download video

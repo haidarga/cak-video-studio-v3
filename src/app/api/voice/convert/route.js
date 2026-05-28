@@ -2,6 +2,12 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { voiceChange, extractAudio, getWorkspaceKey } from '@/lib/elevenlabs-server'
 import { getActiveWorkspace } from '@/lib/workspace'
+import { assertBudget } from '@/lib/budget-gate'
+
+// Rough ElevenLabs Speech-to-Speech cost per call. Actual cost depends on
+// minutes of audio; this is a conservative estimate for one shot (~10s) used
+// for the budget pre-check. Refine if you start hitting false rejections.
+const VOICE_CONVERT_USD = 0.30
 
 // POST /api/voice/convert — JSON: { video_url, voice_id, result_id? }
 // 1. Calls v2 HF Space /api/extract-audio to decode mp3 from the video
@@ -19,6 +25,9 @@ export async function POST(req) {
     const key = await getWorkspaceKey(supabase, wsId)
     const { video_url, voice_id, result_id } = await req.json()
     if (!video_url || !voice_id) throw new Error('video_url + voice_id required')
+
+    const gate = await assertBudget(supabase, wsId, { projectedUsd: VOICE_CONVERT_USD })
+    if (!gate.ok) return NextResponse.json({ ok: false, error: gate.reason, gate }, { status: 402 })
 
     // 1. Extract audio (server ffmpeg on v2 HF Space — Vercel doesn't have ffmpeg)
     const audioBuf = await extractAudio(video_url)

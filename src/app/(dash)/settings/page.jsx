@@ -15,6 +15,10 @@ export default async function SettingsPage() {
   const ws = ms?.[0]?.workspaces
   if (!ws) redirect('/dashboard')
 
+  const { data: budget } = await supabase
+    .from('budget_settings').select('daily_limit_usd, monthly_limit_usd, alert_at_pct')
+    .eq('workspace_id', ws.id).maybeSingle()
+
   // Never send raw keys to the client — only booleans for which keys are set.
   const status = {
     has_fal: !!ws.fal_key,
@@ -24,5 +28,10 @@ export default async function SettingsPage() {
     postiz_url: ws.postiz_url || '',
     workspace_name: ws.name,
   }
-  return <SettingsClient initialStatus={status} />
+  const initialBudget = {
+    daily_limit_usd: budget?.daily_limit_usd ?? 50,
+    monthly_limit_usd: budget?.monthly_limit_usd ?? 500,
+    alert_at_pct: budget?.alert_at_pct ?? 80,
+  }
+  return <SettingsClient initialStatus={status} initialBudget={initialBudget} />
 }

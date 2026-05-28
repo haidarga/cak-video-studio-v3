@@ -77,6 +77,7 @@ export default async function DashLayout({ children }) {
       <NavLink href="/scheduled" label="📅 Scheduled" />
       <NavLink href="/posting" label="📮 Posting" />
       <NavLink href="/dashboard" label="📊 Dashboard" />
+      <NavLink href="/errors" label="🚨 Errors" />
       <NavLink href="/team" label="👥 Team" />
       <div className="text-[9px] uppercase text-[var(--muted2)] font-bold tracking-wider mt-4 mb-1 px-3">Library</div>
       <NavLink href="/brands" label="🏷 Brands" />

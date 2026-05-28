@@ -3,12 +3,32 @@ import { useState } from 'react'
 
 // Workspace API keys management. Never displays the actual key values —
 // only whether they're set. User types a new value to overwrite, empty to clear.
-export default function SettingsClient({ initialStatus }) {
+export default function SettingsClient({ initialStatus, initialBudget }) {
   const [status, setStatus] = useState(initialStatus)
   const [keys, setKeys] = useState({ fal_key: '', gemini_key: '', postiz_url: status.postiz_url || '', postiz_key: '', elevenlabs_key: '' })
+  const [budget, setBudget] = useState(initialBudget || { daily_limit_usd: 50, monthly_limit_usd: 500, alert_at_pct: 80 })
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
+
+  async function saveBudget() {
+    setBusy(true); setMsg(''); setErr('')
+    try {
+      const r = await fetch('/api/workspace/budget', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          daily_limit_usd: Number(budget.daily_limit_usd),
+          monthly_limit_usd: Number(budget.monthly_limit_usd),
+          alert_at_pct: Number(budget.alert_at_pct),
+        }),
+      })
+      const j = await r.json()
+      if (!j.ok) throw new Error(j.error || 'budget save failed')
+      setMsg('Budget saved ✓')
+      setTimeout(() => setMsg(''), 2500)
+    } catch (e) { setErr(e.message) }
+    setBusy(false)
+  }
 
   function patch(k, v) { setKeys((p) => ({ ...p, [k]: v })) }
 
@@ -91,6 +111,24 @@ export default function SettingsClient({ initialStatus }) {
           placeholder="sk_..." help="Buat clone voice persona + Speech-to-Speech (swap audio video AI ke voice cloned, lip-sync preserved)." busy={busy} />
 
         <div className="pt-3 border-t border-[var(--border)]">
+          <div className="text-xs font-semibold mb-2 flex items-center gap-2">
+            🛑 Budget hard-limits
+            <span className="text-[9px] font-normal text-[var(--muted2)]">(0 = unlimited)</span>
+          </div>
+          <div className="text-[10px] text-[var(--muted2)] mb-2">
+            API call ke fal.ai / ElevenLabs / Gemini auto-ditolak (HTTP 402) kalau bakal nge-lewat limit. Cek pace di sidebar widget atau /dashboard.
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <BudgetField label="Daily ($)" value={budget.daily_limit_usd} onChange={(v) => setBudget((p) => ({ ...p, daily_limit_usd: v }))} />
+            <BudgetField label="Monthly ($)" value={budget.monthly_limit_usd} onChange={(v) => setBudget((p) => ({ ...p, monthly_limit_usd: v }))} />
+            <BudgetField label="Alert at (%)" value={budget.alert_at_pct} onChange={(v) => setBudget((p) => ({ ...p, alert_at_pct: v }))} max={100} />
+          </div>
+          <button onClick={saveBudget} disabled={busy} className="mt-2 text-xs px-3 py-1.5 rounded bg-[var(--accent)] text-white font-semibold disabled:opacity-50">
+            Save Budget
+          </button>
+        </div>
+
+        <div className="pt-3 border-t border-[var(--border)]">
           <div className="text-xs font-semibold mb-2">📮 Postiz (multi-channel publish)</div>
           <div className="space-y-2">
             <input value={keys.postiz_url} onChange={(e) => patch('postiz_url', e.target.value)}
@@ -113,6 +151,17 @@ export default function SettingsClient({ initialStatus }) {
           </div>
         </div>
       </section>
+    </div>
+  )
+}
+
+function BudgetField({ label, value, onChange, max }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase font-semibold text-[var(--muted)] mb-1">{label}</div>
+      <input type="number" min={0} {...(max ? { max } : {})} step={1} value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full text-sm px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)] font-mono" />
     </div>
   )
 }
