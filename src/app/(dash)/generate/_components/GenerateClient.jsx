@@ -18,15 +18,9 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
     style: 'ugc',
   })
 
-  // When style changes, auto-pick recommended models
-  function applyStyleAndModels(styleKey) {
-    const preset = STYLE_PRESETS[styleKey]
-    if (!preset) return
-    setGlobalConfig((c) => ({
-      ...c, style: styleKey,
-      imgModel: preset.recommended_img_model || c.imgModel,
-      vidModel: preset.recommended_vid_model || c.vidModel,
-    }))
+  // Pick style — does NOT touch model selection (user controls model independently)
+  function pickStyle(styleKey) {
+    setGlobalConfig((c) => ({ ...c, style: styleKey === c.style ? 'none' : styleKey }))
   }
   const [stateByPersona, setStateByPersona] = useState({})
   const [err, setErr] = useState('')
@@ -62,27 +56,38 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
       <section className="bg-[var(--surface)] border border-[var(--border)] rounded-lg p-4">
         <h2 className="text-[10px] uppercase font-semibold tracking-wider text-[var(--muted)] mb-3">Global Config</h2>
 
-        {/* Style preset grid — auto-picks optimal models per use case */}
+        {/* Style preset grid — affects PROMPT only. Model dipilih independent. */}
         <div className="mb-3">
-          <label className="block text-[10px] uppercase text-[var(--muted)] tracking-wider font-semibold mb-1.5">🎨 Style / Genre — auto-pick optimal model</label>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="block text-[10px] uppercase text-[var(--muted)] tracking-wider font-semibold">🎨 Style / Genre — affects prompt only</label>
+            {globalConfig.style && globalConfig.style !== 'none' && (
+              <button onClick={() => setGlobalConfig({ ...globalConfig, style: 'none' })} className="text-[10px] text-[var(--muted)] underline hover:text-white">
+                Clear style
+              </button>
+            )}
+          </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
             {Object.entries(STYLE_PRESETS).map(([key, preset]) => {
               const on = globalConfig.style === key
               return (
-                <button key={key} onClick={() => applyStyleAndModels(key)}
+                <button key={key} onClick={() => pickStyle(key)}
                   className={`text-left p-2 rounded border transition-all ${on ? 'border-[var(--accent)] bg-[var(--accent)]/10 ring-1 ring-[var(--accent)]' : 'border-[var(--border)] bg-[var(--surface2)] hover:border-[var(--muted)]'}`}>
                   <div className="text-xs font-semibold">{preset.label}</div>
                   <div className="text-[10px] text-[var(--muted)] mt-0.5 line-clamp-2">{preset.description}</div>
+                  <div className="text-[9px] text-[var(--muted2)] mt-1">💡 Suggest: {preset.recommended_img_model?.split('/').pop()}</div>
                 </button>
               )
             })}
           </div>
-          {globalConfig.style && (
-            <div className="text-[10px] text-[var(--muted2)] mt-1.5">
-              Auto-applied to image prompt + video motion. Selected models updated below.
-            </div>
-          )}
+          <div className="text-[10px] text-[var(--muted2)] mt-1.5">
+            Style cuma inject ke prompt (prefix + suffix + negative + boosters). Model dipilih manual di bawah — fleksibel.
+          </div>
         </div>
+
+        {/* Style References — upload mood board images buat consistent look */}
+        <StyleRefsPicker workspaceId={workspaceId} userId={userId}
+          selectedIds={globalConfig.styleRefIds || new Set()}
+          onChange={(ids) => setGlobalConfig({ ...globalConfig, styleRefIds: ids })} />
 
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
           <Sel label="Mode" value={globalConfig.mode} onChange={(v) => setGlobalConfig({ ...globalConfig, mode: v })}
@@ -148,6 +153,7 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
           state={stateByPersona[persona.id] || { naskah: '', refIds: new Set(), showWorkspaceRefs: false, parsed: null, busy: false, shots: [] }}
           onPatch={(patch) => patchPersona(persona.id, patch)}
           globalConfig={globalConfig}
+          styleRefs={workspaceRefs.filter((r) => r.kind === 'style' && (globalConfig.styleRefIds || new Set()).has(r.id))}
           activeBrand={activeBrand}
           workspaceId={workspaceId}
           userId={userId}
@@ -165,7 +171,7 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
   )
 }
 
-function PersonaSection({ persona, workspaceRefs, state, onPatch, globalConfig, activeBrand, workspaceId, userId, onErr, supabase }) {
+function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch, globalConfig, activeBrand, workspaceId, userId, onErr, supabase }) {
   const personaOwnRefs = (persona.persona_refs || []).map((pr) => pr.refs).filter(Boolean)
 
   // Default: only this persona's own refs are SELECTED. Workspace pool stays
@@ -276,7 +282,10 @@ function PersonaSection({ persona, workspaceRefs, state, onPatch, globalConfig, 
     try {
       const productKnowledge = selectedRefs.map((r) => (r.knowledge || '').trim()).filter(Boolean).join('\n')
       const directive = productDirective(productKnowledge || activeBrand?.notes)
-      const refUrls = selectedRefs.map((r) => r.fal_url).filter(Boolean)
+      // Combine persona/product refs + global style refs (mood board)
+      const characterProductUrls = selectedRefs.map((r) => r.fal_url).filter(Boolean)
+      const styleUrls = styleRefs.map((r) => r.fal_url).filter(Boolean)
+      const refUrls = [...characterProductUrls, ...styleUrls]
 
       // Storyboard mode = ONE grid image built from all 9 panels.
       // Per-shot mode = single image from this shot's image_prompt.
@@ -301,7 +310,10 @@ function PersonaSection({ persona, workspaceRefs, state, onPatch, globalConfig, 
     if (!shot || !shot.image?.url) return
     patchShot(idx, { video: { status: 'generating' } })
     try {
-      const refUrls = selectedRefs.map((r) => r.fal_url).filter(Boolean)
+      // Video gen also uses combined refs (some models accept reference_urls for char consistency)
+      const characterProductUrls = selectedRefs.map((r) => r.fal_url).filter(Boolean)
+      const styleUrls = styleRefs.map((r) => r.fal_url).filter(Boolean)
+      const refUrls = [...characterProductUrls, ...styleUrls]
 
       // Storyboard: dialogue = all panel dialogs concatenated; flows across 9 scenes.
       // Per-shot: dialogue = this shot's single line.
@@ -979,6 +991,109 @@ function Sel({ label, value, onChange, options }) {
         className="w-full text-sm px-3 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)]">
         {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
       </select>
+    </div>
+  )
+}
+
+// Style References — mood board images yang di-inject ke gen request buat
+// keep visual style consistent across shots. Refs disimpan di table 'refs'
+// dengan kind='style' (beda dari character/product refs di persona picker).
+function StyleRefsPicker({ workspaceId, userId, selectedIds, onChange }) {
+  const supabase = useMemo(() => require('@/lib/supabase/client').createClient(), [])
+  const [refs, setRefs] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const fileRef = useRef(null)
+
+  useEffect(() => {
+    if (!workspaceId) return
+    setLoading(true)
+    supabase.from('refs')
+      .select('id, fal_url, label, knowledge, kind')
+      .eq('workspace_id', workspaceId)
+      .eq('kind', 'style')
+      .order('created_at', { ascending: false })
+      .then(({ data }) => { setRefs(data || []); setLoading(false) })
+  }, [workspaceId, supabase])
+
+  function toggle(id) {
+    const next = new Set(selectedIds)
+    next.has(id) ? next.delete(id) : next.add(id)
+    onChange(next)
+  }
+
+  async function onFile(e) {
+    const f = e.target.files?.[0]; if (!f) return; e.target.value = ''
+    if (!f.type.startsWith('image/')) { setErr('File harus image'); return }
+    setBusy(true); setErr('')
+    try {
+      const ext = (f.name.split('.').pop() || 'jpg').toLowerCase()
+      const path = `${workspaceId}/style-${Date.now()}-${Math.random().toString(36).slice(2,6)}.${ext}`
+      const { error: upErr } = await supabase.storage.from('refs').upload(path, f, { contentType: f.type, cacheControl: '3600' })
+      if (upErr) throw upErr
+      const { data: { publicUrl } } = supabase.storage.from('refs').getPublicUrl(path)
+      const { data: row, error } = await supabase.from('refs').insert({
+        workspace_id: workspaceId, fal_url: publicUrl,
+        label: f.name.replace(/\.[^.]+$/, ''),
+        kind: 'style', created_by: userId,
+      }).select('id, fal_url, label, knowledge, kind').single()
+      if (error) throw error
+      setRefs((p) => [row, ...p])
+      // Auto-select newly uploaded
+      const next = new Set(selectedIds); next.add(row.id); onChange(next)
+    } catch (e) { setErr('Upload: ' + e.message) }
+    setBusy(false)
+  }
+
+  async function deleteRef(id) {
+    if (!confirm('Hapus style reference ini?')) return
+    const { error } = await supabase.from('refs').delete().eq('id', id)
+    if (error) { setErr(error.message); return }
+    setRefs((p) => p.filter((r) => r.id !== id))
+    const next = new Set(selectedIds); next.delete(id); onChange(next)
+  }
+
+  return (
+    <div className="mb-3">
+      <div className="flex items-center justify-between mb-1.5">
+        <label className="block text-[10px] uppercase text-[var(--muted)] tracking-wider font-semibold">
+          🖼 Style References ({selectedIds.size} aktif)
+        </label>
+        <button onClick={() => fileRef.current?.click()} disabled={busy} className="text-[10px] px-2 py-1 rounded bg-cyan-500/30 border border-cyan-500/60 text-cyan-200 hover:bg-cyan-500/50 disabled:opacity-50">
+          {busy ? '⏳' : '+ Upload mood board'}
+        </button>
+        <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onFile} />
+      </div>
+      {err && <div className="text-[10px] text-red-400 mb-1">⚠ {err}</div>}
+
+      {loading ? (
+        <div className="text-[10px] text-[var(--muted)] p-2">Loading style refs...</div>
+      ) : refs.length === 0 ? (
+        <div className="text-[10px] text-[var(--muted)] p-3 border border-dashed border-[var(--border)] rounded">
+          Belum ada style refs. Upload 1-3 mood board image (referensi look/warna/komposisi) buat keep output consistent across shots.
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-2 p-2 bg-[var(--surface2)]/30 rounded border border-[var(--border)]">
+          {refs.map((r) => {
+            const on = selectedIds.has(r.id)
+            return (
+              <div key={r.id} className="relative group">
+                <button onClick={() => toggle(r.id)} type="button"
+                  className={`w-[80px] aspect-square rounded border-2 overflow-hidden ${on ? 'border-[var(--accent)] ring-2 ring-[var(--accent)]/50' : 'border-[var(--border)] opacity-60 hover:opacity-100'}`}>
+                  <img src={r.fal_url} alt={r.label} className="w-full h-full object-cover" />
+                </button>
+                {on && <span className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full bg-[var(--accent)] text-white text-[10px] flex items-center justify-center font-bold">✓</span>}
+                <button onClick={() => deleteRef(r.id)} className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-red-500 text-white text-[10px] hidden group-hover:flex items-center justify-center" title="Delete">×</button>
+                <div className="text-[8px] text-[var(--muted2)] text-center truncate w-[80px]">{r.label}</div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+      <div className="text-[10px] text-[var(--muted2)] mt-1">
+        Style refs di-inject sebagai image_urls ke image gen → output cocokin look/warna/komposisi referensi. Best 1-3 image.
+      </div>
     </div>
   )
 }
