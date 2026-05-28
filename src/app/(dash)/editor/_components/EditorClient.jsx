@@ -451,9 +451,15 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
     setExporting(false)
   }
 
-  // Sync base video element when active base clip changes.
-  // When the active clip has use_cloned_voice, mute the video and play the
-  // cloned audio in sync at the same srcTime.
+  // Sync base video element to current playhead position.
+  //
+  // Deps include `baseInfo?.srcTime` so dragging the timeline scrubber within
+  // the same clip refires the effect and seeks the <video>. Without srcTime,
+  // useEffect only fired when active clip CHANGED — within-clip scrubbing
+  // showed a stale frame because the effect never re-ran.
+  //
+  // Also depend on src_in/src_out so trim edits immediately resync preview
+  // to the new trim range (was the 'trim doesn't update preview' bug).
   useEffect(() => {
     const v = baseVideoRef.current
     if (!v || !baseInfo) return
@@ -475,7 +481,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseInfo?.clip?.id, playing])
+  }, [baseInfo?.clip?.id, baseInfo?.srcTime, baseInfo?.clip?.src_in, baseInfo?.clip?.src_out, baseInfo?.clip?.src_url, playing])
 
   // Keyboard shortcuts: Delete = delete selected clip; Space = play/pause
   useEffect(() => {
@@ -922,7 +928,13 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
               onUpdate={(p) => updateClip('video', selected.id, p)} onDelete={() => removeVideoClip(selected.id)}
               isBase={project.video_clips.find((c) => c.id === selected.id)?.track_idx === 0}
               isFirst={baseClips[0]?.id === selected.id}
-              totalDur={totalDur} />
+              totalDur={totalDur}
+              previewSeek={(srcTime) => {
+                // Direct DOM seek (no setState) — used by trim sliders so the
+                // video frame follows the slider live during drag.
+                const v = baseVideoRef.current
+                if (v) v.currentTime = Math.max(0, srcTime)
+              }} />
           ) : selected?.kind === 'text' ? (
             <TextPanel clip={project.text_clips.find((c) => c.id === selected.id)} duration={totalDur}
               onUpdate={(p) => updateClip('text', selected.id, p)} onDelete={() => deleteClip('text', selected.id)} />
@@ -1171,7 +1183,7 @@ function Timeline({ project, baseClips, overlayList, overlayTrackIdxs, totalDur,
   )
 }
 
-function VideoClipPanel({ clip, isBase, isFirst, totalDur, onUpdate, onDelete }) {
+function VideoClipPanel({ clip, isBase, isFirst, totalDur, onUpdate, onDelete, previewSeek }) {
   if (!clip) return null
   const updFilter = (k, v) => onUpdate({ filters: { ...clip.filters, [k]: v } })
   const updTrans = (k, v) => onUpdate({ transition_in: { ...clip.transition_in, [k]: v } })
@@ -1194,10 +1206,14 @@ function VideoClipPanel({ clip, isBase, isFirst, totalDur, onUpdate, onDelete })
       )}
 
       <Field label={`Trim in: ${(clip.src_in || 0).toFixed(2)}s`}>
-        <LiveRange min={0} max={clip.src_duration} step={0.05} value={clip.src_in} onCommit={(v) => onUpdate({ src_in: v })} />
+        <LiveRange min={0} max={clip.src_duration} step={0.05} value={clip.src_in}
+          onDrag={isBase ? (v) => previewSeek?.(v) : undefined}
+          onCommit={(v) => onUpdate({ src_in: v })} />
       </Field>
       <Field label={`Trim out: ${(clip.src_out || 0).toFixed(2)}s of ${clip.src_duration?.toFixed(1)}s`}>
-        <LiveRange min={0} max={clip.src_duration} step={0.05} value={clip.src_out} onCommit={(v) => onUpdate({ src_out: v })} />
+        <LiveRange min={0} max={clip.src_duration} step={0.05} value={clip.src_out}
+          onDrag={isBase ? (v) => previewSeek?.(v) : undefined}
+          onCommit={(v) => onUpdate({ src_out: v })} />
       </Field>
       <Field label={`Speed: ${clip.speed}x`}>
         <LiveRange min={0.25} max={3} step={0.05} value={clip.speed} onCommit={(v) => onUpdate({ speed: v })} />
@@ -1438,12 +1454,17 @@ function Field({ label, children, className = '' }) {
   )
 }
 
-// Local-state range slider that commits to parent only on drag release.
-// Inspector sliders used to fire onChange on every pixel of drag → parent
-// state → re-render entire EditorClient (1418 LOC) → re-paint video. Now
-// drag updates LOCAL state only (smooth), commit happens on mouseup / touchend
-// / blur — drops re-renders during drag by ~95%.
-function LiveRange({ value, onCommit, min, max, step, className = 'w-full', disabled }) {
+// Local-state range slider with optional drag-preview callback.
+//
+// Default behaviour: track LOCAL state during drag, commit to parent only on
+// mouseUp/touchEnd. Drops React re-renders during drag by ~95%.
+//
+// onDrag (optional): called on EVERY pixel of drag with the current value.
+// Use this for previews that don't need to go through React state — e.g.
+// trim sliders directly seek the <video> element via ref so user sees the
+// frame at each trim point while dragging. The parent should NOT setState
+// in onDrag — direct DOM mutation only.
+function LiveRange({ value, onCommit, onDrag, min, max, step, className = 'w-full', disabled }) {
   const [local, setLocal] = useState(value)
   const draggingRef = useRef(false)
   // Sync external value changes (e.g. realtime update from another tab)
@@ -1458,7 +1479,11 @@ function LiveRange({ value, onCommit, min, max, step, className = 'w-full', disa
     <input type="range" min={min} max={max} step={step} value={local} disabled={disabled}
       onMouseDown={start}
       onTouchStart={start}
-      onChange={(e) => setLocal(parseFloat(e.target.value))}
+      onChange={(e) => {
+        const v = parseFloat(e.target.value)
+        setLocal(v)
+        if (onDrag) onDrag(v) // realtime preview — direct DOM mutation in parent
+      }}
       onMouseUp={(e) => commit(parseFloat(e.target.value))}
       onTouchEnd={(e) => commit(parseFloat(e.target.value))}
       onKeyUp={(e) => commit(parseFloat(e.target.value))}
