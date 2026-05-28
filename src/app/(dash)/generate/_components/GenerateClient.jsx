@@ -365,15 +365,35 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
       const styleUrls = styleRefs.map((r) => r.fal_url).filter(Boolean)
       const refUrls = [...characterProductUrls, ...styleUrls]
 
-      // Storyboard mode = ONE grid image built from all 9 panels.
+      // Storyboard mode = ONE grid image built from all 9 panels (sheet view).
       // Per-shot mode = single image from this shot's image_prompt.
-      const rawPrompt = shot.raw.panels
-        ? buildStoryboardGridPrompt(shot.raw.panels, globalConfig.ar, shot.raw.concept, {
+      //
+      // CONTINUOUS SHOT bypass: when user enabled continuousShot, the grid
+      // 3×3 image breaks the video gen. Grok/Kling/etc interpret 9-cell grid
+      // as 9 distinct scenes and morph between them = visible cuts.
+      // Fix: emit a SINGLE-frame image from panel #1's visual instead of the
+      // grid. Video model sees one clean frame → produces one continuous take.
+      // User loses the visual storyboard sheet, but gets the continuous output
+      // they explicitly asked for.
+      let rawPrompt
+      if (shot.raw.panels) {
+        if (globalConfig.continuousShot) {
+          // Use panel #1 visual as the single hero frame. Storyboard concept +
+          // visual prefix to give model context without 9-cell layout.
+          const panel = shot.raw.panels[0] || {}
+          const concept = (shot.raw.concept || '').trim()
+          const visual = (panel.visual || panel.scene || '').trim()
+          rawPrompt = `Single photographic still, ${globalConfig.ar} canvas. ${concept ? `Scene: ${concept}. ` : ''}${visual} Natural lighting, realistic proportions. NO grid, NO storyboard layout, NO table, NO panels — one clean photo frame only.`
+        } else {
+          rawPrompt = buildStoryboardGridPrompt(shot.raw.panels, globalConfig.ar, shot.raw.concept, {
             skipDialog: !!globalConfig.skipDialog,
             skipOnscreen: !!globalConfig.skipOnscreen,
             skipProduct: !!globalConfig.skipProduct,
           })
-        : (shot.raw.image_prompt || shot.raw.shot_label)
+        }
+      } else {
+        rawPrompt = shot.raw.image_prompt || shot.raw.shot_label
+      }
       // Apply style preset (UGC/animation/3D/cinematic_ad/short_movie/TVC/etc) for higher quality output
       const basePrompt = applyStylePreset(globalConfig.style, rawPrompt)
       // Skip product directive when user opts out — avoids brand packaging injection.
