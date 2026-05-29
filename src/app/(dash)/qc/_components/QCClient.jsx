@@ -1,6 +1,7 @@
 'use client'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { convertVideoToMp4 } from '@/lib/video-convert'
 
 const STATUSES = [
   { v: 'pending',  l: '⏳ Review',   color: 'bg-blue-500/20 text-blue-400 border-blue-500/40' },
@@ -95,6 +96,39 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
     const { error } = await supabase.from('results').delete().eq('id', id)
     if (error) setErr(error.message)
   }
+
+  // Convert a result's WebM video to MP4 in-place (so Postiz accepts it).
+  // Plays the video through canvas + MediaRecorder client-side — no
+  // ffmpeg, no external tools. Real-time speed (5s clip ≈ 5s convert).
+  // Updates result.url in DB to the new .mp4 path. Old .webm in storage
+  // stays around for safety; user can clean up later if they want.
+  const [converting, setConverting] = useState(null) // { id, stage }
+  async function convertToMp4(r) {
+    if (converting) return
+    setConverting({ id: r.id, stage: 'Loading video...' })
+    setErr('')
+    try {
+      const { blob } = await convertVideoToMp4(r.url, (stage) => {
+        setConverting({ id: r.id, stage })
+      })
+      setConverting({ id: r.id, stage: `Uploading ${(blob.size / 1024 / 1024).toFixed(1)}MB...` })
+      const path = `${workspaceId}/qc-converted-${Date.now()}.mp4`
+      const { error: upErr } = await supabase.storage.from('refs').upload(path, blob, { contentType: 'video/mp4', cacheControl: '3600' })
+      if (upErr) throw upErr
+      const { data: { publicUrl } } = supabase.storage.from('refs').getPublicUrl(path)
+      const { error: updErr } = await supabase.from('results').update({ url: publicUrl }).eq('id', r.id)
+      if (updErr) throw updErr
+      setResults((prev) => prev.map((x) => (x.id === r.id ? { ...x, url: publicUrl } : x)))
+      setConverting(null)
+    } catch (e) {
+      setErr('Convert gagal: ' + (e?.message || e))
+      setConverting(null)
+    }
+  }
+  // Heuristic: a result needs conversion if its URL ends in .webm. We
+  // could also fetch HEAD and check Content-Type, but the extension is
+  // reliable here because our upload code sets it explicitly.
+  function isWebm(r) { return r.type === 'video' && /\.webm($|\?)/i.test(r.url || '') }
 
   async function uploadExternal(persona, file) {
     setErr('')
@@ -239,7 +273,8 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
             onUpload={(file) => persona && uploadExternal(persona, file)}
             onSetStatus={setStatus} onRemove={removeFromQC} onOpenNote={setOpenNote}
             onRename={rename} onDeletePerma={deletePerma}
-            selectedIds={selectedIds} onToggleSelect={toggleSelect} />
+            selectedIds={selectedIds} onToggleSelect={toggleSelect}
+            converting={converting} onConvertToMp4={convertToMp4} isWebm={isWebm} />
         ))}
 
         {byPersona.length === 0 && (
@@ -257,7 +292,7 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
   )
 }
 
-function PersonaGroup({ persona, items, busyUpload, onUpload, onSetStatus, onRemove, onOpenNote, onRename, onDeletePerma, selectedIds, onToggleSelect }) {
+function PersonaGroup({ persona, items, busyUpload, onUpload, onSetStatus, onRemove, onOpenNote, onRename, onDeletePerma, selectedIds, onToggleSelect, converting, onConvertToMp4, isWebm }) {
   const fileRef = useRef(null)
   const counts = items.reduce((c, r) => ({ ...c, [r.qc_status]: (c[r.qc_status] || 0) + 1 }), {})
 
@@ -315,7 +350,9 @@ function PersonaGroup({ persona, items, busyUpload, onUpload, onSetStatus, onRem
             <QCCard key={r.id} result={r}
               selected={selectedIds?.has(r.id)} onToggleSelect={onToggleSelect}
               onSetStatus={onSetStatus} onRemove={onRemove} onOpenNote={onOpenNote}
-              onRename={onRename} onDeletePerma={onDeletePerma} />
+              onRename={onRename} onDeletePerma={onDeletePerma}
+              isWebm={isWebm?.(r)} converting={converting?.id === r.id ? converting : null}
+              onConvertToMp4={() => onConvertToMp4?.(r)} />
           ))}
         </div>
       )}
@@ -330,6 +367,9 @@ function PersonaGroup({ persona, items, busyUpload, onUpload, onSetStatus, onRem
 // is identical; the card's behaviour is fully driven by `r` + `selected`.
 function qcCardEqual(prev, next) {
   if (prev.selected !== next.selected) return false
+  if (prev.isWebm !== next.isWebm) return false
+  if (!!prev.converting !== !!next.converting) return false
+  if (prev.converting?.stage !== next.converting?.stage) return false
   const a = prev.result, b = next.result
   if (a === b) return true
   return a.id === b.id
@@ -344,7 +384,7 @@ function qcCardEqual(prev, next) {
 // memo'd: with 300 cards on the page, toggling one selected state was
 // re-rendering all 299 siblings. Now: only the card whose `r` or `selected`
 // actually changed re-renders.
-const QCCard = memo(function QCCard({ result: r, onSetStatus, onRemove, onOpenNote, onRename, onDeletePerma, selected, onToggleSelect }) {
+const QCCard = memo(function QCCard({ result: r, onSetStatus, onRemove, onOpenNote, onRename, onDeletePerma, selected, onToggleSelect, isWebm, converting, onConvertToMp4 }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(r.label || '')
   const statusCfg = STATUSES.find((s) => s.v === r.qc_status) || STATUSES[0]
@@ -372,6 +412,16 @@ const QCCard = memo(function QCCard({ result: r, onSetStatus, onRemove, onOpenNo
         {r.meta?.source === 'editor' && (
           <span className="absolute bottom-1.5 left-1.5 px-1.5 py-0.5 rounded text-[8px] font-bold bg-cyan-500/30 text-cyan-200 border border-cyan-500/40">✂️ EDIT</span>
         )}
+        {isWebm && (
+          <span className="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded text-[8px] font-bold bg-yellow-500/30 text-yellow-200 border border-yellow-500/40" title="WebM tidak diterima Postiz — klik 🔄 convert">
+            ⚠ WEBM
+          </span>
+        )}
+        {converting && (
+          <div className="absolute inset-x-1 bottom-1 text-[9px] bg-purple-600 text-white px-1.5 py-0.5 rounded truncate">
+            🔄 {converting.stage}
+          </div>
+        )}
       </div>
       <div className="p-2">
         {editing ? (
@@ -380,8 +430,13 @@ const QCCard = memo(function QCCard({ result: r, onSetStatus, onRemove, onOpenNo
             onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur() }}
             autoFocus className="w-full text-xs px-1 py-0.5 rounded bg-[var(--surface)] border border-[var(--accent)]" />
         ) : (
-          <div onDoubleClick={() => setEditing(true)} className="text-xs font-semibold truncate cursor-text" title="double-click buat rename">
-            {r.label || 'untitled'}
+          <div className="flex items-center gap-1 group">
+            <div onDoubleClick={() => setEditing(true)} className="text-xs font-semibold truncate cursor-text flex-1" title="double-click buat rename">
+              {r.label || 'untitled'}
+            </div>
+            <button onClick={() => setEditing(true)} title="Rename" className="text-[10px] px-1 py-0.5 rounded text-[var(--muted)] hover:text-white hover:bg-[var(--surface)] opacity-0 group-hover:opacity-100 transition-opacity">
+              ✏️
+            </button>
           </div>
         )}
         {r.qc_notes && (
@@ -397,6 +452,12 @@ const QCCard = memo(function QCCard({ result: r, onSetStatus, onRemove, onOpenNo
           </button>
           {r.qc_status === 'approved' && (
             <a href="/scheduled" className="flex-1 text-[10px] px-1.5 py-1 rounded bg-green-500/20 hover:bg-green-500/30 text-green-300 text-center font-semibold">📅</a>
+          )}
+          {isWebm && (
+            <button onClick={onConvertToMp4} disabled={!!converting} title="Convert WebM → MP4 biar Postiz terima"
+              className="text-[10px] px-1.5 py-1 rounded bg-yellow-500/30 hover:bg-yellow-500/50 text-yellow-200 border border-yellow-500/40 font-semibold disabled:opacity-50">
+              🔄 MP4
+            </button>
           )}
           <button onClick={() => onRemove(r.id)} title="Keluarin dari QC" className="text-[10px] px-1.5 py-1 rounded text-[var(--muted)] hover:bg-[var(--surface)]">✕</button>
           <button onClick={() => onDeletePerma(r.id)} title="Hapus permanen" className="text-[10px] px-1.5 py-1 rounded text-red-400 hover:bg-[var(--surface)]">🗑</button>
