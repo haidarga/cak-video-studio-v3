@@ -14,6 +14,7 @@
 // Two backends: ffmpeg.wasm (MP4, full features) or canvas+MediaRecorder (WebM fallback).
 
 import { getFontCss } from './editor-fonts.js'
+import { proxify } from './editor-proxy.js'
 
 let ffmpegInstance = null
 let ffmpegLoading = null
@@ -57,22 +58,6 @@ async function getFFmpeg(onLog) {
     return ff
   })()
   return ffmpegLoading
-}
-
-// Route cross-origin fetches through our /api/proxy so the response gains a
-// Cross-Origin-Resource-Policy header. Required because /editor sets
-// COEP=require-corp (for ffmpeg.wasm's SharedArrayBuffer). fal.media and
-// Supabase storage don't set CORP, so a direct fetch is blocked with
-// ERR_BLOCKED_BY_RESPONSE.NotSameOriginAfterDefaultedToSameOriginByCoep.
-// Same-origin URLs (/editor relative, blob:, data:) are left alone.
-function proxify(url) {
-  if (!url || typeof url !== 'string') return url
-  if (url.startsWith('blob:') || url.startsWith('data:')) return url
-  try {
-    const u = new URL(url, typeof window !== 'undefined' ? window.location.href : 'https://x.local')
-    if (typeof window !== 'undefined' && u.origin === window.location.origin) return url
-    return `/api/proxy?url=${encodeURIComponent(url)}`
-  } catch { return url }
 }
 
 async function fetchToUint8(url) {

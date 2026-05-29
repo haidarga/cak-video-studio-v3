@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
+import { proxify } from '@/lib/editor-proxy'
 
 // Render audio waveform from URL using Web Audio API decode + canvas viz.
 // Caches peak data in component state to avoid re-decoding.
@@ -14,7 +15,7 @@ export default function AudioWaveform({ url, width, height, color = '#fbbf24' })
     setError(false); setPeaks(null)
     ;(async () => {
       try {
-        const res = await fetch(url, { cache: 'force-cache' })
+        const res = await fetch(proxify(url), { cache: 'force-cache' })
         const buf = await res.arrayBuffer()
         const ctx = new (window.AudioContext || window.webkitAudioContext)()
         const audio = await ctx.decodeAudioData(buf)

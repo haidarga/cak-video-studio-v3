@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { renderProject, totalDuration, clipDuration, activeBaseClipAt, activeOverlaysAt } from '@/lib/editor-render'
 import { FONT_OPTIONS, DEFAULT_FONT, getFontCss } from '@/lib/editor-fonts'
+import { proxify } from '@/lib/editor-proxy'
 import AudioWaveform from './AudioWaveform'
 
 // Editor v4 — multi-track stacking (base + B-roll overlays).
@@ -256,7 +257,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
   async function addVideoClip(result, asOverlay) {
     setErr('')
     const probe = document.createElement('video')
-    probe.src = result.url; probe.crossOrigin = 'anonymous'
+    probe.src = proxify(result.url); probe.crossOrigin = 'anonymous'
     const dur = await new Promise((res) => { probe.onloadedmetadata = () => res(probe.duration || 10); probe.onerror = () => res(10) })
     // If the source result has a cloned audio (post-gen via /api/voice/convert),
     // attach it here so the editor can swap native audio for the persona's voice.
@@ -555,7 +556,8 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
   useEffect(() => {
     const v = baseVideoRef.current
     if (!v || !baseInfo) return
-    if (v.src !== baseInfo.clip.src_url) { v.src = baseInfo.clip.src_url; v.load() }
+    const want = proxify(baseInfo.clip.src_url)
+    if (v.src !== want) { v.src = want; v.load() }
     if (Math.abs(v.currentTime - baseInfo.srcTime) > 0.3) v.currentTime = baseInfo.srcTime
     v.playbackRate = baseInfo.clip.speed || 1
     const usesCloned = baseInfo.clip.cloned_audio_url && baseInfo.clip.use_cloned_voice !== false
@@ -662,7 +664,8 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
       const bi = activeBaseClipAt(t, project.video_clips)
       if (bi && baseVideoRef.current) {
         const v = baseVideoRef.current
-        if (v.src !== bi.clip.src_url) { v.src = bi.clip.src_url; v.load() }
+        const wantSrc = proxify(bi.clip.src_url)
+        if (v.src !== wantSrc) { v.src = wantSrc; v.load() }
         if (Math.abs(v.currentTime - bi.srcTime) > 0.5) v.currentTime = bi.srcTime
         if (v.paused) v.play().catch(() => {})
         // Cloned voice for base clip
@@ -836,7 +839,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                     ✕
                   </button>
                   <div className="flex gap-2 mb-1.5">
-                    <video src={r.url} muted className="w-10 aspect-[9/16] object-cover rounded bg-black flex-shrink-0" />
+                    <video src={proxify(r.url)} muted className="w-10 aspect-[9/16] object-cover rounded bg-black flex-shrink-0" />
                     <div className="min-w-0 flex-1 pr-5">
                       <div className="text-[11px] font-semibold truncate flex items-center gap-1">
                         {r.label || 'untitled'}
@@ -930,11 +933,11 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                     The render/preview engines reach these by ref to swap native
                     audio for the persona's cloned voice (lip-sync preserved). */}
                 {project.video_clips.filter((c) => c.cloned_audio_url).map((c) => (
-                  <audio key={'cv-' + c.id} src={c.cloned_audio_url} preload="auto" crossOrigin="anonymous"
+                  <audio key={'cv-' + c.id} src={proxify(c.cloned_audio_url)} preload="auto" crossOrigin="anonymous"
                     ref={(el) => { if (el) clonedAudioRefs.current.set(c.id, el); else clonedAudioRefs.current.delete(c.id) }} />
                 ))}
                 {project.audio_clips?.[0]?.src_url && (
-                  <audio ref={bgmAudioRef} src={project.audio_clips[0].src_url} preload="auto" crossOrigin="anonymous"
+                  <audio ref={bgmAudioRef} src={proxify(project.audio_clips[0].src_url)} preload="auto" crossOrigin="anonymous"
                     loop={false} />
                 )}
 
@@ -945,7 +948,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                   const pos = c.position || DEFAULT_POSITION
                   return (
                     <video key={c.id} ref={(el) => { if (el) overlayRefs.current.set(c.id, el); else overlayRefs.current.delete(c.id) }}
-                      src={c.src_url} crossOrigin="anonymous" muted={!isActive}
+                      src={proxify(c.src_url)} crossOrigin="anonymous" muted={!isActive}
                       onClick={(e) => { e.stopPropagation(); setSelected({ kind: 'video', id: c.id }) }}
                       style={{
                         position: 'absolute', left: `${pos.x_pct}%`, top: `${pos.y_pct}%`,
@@ -962,7 +965,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                   if (currentTime < c.start || currentTime > c.end) return null
                   const on = selected?.kind === 'image' && selected.id === c.id
                   return (
-                    <img key={c.id} src={c.src_url} alt=""
+                    <img key={c.id} src={proxify(c.src_url)} alt=""
                       onClick={(e) => { e.stopPropagation(); setSelected({ kind: 'image', id: c.id }) }}
                       style={{
                         position: 'absolute', left: `${c.x_pct}%`, top: `${c.y_pct}%`,
@@ -1480,7 +1483,7 @@ function VideoClipPanel({ clip, isBase, isFirst, totalDur, onUpdate, onDelete, p
               onChange={(e) => onUpdate({ use_cloned_voice: e.target.checked })} className="w-4 h-4" />
             <span className="text-xs">Pake cloned voice (mute native audio)</span>
           </label>
-          <audio src={clip.cloned_audio_url} controls className="w-full h-8 mt-1.5" />
+          <audio src={proxify(clip.cloned_audio_url)} controls className="w-full h-8 mt-1.5" />
           <div className="text-[9px] text-[var(--muted2)] mt-1 leading-relaxed">
             ⚠️ Preview disini cuma play audio cloned-nya. Render final + sync sama video belum di-wire ke pipeline editor — masih TODO.
           </div>
@@ -1771,7 +1774,7 @@ function ImagePanel({ clip, duration, onUpdate, onDelete }) {
         <div className="text-[10px] uppercase font-semibold text-[var(--muted)]">🖼 Image overlay</div>
         <button onClick={onDelete} className="text-[10px] text-red-400 hover:underline">Hapus</button>
       </div>
-      <img src={clip.src_url} alt="" className="w-full max-h-24 object-contain bg-black/30 rounded" />
+      <img src={proxify(clip.src_url)} alt="" className="w-full max-h-24 object-contain bg-black/30 rounded" />
       <div className="text-[9px] text-[var(--muted)] truncate">{clip.src_name}</div>
       <div className="grid grid-cols-2 gap-2">
         <Field label={`Start: ${clip.start.toFixed(2)}s`}><LiveRange min={0} max={duration} step={0.05} value={clip.start} onCommit={(v) => onUpdate({ start: v })} /></Field>
@@ -1795,7 +1798,7 @@ function AudioPanel({ clip, duration, onUpdate, onDelete }) {
         <div className="text-[10px] uppercase font-semibold text-[var(--muted)]">🎵 Music</div>
         <button onClick={onDelete} className="text-[10px] text-red-400 hover:underline">Hapus</button>
       </div>
-      <audio src={clip.src_url} controls className="w-full" />
+      <audio src={proxify(clip.src_url)} controls className="w-full" />
       <div className="text-[9px] text-[var(--muted)] truncate">{clip.src_name}</div>
       <Field label={`Mulai di: ${clip.start.toFixed(2)}s`}><LiveRange min={0} max={duration} step={0.1} value={clip.start} onCommit={(v) => onUpdate({ start: v })} /></Field>
       <Field label={`Volume: ${Math.round(clip.volume * 100)}%`}><LiveRange min={0} max={1.5} step={0.05} value={clip.volume} onCommit={(v) => onUpdate({ volume: v })} /></Field>
