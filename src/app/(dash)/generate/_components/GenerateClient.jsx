@@ -74,6 +74,10 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
     skipOnscreen: false,
     skipProduct: false,
     wardrobeOverride: '',
+    // Per-Shot mode: optional user-set shot count. null = LLM decides based on
+    // naskah length (1+ shots, 3-10s each). Set explicit number to force exactly
+    // that many shots. Storyboard mode always 9 panels regardless.
+    shotCount: null,
   })
   // Workspace custom camera presets (user-defined). Built-ins are imported.
   const [userCameraPresets, setUserCameraPresets] = useState([])
@@ -169,7 +173,17 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
           {showConfigDetails && (
             <div className="mt-2 grid grid-cols-2 md:grid-cols-3 gap-3">
               <Sel label="Mode" value={globalConfig.mode} onChange={(v) => setGlobalConfig({ ...globalConfig, mode: v })}
-                options={[['shots', '🎬 Per-Shot (5-8 cut)'], ['storyboard', '🗂 Storyboard 3×3 (~15s)']]} />
+                options={[['shots', '🎬 Per-Shot (auto count from naskah)'], ['storyboard', '🗂 Storyboard 3×3 (~15s)']]} />
+              {globalConfig.mode === 'shots' && (
+                <div>
+                  <label className="block text-[9px] uppercase text-[var(--muted)] font-semibold mb-1">Shot Count</label>
+                  <select value={globalConfig.shotCount ?? ''} onChange={(e) => setGlobalConfig({ ...globalConfig, shotCount: e.target.value ? parseInt(e.target.value) : null })}
+                    className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface)] border border-[var(--border)]">
+                    <option value="">Auto (LLM decide)</option>
+                    {[1,2,3,4,5,6,7,8,9,10,12,15,20].map((n) => <option key={n} value={n}>{n} shot{n>1?'s':''}</option>)}
+                  </select>
+                </div>
+              )}
               <Sel label="Aspect Ratio" value={globalConfig.ar} onChange={(v) => setGlobalConfig({ ...globalConfig, ar: v })}
                 options={[['9:16', '9:16 vertical'], ['16:9', '16:9 horizontal'], ['1:1', '1:1 square']]} />
               <Sel label="Bahasa Dialog" value={globalConfig.lang} onChange={(v) => setGlobalConfig({ ...globalConfig, lang: v })}
@@ -449,6 +463,7 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
             skipOnscreen: !!globalConfig.skipOnscreen,
             skipProduct: !!globalConfig.skipProduct,
           },
+          shotCount: globalConfig.shotCount || null,
         }),
       })
       const data = await res.json()

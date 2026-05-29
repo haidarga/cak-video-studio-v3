@@ -5,7 +5,7 @@ import { callGeminiJSON } from '@/lib/gemini-server'
 import { getActiveWorkspace } from '@/lib/workspace'
 
 export async function POST(req) {
-  const { naskah, lang = 'Indonesian', mode = 'shots', ar = '9:16', refLabels = [], brand = null, constraints = {} } = await req.json()
+  const { naskah, lang = 'Indonesian', mode = 'shots', ar = '9:16', refLabels = [], brand = null, constraints = {}, shotCount = null } = await req.json()
   if (!naskah?.trim()) return NextResponse.json({ ok: false, error: 'naskah kosong' }, { status: 400 })
 
   const supabase = await createClient()
@@ -80,7 +80,13 @@ SPOKEN LANGUAGE: ${lang} — ALL dialog written in fluent native ${lang}.${refHi
 UNIVERSAL RULES:
 ${universalRules}
 
-TASK: Convert this script into ${isStory ? 'ONE 3x3 storyboard (9 panels, ~15s total)' : '5-8 shots (4-8s each)'} for a ${ar} video.
+TASK: Convert this script into ${
+    isStory
+      ? 'ONE 3x3 storyboard (9 panels, ~15s total)'
+      : shotCount
+        ? `EXACTLY ${shotCount} shot${shotCount > 1 ? 's' : ''} (each 3-10s based on action density)`
+        : 'as many shots as the naskah naturally demands (minimum 1, typical 3-8, each shot 3-10s). Short naskah = fewer shots, long naskah = more shots. Don\'t pad with filler shots'
+  } for a ${ar} video.
 
 Output ONLY valid JSON, no markdown:
 ${schema}
