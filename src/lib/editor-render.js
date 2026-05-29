@@ -13,6 +13,8 @@
 //
 // Two backends: ffmpeg.wasm (MP4, full features) or canvas+MediaRecorder (WebM fallback).
 
+import { getFontCss } from './editor-fonts.js'
+
 let ffmpegInstance = null
 let ffmpegLoading = null
 
@@ -780,7 +782,12 @@ export async function renderWithCanvas(project, onProgress) {
       }
       const fontSize = c.size * (W / 720) * scale
       ctx.globalAlpha = alpha
-      ctx.font = `${c.weight} ${fontSize}px system-ui, -apple-system, sans-serif`
+      // Font family resolved from FONT_OPTIONS (shared with EditorClient). The
+      // Google Font <link> is injected on the editor page so loaded families
+      // are available to canvas. If render runs from a page that didn't load
+      // them, system-ui takes over via the CSS fallback stack — no crash.
+      const fontCss = c.font ? getFontCss(c.font) : 'system-ui, -apple-system, sans-serif'
+      ctx.font = `${c.weight} ${fontSize}px ${fontCss}`
       ctx.textAlign = c.align === 'left' ? 'left' : c.align === 'right' ? 'right' : 'center'
       ctx.textBaseline = 'middle'
       const metrics = ctx.measureText(c.text)

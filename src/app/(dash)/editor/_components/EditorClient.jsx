@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { renderProject, totalDuration, clipDuration, activeBaseClipAt, activeOverlaysAt } from '@/lib/editor-render'
+import { FONT_OPTIONS, DEFAULT_FONT, getFontCss } from '@/lib/editor-fonts'
 import AudioWaveform from './AudioWaveform'
 
 // Editor v4 — multi-track stacking (base + B-roll overlays).
@@ -11,6 +12,9 @@ import AudioWaveform from './AudioWaveform'
 const DEFAULT_FILTERS = { brightness: 0, contrast: 1, saturation: 1, blur: 0 }
 const DEFAULT_TRANSITION = { type: 'cut', duration: 0.5 }
 const DEFAULT_POSITION = { x_pct: 75, y_pct: 25, w_pct: 35, opacity: 1 }
+
+// FONT_OPTIONS / DEFAULT_FONT / getFontCss come from @/lib/editor-fonts so
+// the canvas render path (editor-render.js) sees the same family stacks.
 
 const DEFAULT_PROJECT = {
   name: 'Untitled project',
@@ -229,7 +233,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
     const c = {
       id: uid(), kind: 'text', text: 'Tap to edit',
       start: Math.max(0, currentTime), end: Math.min(totalDur || 5, (currentTime || 0) + 2),
-      x_pct: 50, y_pct: 80, size: 48, color: '#ffffff', weight: 700,
+      x_pct: 50, y_pct: 80, size: 48, color: '#ffffff', weight: 700, font: DEFAULT_FONT,
       bg: 'rgba(0,0,0,0.6)', align: 'center', animation: 'fade',
     }
     patch((p) => ({ ...p, text_clips: [...p.text_clips, c] }))
@@ -320,7 +324,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
         const clipsForThis = data.segments.map((s) => ({
           id: uid(), kind: 'text', text: s.text.toUpperCase(),
           start: offset + s.start, end: offset + s.end,
-          x_pct: 50, y_pct: 75, size: 56, color: '#ffffff', weight: 900,
+          x_pct: 50, y_pct: 75, size: 56, color: '#ffffff', weight: 900, font: DEFAULT_FONT,
           bg: 'rgba(0,0,0,0.85)', align: 'center',
           animation: karaoke ? 'karaoke' : 'fade',
           // Karaoke: per-word data for highlight
@@ -665,6 +669,20 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
     return Array.from(s).sort((a, b) => b - a) // higher first (top of timeline)
   }, [overlayList])
 
+  // Inject Google Fonts <link> once — covers all FONT_OPTIONS in a single
+  // request. Without this the font dropdown picks the family but the browser
+  // falls back to Inter because the family isn't loaded.
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    if (document.getElementById('editor-google-fonts')) return
+    const families = FONT_OPTIONS.map((f) => f.google).filter(Boolean).map((g) => `family=${g}`).join('&')
+    const link = document.createElement('link')
+    link.id = 'editor-google-fonts'
+    link.rel = 'stylesheet'
+    link.href = `https://fonts.googleapis.com/css2?${families}&display=swap`
+    document.head.appendChild(link)
+  }, [])
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -903,6 +921,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                         position: 'absolute', left: `${c.x_pct}%`, top: `${c.y_pct}%`,
                         transform: `translate(-50%, -50%) scale(${scale})`,
                         color: c.color, fontWeight: c.weight, fontSize: `${c.size * 0.4}px`,
+                        fontFamily: getFontCss(c.font || DEFAULT_FONT),
                         background: c.bg, padding: '4px 10px', borderRadius: 4, textAlign: c.align, whiteSpace: 'pre', cursor: 'pointer',
                         textShadow: '0 1px 3px rgba(0,0,0,0.8)', outline: on ? '2px solid var(--accent)' : 'none',
                         opacity, zIndex: 100,
@@ -1466,10 +1485,21 @@ function TextPanel({ clip, duration, onUpdate, onDelete }) {
         </Field>
       </div>
       <div className="grid grid-cols-2 gap-2">
-        <Field label={`X: ${clip.x_pct}%`}><LiveRange min={0} max={100} step={1} value={clip.x_pct} onCommit={(v) => onUpdate({ x_pct: Math.round(v) })} /></Field>
-        <Field label={`Y: ${clip.y_pct}%`}><LiveRange min={0} max={100} step={1} value={clip.y_pct} onCommit={(v) => onUpdate({ y_pct: Math.round(v) })} /></Field>
+        {/* onDrag fires every slider tick → realtime preview while dragging.
+            onCommit still fires on release for the final snap. */}
+        <Field label={`X: ${clip.x_pct}%`}><LiveRange min={0} max={100} step={1} value={clip.x_pct} onDrag={(v) => onUpdate({ x_pct: Math.round(v) })} onCommit={(v) => onUpdate({ x_pct: Math.round(v) })} /></Field>
+        <Field label={`Y: ${clip.y_pct}%`}><LiveRange min={0} max={100} step={1} value={clip.y_pct} onDrag={(v) => onUpdate({ y_pct: Math.round(v) })} onCommit={(v) => onUpdate({ y_pct: Math.round(v) })} /></Field>
       </div>
-      <Field label={`Size: ${clip.size}px`}><LiveRange min={16} max={120} step={1} value={clip.size} onCommit={(v) => onUpdate({ size: Math.round(v) })} /></Field>
+      <Field label={`Size: ${clip.size}px`}><LiveRange min={16} max={120} step={1} value={clip.size} onDrag={(v) => onUpdate({ size: Math.round(v) })} onCommit={(v) => onUpdate({ size: Math.round(v) })} /></Field>
+      <Field label="Font">
+        <select value={clip.font || DEFAULT_FONT} onChange={(e) => onUpdate({ font: e.target.value })}
+          style={{ fontFamily: getFontCss(clip.font || DEFAULT_FONT) }}
+          className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)]">
+          {FONT_OPTIONS.map((f) => (
+            <option key={f.id} value={f.id} style={{ fontFamily: f.css }}>{f.label}</option>
+          ))}
+        </select>
+      </Field>
       <div className="grid grid-cols-2 gap-2">
         <Field label="Color"><input type="color" value={clip.color} onChange={(e) => onUpdate({ color: e.target.value })} className="w-full h-8 rounded cursor-pointer" /></Field>
         <Field label="BG">
@@ -1517,11 +1547,11 @@ function ImagePanel({ clip, duration, onUpdate, onDelete }) {
         <Field label={`End: ${clip.end.toFixed(2)}s`}><LiveRange min={0} max={duration} step={0.05} value={clip.end} onCommit={(v) => onUpdate({ end: v })} /></Field>
       </div>
       <div className="grid grid-cols-2 gap-2">
-        <Field label={`X: ${clip.x_pct}%`}><LiveRange min={0} max={100} step={1} value={clip.x_pct} onCommit={(v) => onUpdate({ x_pct: Math.round(v) })} /></Field>
-        <Field label={`Y: ${clip.y_pct}%`}><LiveRange min={0} max={100} step={1} value={clip.y_pct} onCommit={(v) => onUpdate({ y_pct: Math.round(v) })} /></Field>
+        <Field label={`X: ${clip.x_pct}%`}><LiveRange min={0} max={100} step={1} value={clip.x_pct} onDrag={(v) => onUpdate({ x_pct: Math.round(v) })} onCommit={(v) => onUpdate({ x_pct: Math.round(v) })} /></Field>
+        <Field label={`Y: ${clip.y_pct}%`}><LiveRange min={0} max={100} step={1} value={clip.y_pct} onDrag={(v) => onUpdate({ y_pct: Math.round(v) })} onCommit={(v) => onUpdate({ y_pct: Math.round(v) })} /></Field>
       </div>
-      <Field label={`Width: ${clip.w_pct}%`}><LiveRange min={5} max={400} step={1} value={clip.w_pct} onCommit={(v) => onUpdate({ w_pct: Math.round(v) })} /></Field>
-      <Field label={`Opacity: ${Math.round(clip.opacity * 100)}%`}><LiveRange min={0} max={1} step={0.05} value={clip.opacity} onCommit={(v) => onUpdate({ opacity: v })} /></Field>
+      <Field label={`Width: ${clip.w_pct}%`}><LiveRange min={5} max={400} step={1} value={clip.w_pct} onDrag={(v) => onUpdate({ w_pct: Math.round(v) })} onCommit={(v) => onUpdate({ w_pct: Math.round(v) })} /></Field>
+      <Field label={`Opacity: ${Math.round(clip.opacity * 100)}%`}><LiveRange min={0} max={1} step={0.05} value={clip.opacity} onDrag={(v) => onUpdate({ opacity: v })} onCommit={(v) => onUpdate({ opacity: v })} /></Field>
     </div>
   )
 }
