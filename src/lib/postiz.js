@@ -239,6 +239,11 @@ export async function createPostizPost({ creds, channelId, content, mediaUrl, sc
     }],
   }
 
+  // Diagnostic log — shows up in Vercel function logs. Use when debugging why
+  // TikTok features (autoAddMusic, etc) aren't taking effect — we can confirm
+  // the body we send matches Postiz's documented schema.
+  console.log('[postiz] sending body:', JSON.stringify(body, null, 2))
+
   const paths = ['/public/v1/posts', '/api/public/v1/posts', '/api/v1/posts']
   let lastErr
   for (const path of paths) {
