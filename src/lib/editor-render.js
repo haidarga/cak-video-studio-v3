@@ -918,9 +918,21 @@ export async function renderWithCanvas(project, onProgress) {
   return new Blob(chunks, { type: mime })
 }
 
-export async function renderProject(project, onProgress) {
+// mode: 'fast' (canvas+MediaRecorder, WebM, ~real-time) or 'mp4' (ffmpeg.wasm).
+// ffmpeg.wasm needs to download ~30MB of core+wasm on first export and then
+// transcode — for a 5s clip that's typically 30-60s total. The canvas path
+// records the preview in real time, so a 5s clip exports in about 5s with
+// no wasm download. WebM uploads fine to TikTok / IG / YouTube.
+export async function renderProject(project, onProgress, opts = {}) {
+  const mode = opts.mode || 'fast'
+  if (mode === 'fast') {
+    onProgress?.('Recording (canvas WebM — fast mode)...')
+    const blob = await renderWithCanvas(project, onProgress)
+    return { blob, ext: 'webm', mime: 'video/webm' }
+  }
+  // mode === 'mp4' — try ffmpeg first, fall back to canvas if it crashes.
   try {
-    onProgress?.('Trying ffmpeg.wasm (MP4 with stacking)...')
+    onProgress?.('Loading ffmpeg.wasm (first export takes ~15-30s)...')
     const blob = await renderWithFFmpeg(project, onProgress)
     return { blob, ext: 'mp4', mime: 'video/mp4' }
   } catch (e) {

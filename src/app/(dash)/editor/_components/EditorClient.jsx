@@ -516,11 +516,13 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
     setErr('')
   }
 
-  async function exportVideo() {
+  // mode: 'fast' = canvas WebM (real-time, no ffmpeg load — fastest)
+  //       'mp4'  = ffmpeg.wasm MP4 (slow first time, more compatible)
+  async function exportVideo(mode = 'fast') {
     if (project.video_clips.length === 0) { setErr('Belum ada video clip'); return }
     setExporting(true); setExportProgress('Persiapan...'); setErr('')
     try {
-      const { blob, ext, mime } = await renderProject(project, setExportProgress)
+      const { blob, ext, mime } = await renderProject(project, setExportProgress, { mode })
       setExportProgress(`Uploading ${(blob.size / 1024 / 1024).toFixed(1)}MB...`)
       const path = `${workspaceId}/editor-${Date.now()}.${ext}`
       const { error: upErr } = await supabase.storage.from('refs').upload(path, blob, { upsert: false, contentType: mime, cacheControl: '3600' })
@@ -803,9 +805,20 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
           <button onClick={saveProject} disabled={saving || project.video_clips.length === 0} className="px-3 py-1.5 text-xs rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)] disabled:opacity-50">
             {saving ? '⏳ Save...' : '💾 Save'}
           </button>
-          <button onClick={exportVideo} disabled={exporting || project.video_clips.length === 0}
+          {/* Two-button export: Fast (canvas WebM) for speed, MP4 for compatibility.
+              Fast records the preview in real-time — a 5s clip exports in ~5s with
+              no ffmpeg.wasm download. MP4 needs the 30MB wasm bundle + transcode
+              (~30-60s first export). Both go through the same renderer + auto-upload
+              to /qc. */}
+          <button onClick={() => exportVideo('fast')} disabled={exporting || project.video_clips.length === 0}
+            title="Canvas WebM — real-time, no ffmpeg load. Fastest. WebM uploads fine to TikTok/IG/YouTube."
             className="px-4 py-1.5 text-xs font-bold rounded bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-50">
-            {exporting ? `⏳ Rendering...` : `⬇ Export → QC (${totalDur.toFixed(1)}s)`}
+            {exporting ? `⏳ Rendering...` : `⚡ Fast Export → QC (${totalDur.toFixed(1)}s)`}
+          </button>
+          <button onClick={() => exportVideo('mp4')} disabled={exporting || project.video_clips.length === 0}
+            title="ffmpeg.wasm MP4 — slower first time (downloads ~30MB), max compatibility"
+            className="px-3 py-1.5 text-xs font-semibold rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)] disabled:opacity-50">
+            MP4 (slow)
           </button>
         </div>
       </div>
