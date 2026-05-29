@@ -16,6 +16,43 @@ const DEFAULT_POSITION = { x_pct: 75, y_pct: 25, w_pct: 35, opacity: 1 }
 // FONT_OPTIONS / DEFAULT_FONT / getFontCss come from @/lib/editor-fonts so
 // the canvas render path (editor-render.js) sees the same family stacks.
 
+// Default effect state per text clip. All disabled by default — old clips
+// without these fields still render exactly as before (we fall back to the
+// hard-coded subtle shadow in the renderer when nothing is enabled).
+const DEFAULT_EFFECTS = {
+  stroke: { enabled: false, width: 3, color: '#000000' },
+  shadow: { enabled: true, x: 0, y: 2, blur: 4, color: 'rgba(0,0,0,0.8)' },
+  glow: { enabled: false, blur: 14, color: '#ffd700' },
+}
+
+// Style presets — quick way to apply a common look without touching individual
+// sliders. User can still customize after picking a preset.
+const EFFECT_PRESETS = {
+  clean: { stroke: { enabled: false, width: 3, color: '#000000' }, shadow: { enabled: false, x: 0, y: 0, blur: 0, color: 'rgba(0,0,0,0)' }, glow: { enabled: false, blur: 0, color: '#000' } },
+  drop: { stroke: { enabled: false, width: 3, color: '#000000' }, shadow: { enabled: true, x: 0, y: 3, blur: 6, color: 'rgba(0,0,0,0.85)' }, glow: { enabled: false, blur: 0, color: '#000' } },
+  tiktok: { stroke: { enabled: true, width: 4, color: '#000000' }, shadow: { enabled: true, x: 0, y: 2, blur: 0, color: 'rgba(0,0,0,1)' }, glow: { enabled: false, blur: 0, color: '#000' } },
+  neon: { stroke: { enabled: false, width: 2, color: '#06b6d4' }, shadow: { enabled: false, x: 0, y: 0, blur: 0, color: 'transparent' }, glow: { enabled: true, blur: 18, color: '#06b6d4' } },
+  pop3d: { stroke: { enabled: true, width: 2, color: '#000000' }, shadow: { enabled: true, x: 4, y: 4, blur: 0, color: 'rgba(0,0,0,1)' }, glow: { enabled: false, blur: 0, color: '#000' } },
+  highlight: { stroke: { enabled: false, width: 0, color: '#000' }, shadow: { enabled: false, x: 0, y: 0, blur: 0, color: 'transparent' }, glow: { enabled: true, blur: 10, color: '#fde047' } },
+}
+
+// Compose text-shadow CSS string from shadow + glow effects.
+function composeTextShadow(effects) {
+  const parts = []
+  if (effects?.glow?.enabled) {
+    // Stacked glow for stronger halo — 3 layers at increasing blur reads as a real glow.
+    const g = effects.glow
+    parts.push(`0 0 ${g.blur * 0.4}px ${g.color}`)
+    parts.push(`0 0 ${g.blur}px ${g.color}`)
+    parts.push(`0 0 ${g.blur * 1.6}px ${g.color}`)
+  }
+  if (effects?.shadow?.enabled) {
+    const s = effects.shadow
+    parts.push(`${s.x}px ${s.y}px ${s.blur}px ${s.color}`)
+  }
+  return parts.join(', ') || 'none'
+}
+
 const DEFAULT_PROJECT = {
   name: 'Untitled project',
   ar: '9:16',
@@ -235,6 +272,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
       start: Math.max(0, currentTime), end: Math.min(totalDur || 5, (currentTime || 0) + 2),
       x_pct: 50, y_pct: 80, size: 48, color: '#ffffff', weight: 700, font: DEFAULT_FONT,
       bg: 'rgba(0,0,0,0.6)', align: 'center', animation: 'fade',
+      effects: DEFAULT_EFFECTS,
     }
     patch((p) => ({ ...p, text_clips: [...p.text_clips, c] }))
     setSelected({ kind: 'text', id: c.id })
@@ -325,7 +363,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
           id: uid(), kind: 'text', text: s.text.toUpperCase(),
           start: offset + s.start, end: offset + s.end,
           x_pct: 50, y_pct: 75, size: 56, color: '#ffffff', weight: 900, font: DEFAULT_FONT,
-          bg: 'rgba(0,0,0,0.85)', align: 'center',
+          bg: 'rgba(0,0,0,0.85)', align: 'center', effects: EFFECT_PRESETS.tiktok,
           animation: karaoke ? 'karaoke' : 'fade',
           // Karaoke: per-word data for highlight
           words: karaoke && s.words ? s.words.map((w) => ({ ...w, start: offset + w.start, end: offset + w.end })) : null,
@@ -923,7 +961,14 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                         color: c.color, fontWeight: c.weight, fontSize: `${c.size * 0.4}px`,
                         fontFamily: getFontCss(c.font || DEFAULT_FONT),
                         background: c.bg, padding: '4px 10px', borderRadius: 4, textAlign: c.align, whiteSpace: 'pre', cursor: 'pointer',
-                        textShadow: '0 1px 3px rgba(0,0,0,0.8)', outline: on ? '2px solid var(--accent)' : 'none',
+                        // Effects: stroke via -webkit-text-stroke, shadow+glow composed into one text-shadow chain.
+                        // Fallback to legacy subtle shadow when no effects field exists (old clips).
+                        textShadow: c.effects ? composeTextShadow(c.effects) : '0 1px 3px rgba(0,0,0,0.8)',
+                        WebkitTextStroke: c.effects?.stroke?.enabled
+                          ? `${c.effects.stroke.width * 0.4}px ${c.effects.stroke.color}`
+                          : 'initial',
+                        paintOrder: 'stroke fill',
+                        outline: on ? '2px solid var(--accent)' : 'none',
                         opacity, zIndex: 100,
                       }}>
                       {isKaraoke ? c.words.map((w, i) => {
@@ -1528,8 +1573,125 @@ function TextPanel({ clip, duration, onUpdate, onDelete }) {
           <option value="none">None (static)</option><option value="fade">Fade in/out</option><option value="pop">Pop (scale + fade)</option>
         </select>
       </Field>
+
+      <EffectsSection
+        effects={clip.effects || DEFAULT_EFFECTS}
+        onUpdate={(next) => onUpdate({ effects: next })}
+      />
     </div>
   )
+}
+
+// Effects section — Stroke / Shadow / Glow. Each effect: enable toggle + a
+// small grid of inline controls. Picks a preset auto-fills all three with
+// nice defaults; user can still customize after.
+function EffectsSection({ effects, onUpdate }) {
+  const updateEffect = (key, patch) => onUpdate({ ...effects, [key]: { ...effects[key], ...patch } })
+  const applyPreset = (k) => { const p = EFFECT_PRESETS[k]; if (p) onUpdate(p) }
+  const stroke = effects.stroke || DEFAULT_EFFECTS.stroke
+  const shadow = effects.shadow || DEFAULT_EFFECTS.shadow
+  const glow = effects.glow || DEFAULT_EFFECTS.glow
+  return (
+    <div className="border-t border-[var(--border)] pt-2 space-y-2">
+      <div className="text-[10px] uppercase font-semibold text-[var(--muted)]">✨ Effects</div>
+      <Field label="Style preset (quick fill)">
+        <select onChange={(e) => { if (e.target.value) applyPreset(e.target.value); e.target.value = '' }}
+          className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)]">
+          <option value="">— pilih preset —</option>
+          <option value="clean">Clean (no effects)</option>
+          <option value="drop">Drop shadow (soft)</option>
+          <option value="tiktok">TikTok stroke (thick black outline)</option>
+          <option value="neon">Neon glow (cyan)</option>
+          <option value="pop3d">3D pop (offset shadow)</option>
+          <option value="highlight">Highlight glow (yellow)</option>
+        </select>
+      </Field>
+
+      {/* Stroke */}
+      <div className="bg-[var(--surface2)] rounded p-2 space-y-1.5">
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={stroke.enabled} onChange={(e) => updateEffect('stroke', { enabled: e.target.checked })} />
+          <span className="text-[11px] font-semibold">Stroke (outline)</span>
+        </label>
+        {stroke.enabled && (
+          <div className="grid grid-cols-[1fr_60px] gap-2 items-center">
+            <Field label={`Width: ${stroke.width}px`}>
+              <LiveRange min={1} max={12} step={1} value={stroke.width}
+                onDrag={(v) => updateEffect('stroke', { width: Math.round(v) })}
+                onCommit={(v) => updateEffect('stroke', { width: Math.round(v) })} />
+            </Field>
+            <Field label="Color">
+              <input type="color" value={stroke.color} onChange={(e) => updateEffect('stroke', { color: e.target.value })} className="w-full h-7 rounded cursor-pointer" />
+            </Field>
+          </div>
+        )}
+      </div>
+
+      {/* Shadow */}
+      <div className="bg-[var(--surface2)] rounded p-2 space-y-1.5">
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={shadow.enabled} onChange={(e) => updateEffect('shadow', { enabled: e.target.checked })} />
+          <span className="text-[11px] font-semibold">Drop shadow</span>
+        </label>
+        {shadow.enabled && (
+          <div className="space-y-1.5">
+            <div className="grid grid-cols-3 gap-1">
+              <Field label={`X: ${shadow.x}`}>
+                <LiveRange min={-20} max={20} step={1} value={shadow.x}
+                  onDrag={(v) => updateEffect('shadow', { x: Math.round(v) })}
+                  onCommit={(v) => updateEffect('shadow', { x: Math.round(v) })} />
+              </Field>
+              <Field label={`Y: ${shadow.y}`}>
+                <LiveRange min={-20} max={20} step={1} value={shadow.y}
+                  onDrag={(v) => updateEffect('shadow', { y: Math.round(v) })}
+                  onCommit={(v) => updateEffect('shadow', { y: Math.round(v) })} />
+              </Field>
+              <Field label={`Blur: ${shadow.blur}`}>
+                <LiveRange min={0} max={30} step={1} value={shadow.blur}
+                  onDrag={(v) => updateEffect('shadow', { blur: Math.round(v) })}
+                  onCommit={(v) => updateEffect('shadow', { blur: Math.round(v) })} />
+              </Field>
+            </div>
+            <Field label="Color">
+              <input type="color" value={hexFromRgba(shadow.color)}
+                onChange={(e) => updateEffect('shadow', { color: e.target.value })}
+                className="w-full h-7 rounded cursor-pointer" />
+            </Field>
+          </div>
+        )}
+      </div>
+
+      {/* Glow */}
+      <div className="bg-[var(--surface2)] rounded p-2 space-y-1.5">
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={glow.enabled} onChange={(e) => updateEffect('glow', { enabled: e.target.checked })} />
+          <span className="text-[11px] font-semibold">Glow (neon / halo)</span>
+        </label>
+        {glow.enabled && (
+          <div className="grid grid-cols-[1fr_60px] gap-2 items-center">
+            <Field label={`Blur: ${glow.blur}px`}>
+              <LiveRange min={2} max={40} step={1} value={glow.blur}
+                onDrag={(v) => updateEffect('glow', { blur: Math.round(v) })}
+                onCommit={(v) => updateEffect('glow', { blur: Math.round(v) })} />
+            </Field>
+            <Field label="Color">
+              <input type="color" value={glow.color} onChange={(e) => updateEffect('glow', { color: e.target.value })} className="w-full h-7 rounded cursor-pointer" />
+            </Field>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Color picker only accepts #rrggbb. Strip rgba() → hex for the picker UI;
+// alpha is lost but acceptable for the editor controls (user can re-pick).
+function hexFromRgba(s) {
+  if (!s) return '#000000'
+  if (s.startsWith('#')) return s.slice(0, 7)
+  const m = s.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/)
+  if (!m) return '#000000'
+  return '#' + [m[1], m[2], m[3]].map((n) => parseInt(n).toString(16).padStart(2, '0')).join('')
 }
 
 function ImagePanel({ clip, duration, onUpdate, onDelete }) {

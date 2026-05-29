@@ -801,10 +801,45 @@ export async function renderWithCanvas(project, onProgress) {
         else if (c.align === 'right') bgX = x - bgW
         ctx.fillRect(bgX, y - bgH / 2, bgW, bgH)
       }
-      ctx.shadowColor = 'rgba(0,0,0,0.8)'; ctx.shadowBlur = 4; ctx.shadowOffsetY = 1
+      // Effects render order: glow underneath → shadow → stroke → fill.
+      // This matches what the CSS preview does (paint-order: stroke fill +
+      // text-shadow chain with glow before shadow).
+      const eff = c.effects
+      const sizeScale = fontSize / 56 // effects sliders calibrated against 56px base
+      if (eff?.glow?.enabled) {
+        // Stacked glow — 3 passes of strokeText at increasing widths produce
+        // a real halo. shadow alone is too faint at canvas resolution.
+        ctx.save()
+        ctx.shadowColor = eff.glow.color
+        ctx.shadowBlur = eff.glow.blur * sizeScale * 2
+        ctx.fillStyle = c.color
+        for (let i = 0; i < 3; i++) ctx.fillText(c.text, x, y)
+        ctx.restore()
+      }
+      // Drop shadow via canvas shadow* — only one shadow at a time, so we apply
+      // shadow for the fill text below.
+      if (eff?.shadow?.enabled) {
+        ctx.shadowColor = eff.shadow.color
+        ctx.shadowOffsetX = eff.shadow.x * sizeScale
+        ctx.shadowOffsetY = eff.shadow.y * sizeScale
+        ctx.shadowBlur = eff.shadow.blur * sizeScale
+      } else if (!eff) {
+        // Backward compat for clips without effects field — keep the legacy subtle shadow.
+        ctx.shadowColor = 'rgba(0,0,0,0.8)'; ctx.shadowOffsetY = 1; ctx.shadowBlur = 4
+      } else {
+        ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0
+      }
+      // Stroke FIRST (drawn under fill), then fill on top — same as paint-order.
+      if (eff?.stroke?.enabled) {
+        ctx.lineWidth = eff.stroke.width * sizeScale * 2 // canvas stroke is centered, so 2x for visible weight matching CSS
+        ctx.strokeStyle = eff.stroke.color
+        ctx.lineJoin = 'round'
+        ctx.miterLimit = 2
+        ctx.strokeText(c.text, x, y)
+      }
       ctx.fillStyle = c.color
       ctx.fillText(c.text, x, y)
-      ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0
+      ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0
       ctx.globalAlpha = 1
     })
 
