@@ -283,11 +283,15 @@ function buildFilterGraph(project, canvasDims, musicInputIdx, clonedAudioInputSt
   base.forEach((c, i) => inputIdx.set(c.id, i))
   overlays.forEach((c, i) => inputIdx.set(c.id, base.length + i))
 
-  // 1) Process base clips: trim/setpts/filters → scale+pad ke canvas
+  // 1) Process base clips: trim/setpts/filters → scale+pad → normalize fps.
+  // fps=30 filter is critical — source clips from different AI generators
+  // can be 24/25/30/60fps. Concat-ing mixed-fps streams produces visible
+  // micro-stutter at the seams. Forcing 30fps here means every base clip
+  // arrives at concat with consistent timing.
   base.forEach((c) => {
     const idx = inputIdx.get(c.id)
     lines.push(`[${idx}:v]${videoClipFilter(c, `[bv${idx}raw]`)}`)
-    lines.push(`[bv${idx}raw]scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:black[bv${idx}]`)
+    lines.push(`[bv${idx}raw]scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:black,fps=30[bv${idx}]`)
   })
 
   // 2) Concat base via xfade/cut
@@ -329,9 +333,10 @@ function buildFilterGraph(project, canvasDims, musicInputIdx, clonedAudioInputSt
     const overlayW = Math.round((pos.w_pct || 40) / 100 * W)
     const x = Math.round((pos.x_pct / 100) * W)
     const y = Math.round((pos.y_pct / 100) * H)
-    // scale overlay + format rgba + alpha for opacity
+    // scale overlay + format rgba + alpha for opacity + normalize to 30fps
+    // so it composites cleanly over the base track without timing drift.
     const opacity = (pos.opacity ?? 1).toFixed(2)
-    lines.push(`[ov${i}raw]scale=${overlayW}:-1,format=rgba,colorchannelmixer=aa=${opacity}[ov${i}]`)
+    lines.push(`[ov${i}raw]scale=${overlayW}:-1,format=rgba,colorchannelmixer=aa=${opacity},fps=30[ov${i}]`)
     const inT = (c.in_track || 0).toFixed(3)
     const outT = ((c.in_track || 0) + clipDuration(c)).toFixed(3)
     const out = `[bo${i}]`
@@ -552,8 +557,22 @@ export async function renderWithFFmpeg(project, onProgress) {
   args.push(
     '-filter_complex', graph,
     '-map', '[vout]', '-map', '[aout]',
-    '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
-    '-c:a', 'aac', '-b:a', '128k',
+    // Encoder quality. preset=ultrafast was producing visible micro-stutter
+    // because the encoder skips B-frame analysis and motion estimation that
+    // smooth out playback. veryfast is the right balance: still fast (~2x
+    // ultrafast wall-clock), MUCH cleaner output. crf 20 is near-visually-
+    // lossless for the kind of content we render (faces/products/text).
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
+    '-profile:v', 'high', '-level', '4.1',
+    // CRITICAL: force constant frame rate at exactly 30fps. Source clips can
+    // be VFR (variable) from generation services; without -r + -fps_mode cfr
+    // ffmpeg passes timing through unchanged, TikTok's player sees
+    // inconsistent frame timestamps and renders it as stutter. CFR fixes it.
+    '-r', '30', '-fps_mode', 'cfr',
+    // Audio: 192k AAC at standard 48kHz so TikTok/IG don't re-resample.
+    '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
+    // -async 1 keeps audio in sync if filter graph introduces tiny drift.
+    '-async', '1',
     '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
     '-y', 'output.mp4'
   )
