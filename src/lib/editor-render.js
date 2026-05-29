@@ -823,7 +823,9 @@ export async function renderWithCanvas(project, onProgress) {
       ctx.textAlign = c.align === 'left' ? 'left' : c.align === 'right' ? 'right' : 'center'
       ctx.textBaseline = 'middle'
       ctx.font = `${c.weight} ${fontSize}px ${fontCss}`
-      const maxLineWidth = W * 0.85
+      // Box width is user-controlled (default 90% of frame). Wider value =
+      // more wrap budget = more words per line = less whitespace around.
+      const maxLineWidth = W * ((c.max_width_pct ?? 90) / 100)
       const lines = wrapTextLines(ctx, c.text, maxLineWidth)
       const lineHeight = fontSize * 1.25
       const totalH = lines.length * lineHeight

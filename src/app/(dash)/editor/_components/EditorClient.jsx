@@ -297,7 +297,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
       const c = {
         id: uid(), kind: 'text', text: 'Tap to edit',
         start, end, track_idx,
-        x_pct: 50, y_pct: 80, size: 48, scale: 1, color: '#ffffff', weight: 700, font: DEFAULT_FONT,
+        x_pct: 50, y_pct: 80, size: 48, scale: 1, max_width_pct: 90, color: '#ffffff', weight: 700, font: DEFAULT_FONT,
         bg: 'rgba(0,0,0,0.6)', align: 'center', animation: 'fade',
         effects: DEFAULT_EFFECTS,
       }
@@ -401,7 +401,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
           const c = {
             id: uid(), kind: 'text', text: s.text.toUpperCase(),
             start, end, track_idx,
-            x_pct: 50, y_pct: 75, size: 56, scale: 1, color: '#ffffff', weight: 900, font: DEFAULT_FONT,
+            x_pct: 50, y_pct: 75, size: 56, scale: 1, max_width_pct: 90, color: '#ffffff', weight: 900, font: DEFAULT_FONT,
             bg: 'rgba(0,0,0,0.85)', align: 'center', effects: EFFECT_PRESETS.tiktok,
             animation: karaoke ? 'karaoke' : 'fade',
             // Karaoke: per-word data for highlight
@@ -1036,7 +1036,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                         // pre-wrap = preserve user-entered \n AND word-wrap on long text.
                         // maxWidth keeps captions inside the preview frame instead of
                         // bleeding off-screen on long sentences. Canvas render mirrors this.
-                        whiteSpace: 'pre-wrap', maxWidth: '85%', overflowWrap: 'break-word',
+                        whiteSpace: 'pre-wrap', maxWidth: `${c.max_width_pct ?? 90}%`, overflowWrap: 'break-word',
                         cursor: 'pointer',
                         // Effects: stroke via -webkit-text-stroke, shadow+glow composed into one text-shadow chain.
                         // Fallback to legacy subtle shadow when no effects field exists (old clips).
@@ -1641,10 +1641,18 @@ function TextPanel({ clip, duration, onUpdate, onDelete }) {
           User asked for these to be separate so they can pump up the visual
           size without the caption breaking into more rows. */}
       <Field label={`Size: ${clip.size}px`}><LiveRange min={16} max={120} step={1} value={clip.size} onDrag={(v) => onUpdate({ size: Math.round(v) })} onCommit={(v) => onUpdate({ size: Math.round(v) })} /></Field>
-      <Field label={`Scale: ${((clip.scale ?? 1) * 100).toFixed(0)}% (uniform zoom — gede = wrap lebih cepet, biar gak overflow)`}>
+      <Field label={`Zoom: ${((clip.scale ?? 1) * 100).toFixed(0)}% (gede = text gede + wrap lebih cepet)`}>
         <LiveRange min={0.3} max={3} step={0.05} value={clip.scale ?? 1}
           onDrag={(v) => onUpdate({ scale: Math.round(v * 100) / 100 })}
           onCommit={(v) => onUpdate({ scale: Math.round(v * 100) / 100 })} />
+      </Field>
+      {/* Box Width = how much of the frame the wrap budget can use. Default 90.
+          Bump UP if text wraps too tight (using only 60% of frame). Bump DOWN
+          if you want narrower captions. */}
+      <Field label={`Box Width: ${clip.max_width_pct ?? 90}% (kalo wrap terlalu sempit, naikin ini)`}>
+        <LiveRange min={40} max={100} step={1} value={clip.max_width_pct ?? 90}
+          onDrag={(v) => onUpdate({ max_width_pct: Math.round(v) })}
+          onCommit={(v) => onUpdate({ max_width_pct: Math.round(v) })} />
       </Field>
       <Field label="Font">
         <select value={clip.font || DEFAULT_FONT} onChange={(e) => onUpdate({ font: e.target.value })}
