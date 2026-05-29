@@ -18,6 +18,28 @@ import { getFontCss } from './editor-fonts.js'
 let ffmpegInstance = null
 let ffmpegLoading = null
 
+// Word-wrap a string into <= maxWidth lines, honoring explicit \n as hard breaks.
+// ctx.font must be set before calling so measureText returns the right widths.
+function wrapTextLines(ctx, text, maxWidth) {
+  const out = []
+  for (const para of String(text || '').split('\n')) {
+    if (!para) { out.push(''); continue }
+    const words = para.split(/\s+/)
+    let line = ''
+    for (const w of words) {
+      const test = line ? line + ' ' + w : w
+      if (ctx.measureText(test).width > maxWidth && line) {
+        out.push(line)
+        line = w
+      } else {
+        line = test
+      }
+    }
+    if (line) out.push(line)
+  }
+  return out.length ? out : ['']
+}
+
 async function getFFmpeg(onLog) {
   if (ffmpegInstance) return ffmpegInstance
   if (ffmpegLoading) return ffmpegLoading
@@ -790,55 +812,73 @@ export async function renderWithCanvas(project, onProgress) {
       ctx.font = `${c.weight} ${fontSize}px ${fontCss}`
       ctx.textAlign = c.align === 'left' ? 'left' : c.align === 'right' ? 'right' : 'center'
       ctx.textBaseline = 'middle'
-      const metrics = ctx.measureText(c.text)
+      // Multi-line: wrap to 85% of frame width to mirror the CSS preview's
+      // maxWidth: '85%'. Without this, long sentences overshoot the frame
+      // (and explicit \n line-breaks were being ignored entirely).
+      const maxLineWidth = W * 0.85
+      const lines = wrapTextLines(ctx, c.text, maxLineWidth)
+      const lineHeight = fontSize * 1.25
+      const totalH = lines.length * lineHeight
       const padding = fontSize * 0.3
+      // y was the CENTER of a single-line render — adjust so the block of N
+      // lines stays centered on the same anchor.
+      const firstLineY = y - totalH / 2 + lineHeight / 2
+
+      // Background pill — spans ALL lines, width = widest line.
       if (c.bg && c.bg !== 'transparent') {
-        ctx.fillStyle = c.bg
-        const bgW = metrics.width + padding * 2
-        const bgH = fontSize * 1.4
+        const maxLineW = Math.max(...lines.map((l) => ctx.measureText(l).width))
+        const bgW = maxLineW + padding * 2
+        const bgH = totalH + padding * 0.6
         let bgX = x
         if (c.align === 'center') bgX = x - bgW / 2
         else if (c.align === 'right') bgX = x - bgW
-        ctx.fillRect(bgX, y - bgH / 2, bgW, bgH)
+        ctx.fillStyle = c.bg
+        ctx.fillRect(bgX, firstLineY - lineHeight / 2 - padding * 0.3, bgW, bgH)
       }
-      // Effects render order: glow underneath → shadow → stroke → fill.
-      // This matches what the CSS preview does (paint-order: stroke fill +
-      // text-shadow chain with glow before shadow).
+
+      // Effects render order per LINE: glow underneath → shadow → stroke → fill.
+      // Matches the CSS preview (paint-order: stroke fill + text-shadow chain
+      // with glow blur before shadow).
       const eff = c.effects
       const sizeScale = fontSize / 56 // effects sliders calibrated against 56px base
-      if (eff?.glow?.enabled) {
-        // Stacked glow — 3 passes of strokeText at increasing widths produce
-        // a real halo. shadow alone is too faint at canvas resolution.
-        ctx.save()
-        ctx.shadowColor = eff.glow.color
-        ctx.shadowBlur = eff.glow.blur * sizeScale * 2
+
+      for (let li = 0; li < lines.length; li++) {
+        const lineY = firstLineY + li * lineHeight
+        const lineText = lines[li]
+        if (!lineText) continue
+
+        if (eff?.glow?.enabled) {
+          ctx.save()
+          ctx.shadowColor = eff.glow.color
+          ctx.shadowBlur = eff.glow.blur * sizeScale * 2
+          ctx.fillStyle = c.color
+          // 3 stacked passes = visible halo at canvas resolution.
+          for (let i = 0; i < 3; i++) ctx.fillText(lineText, x, lineY)
+          ctx.restore()
+        }
+        // Drop shadow via canvas shadow* — applied to the fill below.
+        if (eff?.shadow?.enabled) {
+          ctx.shadowColor = eff.shadow.color
+          ctx.shadowOffsetX = eff.shadow.x * sizeScale
+          ctx.shadowOffsetY = eff.shadow.y * sizeScale
+          ctx.shadowBlur = eff.shadow.blur * sizeScale
+        } else if (!eff) {
+          // Backward compat for clips without effects field — keep the legacy subtle shadow.
+          ctx.shadowColor = 'rgba(0,0,0,0.8)'; ctx.shadowOffsetY = 1; ctx.shadowBlur = 4; ctx.shadowOffsetX = 0
+        } else {
+          ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0
+        }
+        // Stroke FIRST (drawn under fill), then fill — paint-order: stroke fill.
+        if (eff?.stroke?.enabled) {
+          ctx.lineWidth = eff.stroke.width * sizeScale * 2 // canvas stroke is centered, 2x for visual parity with CSS
+          ctx.strokeStyle = eff.stroke.color
+          ctx.lineJoin = 'round'
+          ctx.miterLimit = 2
+          ctx.strokeText(lineText, x, lineY)
+        }
         ctx.fillStyle = c.color
-        for (let i = 0; i < 3; i++) ctx.fillText(c.text, x, y)
-        ctx.restore()
+        ctx.fillText(lineText, x, lineY)
       }
-      // Drop shadow via canvas shadow* — only one shadow at a time, so we apply
-      // shadow for the fill text below.
-      if (eff?.shadow?.enabled) {
-        ctx.shadowColor = eff.shadow.color
-        ctx.shadowOffsetX = eff.shadow.x * sizeScale
-        ctx.shadowOffsetY = eff.shadow.y * sizeScale
-        ctx.shadowBlur = eff.shadow.blur * sizeScale
-      } else if (!eff) {
-        // Backward compat for clips without effects field — keep the legacy subtle shadow.
-        ctx.shadowColor = 'rgba(0,0,0,0.8)'; ctx.shadowOffsetY = 1; ctx.shadowBlur = 4
-      } else {
-        ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0
-      }
-      // Stroke FIRST (drawn under fill), then fill on top — same as paint-order.
-      if (eff?.stroke?.enabled) {
-        ctx.lineWidth = eff.stroke.width * sizeScale * 2 // canvas stroke is centered, so 2x for visible weight matching CSS
-        ctx.strokeStyle = eff.stroke.color
-        ctx.lineJoin = 'round'
-        ctx.miterLimit = 2
-        ctx.strokeText(c.text, x, y)
-      }
-      ctx.fillStyle = c.color
-      ctx.fillText(c.text, x, y)
       ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0
       ctx.globalAlpha = 1
     })

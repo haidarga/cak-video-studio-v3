@@ -1000,7 +1000,12 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                         transform: `translate(-50%, -50%) scale(${scale})`,
                         color: c.color, fontWeight: c.weight, fontSize: `${c.size * 0.4}px`,
                         fontFamily: getFontCss(c.font || DEFAULT_FONT),
-                        background: c.bg, padding: '4px 10px', borderRadius: 4, textAlign: c.align, whiteSpace: 'pre', cursor: 'pointer',
+                        background: c.bg, padding: '4px 10px', borderRadius: 4, textAlign: c.align,
+                        // pre-wrap = preserve user-entered \n AND word-wrap on long text.
+                        // maxWidth keeps captions inside the preview frame instead of
+                        // bleeding off-screen on long sentences. Canvas render mirrors this.
+                        whiteSpace: 'pre-wrap', maxWidth: '85%', overflowWrap: 'break-word',
+                        cursor: 'pointer',
                         // Effects: stroke via -webkit-text-stroke, shadow+glow composed into one text-shadow chain.
                         // Fallback to legacy subtle shadow when no effects field exists (old clips).
                         textShadow: c.effects ? composeTextShadow(c.effects) : '0 1px 3px rgba(0,0,0,0.8)',
