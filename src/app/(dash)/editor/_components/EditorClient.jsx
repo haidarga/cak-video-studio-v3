@@ -556,8 +556,15 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
   useEffect(() => {
     const v = baseVideoRef.current
     if (!v || !baseInfo) return
-    const want = proxify(baseInfo.clip.src_url)
-    if (v.src !== want) { v.src = want; v.load() }
+    // v.src reads back the BROWSER-RESOLVED absolute URL; we compare against
+    // the raw upstream src_url via a data marker to avoid a relative-vs-
+    // absolute mismatch that would re-set v.src every render and flicker the
+    // preview on/off (the original bug this comment is here to prevent).
+    if (v.dataset.upstreamSrc !== baseInfo.clip.src_url) {
+      v.src = proxify(baseInfo.clip.src_url)
+      v.dataset.upstreamSrc = baseInfo.clip.src_url
+      v.load()
+    }
     if (Math.abs(v.currentTime - baseInfo.srcTime) > 0.3) v.currentTime = baseInfo.srcTime
     v.playbackRate = baseInfo.clip.speed || 1
     const usesCloned = baseInfo.clip.cloned_audio_url && baseInfo.clip.use_cloned_voice !== false
@@ -664,8 +671,11 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
       const bi = activeBaseClipAt(t, project.video_clips)
       if (bi && baseVideoRef.current) {
         const v = baseVideoRef.current
-        const wantSrc = proxify(bi.clip.src_url)
-        if (v.src !== wantSrc) { v.src = wantSrc; v.load() }
+        if (v.dataset.upstreamSrc !== bi.clip.src_url) {
+          v.src = proxify(bi.clip.src_url)
+          v.dataset.upstreamSrc = bi.clip.src_url
+          v.load()
+        }
         if (Math.abs(v.currentTime - bi.srcTime) > 0.5) v.currentTime = bi.srcTime
         if (v.paused) v.play().catch(() => {})
         // Cloned voice for base clip
