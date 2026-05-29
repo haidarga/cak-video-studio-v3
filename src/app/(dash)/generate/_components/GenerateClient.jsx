@@ -361,6 +361,25 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
       return { shots: next }
     })
   }
+  // Switch active image variant. shot.image.url is the "current" mirror so
+  // Send to QC + Gen Video read the picked one without rewriting their code.
+  function pickImageVariant(idx, variantIdx) {
+    patchShot(idx, (prev) => {
+      const v = prev.image_variants?.[variantIdx]
+      if (!v) return {}
+      return { image: { ...prev.image, status: 'done', url: v.url }, image_active_idx: variantIdx }
+    })
+  }
+  function pickVideoVariant(idx, variantIdx) {
+    patchShot(idx, (prev) => {
+      const v = prev.video_variants?.[variantIdx]
+      if (!v) return {}
+      return {
+        video: { ...prev.video, status: 'done', url: v.url, result_id: v.result_id, cloned_audio_url: v.cloned_audio_url },
+        video_active_idx: variantIdx,
+      }
+    })
+  }
   function patchShotRaw(idx, key, value) {
     onPatch((s) => {
       const next = [...s.shots]
@@ -524,7 +543,17 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
       const imgResult = await falRun(globalConfig.imgModel, imgInput, { onProgress: (p) => patchShot(idx, { image: { status: p } }), workspaceId })
       const imageUrl = imgResult.images?.[0]?.url
       if (!imageUrl) throw new Error('no image URL returned')
-      patchShot(idx, { image: { status: 'done', url: imageUrl } })
+      // Push to variants instead of overwriting — user wants to A/B-compare
+      // multiple re-gens and pick the best one. shot.image.url stays as the
+      // active mirror so downstream code (Send to QC, Gen Video) keeps working.
+      patchShot(idx, (prev) => {
+        const variants = [...(prev.image_variants || []), { url: imageUrl, at: Date.now() }]
+        return {
+          image: { status: 'done', url: imageUrl },
+          image_variants: variants,
+          image_active_idx: variants.length - 1,
+        }
+      })
     } catch (e) {
       patchShot(idx, { image: { status: 'error', error: String(e?.message || e) } })
     }
@@ -595,7 +624,16 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
         created_by: userId,
       }).select('id').single()
       if (error) throw error
-      patchShot(idx, { video: { status: 'done', url: videoUrl, result_id: row.id } })
+      // Push to variants — every re-gen appends, user can switch between them
+      // via the picker UI. video.url stays mirror of the active variant.
+      patchShot(idx, (prev) => {
+        const variants = [...(prev.video_variants || []), { url: videoUrl, result_id: row.id, at: Date.now() }]
+        return {
+          video: { status: 'done', url: videoUrl, result_id: row.id },
+          video_variants: variants,
+          video_active_idx: variants.length - 1,
+        }
+      })
 
       // Voice clone post-gen — if persona has a cloned voice, swap the AI native audio
       // for the persona's voice via ElevenLabs Speech-to-Speech. Lip-sync preserved
@@ -610,7 +648,15 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
           })
           const j = await r.json()
           if (j.ok) {
-            patchShot(idx, { video: { status: 'done', url: videoUrl, result_id: row.id, cloned_audio_url: j.audio_url } })
+            patchShot(idx, (prev) => {
+              const variants = [...(prev.video_variants || [])]
+              const lastIdx = variants.length - 1
+              if (lastIdx >= 0) variants[lastIdx] = { ...variants[lastIdx], cloned_audio_url: j.audio_url }
+              return {
+                video: { status: 'done', url: videoUrl, result_id: row.id, cloned_audio_url: j.audio_url },
+                video_variants: variants,
+              }
+            })
           } else {
             console.warn('voice convert skipped:', j.error)
             patchShot(idx, { video: { status: 'done', url: videoUrl, result_id: row.id } })
@@ -795,6 +841,8 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
                     onChangePanel={(pi, key, value) => patchPanel(i, pi, key, value)}
                     onGenImage={() => genImageForShot(i)}
                     onGenVideo={() => genVideoForShot(i)}
+                    onPickImage={(vi) => pickImageVariant(i, vi)}
+                    onPickVideo={(vi) => pickVideoVariant(i, vi)}
                     onApprove={(v) => patchShot(i, { approved: v })}
                     onRename={(label) => { patchShot(i, { label }); renameResult(shot.video?.result_id, label) }}
                     onSendQC={() => sendToQC(i)}
@@ -803,6 +851,8 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
                     onChangeRaw={(key, value) => patchShotRaw(i, key, value)}
                     onGenImage={() => genImageForShot(i)}
                     onGenVideo={() => genVideoForShot(i)}
+                    onPickImage={(vi) => pickImageVariant(i, vi)}
+                    onPickVideo={(vi) => pickVideoVariant(i, vi)}
                     onApprove={(v) => patchShot(i, { approved: v })}
                     onRename={(label) => { patchShot(i, { label }); renameResult(shot.video?.result_id, label) }}
                     onSendQC={() => sendToQC(i)}
@@ -815,7 +865,7 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
   )
 }
 
-function ShotEditor({ shot, idx, onChangeRaw, onGenImage, onGenVideo, onApprove, onRename, onSendQC, onDelete }) {
+function ShotEditor({ shot, idx, onChangeRaw, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onDelete }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(shot.label || '')
   const imgStatus = shot.image?.status || 'idle'
@@ -849,6 +899,13 @@ function ShotEditor({ shot, idx, onChangeRaw, onGenImage, onGenVideo, onApprove,
               <div className="absolute inset-x-1 bottom-1 text-[9px] bg-red-700 text-white px-1.5 py-0.5 rounded">⚠ {shot.video.error?.slice(0, 50)}</div>
             )}
           </div>
+
+          {/* Variants strip — video preferred over image when both exist. */}
+          {shot.video?.url && shot.video_variants?.length > 1 ? (
+            <VariantStrip variants={shot.video_variants} activeIdx={shot.video_active_idx ?? shot.video_variants.length - 1} onPick={onPickVideo} kind="video" />
+          ) : (
+            <VariantStrip variants={shot.image_variants} activeIdx={shot.image_active_idx ?? (shot.image_variants?.length || 1) - 1} onPick={onPickImage} kind="image" />
+          )}
 
           <div className="mt-2 flex gap-1">
             <button onClick={onGenImage} disabled={imgStatus === 'generating' || vidStatus === 'generating'}
@@ -931,7 +988,33 @@ function ShotEditor({ shot, idx, onChangeRaw, onGenImage, onGenVideo, onApprove,
   )
 }
 
-function StoryboardEditor({ shot, idx, ar, onChangeRaw, onChangePanel, onGenImage, onGenVideo, onApprove, onRename, onSendQC, onDelete }) {
+// Small horizontal strip of variant thumbnails — visible only when there are
+// 2+ variants. Click swaps which one is "active". Highlighted ring on current.
+// kind = 'image' | 'video' so we can render <img> vs <video poster>.
+function VariantStrip({ variants, activeIdx, onPick, kind }) {
+  if (!variants || variants.length < 2) return null
+  return (
+    <div className="mt-2 flex gap-1 overflow-x-auto pb-1" title={`${variants.length} variants — klik buat pilih`}>
+      {variants.map((v, i) => {
+        const isActive = i === activeIdx
+        return (
+          <button key={i} onClick={() => onPick(i)}
+            className={`relative flex-shrink-0 w-14 h-14 rounded overflow-hidden border-2 transition-all ${isActive ? 'border-[var(--accent)] ring-1 ring-[var(--accent)]' : 'border-[var(--border)] opacity-60 hover:opacity-100'}`}
+            title={`Variant ${i + 1}${isActive ? ' (active)' : ''}`}>
+            {kind === 'video' ? (
+              <video src={v.url} muted preload="metadata" className="w-full h-full object-cover pointer-events-none" />
+            ) : (
+              <img src={v.url} alt="" loading="lazy" className="w-full h-full object-cover" />
+            )}
+            <span className="absolute top-0 left-0 text-[8px] bg-black/70 text-white px-1 rounded-br font-bold">{i + 1}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function StoryboardEditor({ shot, idx, ar, onChangeRaw, onChangePanel, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onDelete }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(shot.label || '')
   const [showPanels, setShowPanels] = useState(true)
@@ -990,6 +1073,14 @@ function StoryboardEditor({ shot, idx, ar, onChangeRaw, onChangePanel, onGenImag
               <div className="absolute inset-x-1 bottom-1 text-[10px] bg-red-700 text-white px-1.5 py-0.5 rounded">⚠ {shot.video.error?.slice(0, 60)}</div>
             )}
           </div>
+
+          {/* Variants strips — show whichever applies (video takes priority over image
+              since once video exists, that's what's "live" in the preview slot). */}
+          {shot.video?.url && shot.video_variants?.length > 1 ? (
+            <VariantStrip variants={shot.video_variants} activeIdx={shot.video_active_idx ?? shot.video_variants.length - 1} onPick={onPickVideo} kind="video" />
+          ) : (
+            <VariantStrip variants={shot.image_variants} activeIdx={shot.image_active_idx ?? (shot.image_variants?.length || 1) - 1} onPick={onPickImage} kind="image" />
+          )}
 
           <div className="mt-2 flex gap-1">
             <button onClick={onGenImage} disabled={imgStatus === 'generating' || vidStatus === 'generating'}
