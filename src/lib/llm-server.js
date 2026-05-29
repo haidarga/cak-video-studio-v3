@@ -15,11 +15,14 @@ const ATTEMPTS_PER_MODEL = 2
 const BACKOFF_MS = [1000, 3000]
 
 // Default config when workspace has no llm_config saved yet (fresh install).
+// Gemini 2.0 Flash removed — Google blocks new users from that model;
+// existing workspaces with stale config saying 2.0 will fall through the
+// fallback chain to 2.5 Pro / 2.5 Flash Lite.
 const DEFAULT_CONFIG = {
   default: { provider: 'google', model: 'gemini-2.5-flash' },
   fallback: [
-    { provider: 'google', model: 'gemini-2.0-flash' },
     { provider: 'google', model: 'gemini-2.5-pro' },
+    { provider: 'google', model: 'gemini-2.5-flash-lite' },
     { provider: 'google', model: 'gemini-1.5-flash' },
   ],
 }
@@ -135,6 +138,28 @@ async function tryLevel(level, keys, contents, generationConfig) {
   throw lastErr
 }
 
+// Map of retired / removed model IDs → modern replacement. Applied at load
+// time so workspaces with stale llm_config (saved when those models were
+// alive) keep working without a DB migration. Google's "no longer available
+// to new users" 404 is the canonical case — they retire fast.
+const RETIRED_MODELS = {
+  'gemini-2.0-flash': 'gemini-2.5-flash',
+  'gemini-2.0-flash-exp': 'gemini-2.5-flash',
+  'gemini-1.5-pro': 'gemini-2.5-pro',
+}
+function rewriteModel(entry) {
+  if (!entry?.model) return entry
+  const replacement = RETIRED_MODELS[entry.model]
+  return replacement ? { ...entry, model: replacement } : entry
+}
+function sanitizeConfig(cfg) {
+  if (!cfg) return cfg
+  return {
+    default: rewriteModel(cfg.default),
+    fallback: (cfg.fallback || []).map(rewriteModel),
+  }
+}
+
 // Fetch workspace's LLM config + provider keys. Falls back to DEFAULT_CONFIG
 // when workspace has nothing saved. Uses admin client (server-side trust).
 async function loadConfig(workspaceId) {
@@ -152,7 +177,7 @@ async function loadConfig(workspaceId) {
       if (data?.openai_key) keys.openai = data.openai_key
     } catch { /* fall through to defaults */ }
   }
-  return { config, keys }
+  return { config: sanitizeConfig(config), keys }
 }
 
 // Main entry. Cascades default → fallback[0] → ... until one succeeds.
@@ -212,9 +237,8 @@ export const PROVIDER_CATALOG = {
     models: [
       { id: 'gemini-2.5-flash',      label: 'Gemini 2.5 Flash',      cost: '$0.075/1M in · cheap, fast' },
       { id: 'gemini-2.5-pro',        label: 'Gemini 2.5 Pro',        cost: '$1.25/1M in · smartest, low traffic' },
-      { id: 'gemini-2.0-flash',      label: 'Gemini 2.0 Flash',      cost: '$0.075/1M in · older but stable' },
-      { id: 'gemini-1.5-flash',      label: 'Gemini 1.5 Flash',      cost: '$0.075/1M in · legacy, very stable' },
       { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite', cost: '$0.04/1M in · cheapest' },
+      { id: 'gemini-1.5-flash',      label: 'Gemini 1.5 Flash',      cost: '$0.075/1M in · legacy, very stable' },
     ],
   },
   openai: {
