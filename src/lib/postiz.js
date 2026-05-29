@@ -163,15 +163,20 @@ async function uploadToPostiz(creds, { buffer, name, contentType }) {
 }
 
 // ── Platform-specific default settings ──────────────────────────────
-// opts.tiktokAutoAddMusic — workspace-level toggle. When true we tell
-// TikTok via Postiz to auto-attach a trending sound on landing (boosts
-// discoverability via TikTok's sound algorithm). User picks it once in
-// /settings; every TikTok schedule inherits the choice.
+// Schema from Postiz docs (docs.postiz.com/providers/tiktok). The MOST
+// important field is `__type` — without it Postiz can't dispatch the
+// settings to the platform-specific handler and silently falls back to
+// defaults (which is why our autoAddMusic toggle wasn't taking effect
+// before this fix).
+// opts.tiktokAutoAddMusic — workspace-level toggle. When true, TikTok
+// auto-attaches a trending sound on landing (boosts sound-algo
+// discoverability). User picks it once in /settings.
 function defaultSettings(platform, opts = {}) {
   const p = (platform || '').toLowerCase()
   if (p.includes('tiktok')) {
     return {
-      post_type: 'post',
+      __type: 'tiktok',
+      title: '',
       privacy_level: 'PUBLIC_TO_EVERYONE',
       duet: false,
       stitch: false,
@@ -179,18 +184,18 @@ function defaultSettings(platform, opts = {}) {
       autoAddMusic: opts.tiktokAutoAddMusic ? 'yes' : 'no',
       brand_content_toggle: false,
       brand_organic_toggle: false,
+      video_made_with_ai: false,
       content_posting_method: 'DIRECT_POST',
-      title: '',
     }
   }
   if (p.includes('instagram')) {
-    return { post_type: 'post', collaborators: [] }
+    return { __type: 'instagram', post_type: 'post', collaborators: [] }
   }
   if (p.includes('youtube')) {
-    return { post_type: 'post', title: '', type: 'public' }
+    return { __type: 'youtube', title: '', type: 'public' }
   }
   if (p.includes('facebook') || p.includes('fb')) {
-    return { post_type: 'post' }
+    return { __type: 'facebook' }
   }
   return { post_type: 'post' }
 }
