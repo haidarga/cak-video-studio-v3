@@ -14,19 +14,21 @@ const nextConfig = {
   // Skip ESLint during prod builds — keep lint as a separate `npm run lint`
   // step so Vercel deploys aren't blocked by stylistic warnings.
   eslint: { ignoreDuringBuilds: true },
-  async headers() {
-    return [
-      {
-        // ffmpeg.wasm needs SharedArrayBuffer which requires cross-origin
-        // isolation via these headers. Only on /editor route to avoid
-        // breaking third-party embeds elsewhere.
-        source: '/editor',
-        headers: [
-          { key: 'Cross-Origin-Embedder-Policy', value: 'require-corp' },
-          { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
-        ],
-      },
-    ]
-  },
+  // COEP/COOP removed.
+  //
+  // Previously /editor set COEP=require-corp so ffmpeg.wasm could use
+  // SharedArrayBuffer for multi-threaded encoding. Side effect: every
+  // cross-origin resource (fal.media videos, Supabase ref images) had to
+  // come back with a Cross-Origin-Resource-Policy header — they don't —
+  // so the editor went dark and exports failed. Worse: browsers retain
+  // COEP state across SPA navigations, so /generate's ref thumbnails
+  // started failing too once a user visited /editor first.
+  //
+  // Trade-off: ffmpeg.wasm now runs single-threaded (auto-fallback in
+  // @ffmpeg/core when SharedArrayBuffer is unavailable). Slower MP4
+  // encoding but still functional. Fast Export (canvas+MediaRecorder)
+  // is the default anyway and doesn't care about SharedArrayBuffer at
+  // all. proxify() in editor-render stays as a defensive net for any
+  // host that ever stops sending Access-Control-Allow-Origin.
 }
 export default nextConfig

@@ -822,14 +822,16 @@ export async function renderWithCanvas(project, onProgress) {
       const fontCss = c.font ? getFontCss(c.font) : 'system-ui, -apple-system, sans-serif'
       ctx.textAlign = c.align === 'left' ? 'left' : c.align === 'right' ? 'right' : 'center'
       ctx.textBaseline = 'middle'
-      // STEP 1 — wrap at BASE font size with the 85% max width. Size = wrap
-      // budget. Changing scale doesn't change which words land on which line.
-      ctx.font = `${c.weight} ${baseFontSize}px ${fontCss}`
+      // Wrap at VISUAL font size so the rendered text always fits inside
+      // the 85% frame budget — scale up = fewer words per line. The earlier
+      // attempt to wrap at base size leaked overflow into the export (a 1.3x
+      // scaled line measured at 85% base width visually became 1.10x of frame
+      // width and got clipped at the edges). Trade-off accepted: scale now
+      // affects wrap at canvas render. CSS preview matches because its
+      // maxWidth: 85% is in pre-transform coords, same effective behavior.
+      ctx.font = `${c.weight} ${visualFontSize}px ${fontCss}`
       const maxLineWidth = W * 0.85
       const lines = wrapTextLines(ctx, c.text, maxLineWidth)
-      // STEP 2 — switch to visual font size for measurement + rendering. Line
-      // height, bg pill, effects all scale visually.
-      ctx.font = `${c.weight} ${visualFontSize}px ${fontCss}`
       const lineHeight = visualFontSize * 1.25
       const totalH = lines.length * lineHeight
       const padding = visualFontSize * 0.3
