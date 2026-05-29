@@ -792,7 +792,7 @@ export async function renderWithCanvas(project, onProgress) {
       if (elapsed < c.start || elapsed > c.end) return
       const x = (c.x_pct / 100) * W
       const y = (c.y_pct / 100) * H
-      let alpha = 1, scale = 1
+      let alpha = 1, popScale = 1
       const animDur = 0.25
       if (c.animation === 'fade') {
         const sinceStart = elapsed - c.start
@@ -803,33 +803,39 @@ export async function renderWithCanvas(project, onProgress) {
         const sinceStart = elapsed - c.start
         if (sinceStart < animDur) {
           const p = sinceStart / animDur
-          scale = 0.5 + p * 0.5 + Math.sin(p * Math.PI) * 0.15
+          popScale = 0.5 + p * 0.5 + Math.sin(p * Math.PI) * 0.15
           alpha = p
         }
       }
-      const fontSize = c.size * (W / 720) * scale
+      // User's "scale" is a visual zoom on top of "size". Size drives WRAP
+      // calc (so wrap pattern stays put when user changes scale). Scale only
+      // affects the rendered glyphs + bg pill (visual zoom, matches CSS
+      // preview's transform: scale()).
+      const userScale = c.scale ?? 1
+      const baseFontSize = c.size * (W / 720) * popScale
+      const visualFontSize = baseFontSize * userScale
       ctx.globalAlpha = alpha
       // Font family resolved from FONT_OPTIONS (shared with EditorClient). The
       // Google Font <link> is injected on the editor page so loaded families
       // are available to canvas. If render runs from a page that didn't load
       // them, system-ui takes over via the CSS fallback stack — no crash.
       const fontCss = c.font ? getFontCss(c.font) : 'system-ui, -apple-system, sans-serif'
-      ctx.font = `${c.weight} ${fontSize}px ${fontCss}`
       ctx.textAlign = c.align === 'left' ? 'left' : c.align === 'right' ? 'right' : 'center'
       ctx.textBaseline = 'middle'
-      // Multi-line: wrap to 85% of frame width to mirror the CSS preview's
-      // maxWidth: '85%'. Without this, long sentences overshoot the frame
-      // (and explicit \n line-breaks were being ignored entirely).
+      // STEP 1 — wrap at BASE font size with the 85% max width. Size = wrap
+      // budget. Changing scale doesn't change which words land on which line.
+      ctx.font = `${c.weight} ${baseFontSize}px ${fontCss}`
       const maxLineWidth = W * 0.85
       const lines = wrapTextLines(ctx, c.text, maxLineWidth)
-      const lineHeight = fontSize * 1.25
+      // STEP 2 — switch to visual font size for measurement + rendering. Line
+      // height, bg pill, effects all scale visually.
+      ctx.font = `${c.weight} ${visualFontSize}px ${fontCss}`
+      const lineHeight = visualFontSize * 1.25
       const totalH = lines.length * lineHeight
-      const padding = fontSize * 0.3
-      // y was the CENTER of a single-line render — adjust so the block of N
-      // lines stays centered on the same anchor.
+      const padding = visualFontSize * 0.3
       const firstLineY = y - totalH / 2 + lineHeight / 2
 
-      // Background pill — spans ALL lines, width = widest line.
+      // Background pill — measured at visual font size so it hugs the rendered text.
       if (c.bg && c.bg !== 'transparent') {
         const maxLineW = Math.max(...lines.map((l) => ctx.measureText(l).width))
         const bgW = maxLineW + padding * 2
@@ -845,7 +851,7 @@ export async function renderWithCanvas(project, onProgress) {
       // Matches the CSS preview (paint-order: stroke fill + text-shadow chain
       // with glow blur before shadow).
       const eff = c.effects
-      const sizeScale = fontSize / 56 // effects sliders calibrated against 56px base
+      const sizeScale = visualFontSize / 56 // effects sliders calibrated against 56px base
 
       for (let li = 0; li < lines.length; li++) {
         const lineY = firstLineY + li * lineHeight

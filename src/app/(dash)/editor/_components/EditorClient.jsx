@@ -297,7 +297,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
       const c = {
         id: uid(), kind: 'text', text: 'Tap to edit',
         start, end, track_idx,
-        x_pct: 50, y_pct: 80, size: 48, color: '#ffffff', weight: 700, font: DEFAULT_FONT,
+        x_pct: 50, y_pct: 80, size: 48, scale: 1, color: '#ffffff', weight: 700, font: DEFAULT_FONT,
         bg: 'rgba(0,0,0,0.6)', align: 'center', animation: 'fade',
         effects: DEFAULT_EFFECTS,
       }
@@ -401,7 +401,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
           const c = {
             id: uid(), kind: 'text', text: s.text.toUpperCase(),
             start, end, track_idx,
-            x_pct: 50, y_pct: 75, size: 56, color: '#ffffff', weight: 900, font: DEFAULT_FONT,
+            x_pct: 50, y_pct: 75, size: 56, scale: 1, color: '#ffffff', weight: 900, font: DEFAULT_FONT,
             bg: 'rgba(0,0,0,0.85)', align: 'center', effects: EFFECT_PRESETS.tiktok,
             animation: karaoke ? 'karaoke' : 'fade',
             // Karaoke: per-word data for highlight
@@ -980,7 +980,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                   if (currentTime < c.start || currentTime > c.end) return null
                   const on = selected?.kind === 'text' && selected.id === c.id
                   const animDur = 0.25
-                  let opacity = 1, scale = 1
+                  let opacity = 1, popScale = 1
                   if (c.animation === 'fade') {
                     const sinceStart = currentTime - c.start
                     const tillEnd = c.end - currentTime
@@ -990,17 +990,23 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                     const sinceStart = currentTime - c.start
                     if (sinceStart < animDur) {
                       const p = sinceStart / animDur
-                      scale = 0.5 + p * 0.5 + Math.sin(p * Math.PI) * 0.15
+                      popScale = 0.5 + p * 0.5 + Math.sin(p * Math.PI) * 0.15
                       opacity = p
                     }
                   }
                   // Karaoke: highlight current word(s) in different color
                   const isKaraoke = c.animation === 'karaoke' && Array.isArray(c.words) && c.words.length > 0
+                  // c.scale is a VISUAL zoom multiplier on top of c.size. Size drives
+                  // wrap/layout; scale is pure CSS transform so the wrapping pattern
+                  // stays the same when user zooms. Combined with the pop animation's
+                  // popScale into one transform.
+                  const userScale = c.scale ?? 1
+                  const finalScale = popScale * userScale
                   return (
                     <div key={c.id} onClick={(e) => { e.stopPropagation(); setSelected({ kind: 'text', id: c.id }) }}
                       style={{
                         position: 'absolute', left: `${c.x_pct}%`, top: `${c.y_pct}%`,
-                        transform: `translate(-50%, -50%) scale(${scale})`,
+                        transform: `translate(-50%, -50%) scale(${finalScale})`,
                         color: c.color, fontWeight: c.weight, fontSize: `${c.size * 0.4}px`,
                         fontFamily: getFontCss(c.font || DEFAULT_FONT),
                         background: c.bg, padding: '4px 10px', borderRadius: 4, textAlign: c.align,
@@ -1607,7 +1613,16 @@ function TextPanel({ clip, duration, onUpdate, onDelete }) {
         <Field label={`X: ${clip.x_pct}%`}><LiveRange min={0} max={100} step={1} value={clip.x_pct} onDrag={(v) => onUpdate({ x_pct: Math.round(v) })} onCommit={(v) => onUpdate({ x_pct: Math.round(v) })} /></Field>
         <Field label={`Y: ${clip.y_pct}%`}><LiveRange min={0} max={100} step={1} value={clip.y_pct} onDrag={(v) => onUpdate({ y_pct: Math.round(v) })} onCommit={(v) => onUpdate({ y_pct: Math.round(v) })} /></Field>
       </div>
+      {/* Size = the FONT SIZE driving wrap behavior (bigger = wraps sooner).
+          Scale = pure VISUAL zoom on top — doesn't change wrap or line count.
+          User asked for these to be separate so they can pump up the visual
+          size without the caption breaking into more rows. */}
       <Field label={`Size: ${clip.size}px`}><LiveRange min={16} max={120} step={1} value={clip.size} onDrag={(v) => onUpdate({ size: Math.round(v) })} onCommit={(v) => onUpdate({ size: Math.round(v) })} /></Field>
+      <Field label={`Scale: ${((clip.scale ?? 1) * 100).toFixed(0)}% (visual zoom — gak ngubah wrap)`}>
+        <LiveRange min={0.3} max={3} step={0.05} value={clip.scale ?? 1}
+          onDrag={(v) => onUpdate({ scale: Math.round(v * 100) / 100 })}
+          onCommit={(v) => onUpdate({ scale: Math.round(v * 100) / 100 })} />
+      </Field>
       <Field label="Font">
         <select value={clip.font || DEFAULT_FONT} onChange={(e) => onUpdate({ font: e.target.value })}
           style={{ fontFamily: getFontCss(clip.font || DEFAULT_FONT) }}
