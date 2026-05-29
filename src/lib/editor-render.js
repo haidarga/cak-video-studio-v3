@@ -702,8 +702,19 @@ export async function renderWithCanvas(project, onProgress) {
   const bgmDuck = firstAudio?.bgm_duck ?? 0.25
   const bgmBase = firstAudio?.volume ?? 0.3
 
-  const mime = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
-    .find((m) => MediaRecorder.isTypeSupported(m)) || 'video/webm'
+  // Prefer MP4/H264 natively if the browser supports it (Chrome 122+ does).
+  // This way Fast Export produces MP4 with NO ffmpeg.wasm download — same
+  // real-time speed as WebM mode but the file actually works with Postiz
+  // and other services that don't accept WebM.
+  const candidates = [
+    'video/mp4;codecs=avc1.42E01E,mp4a.40.2', // H264 baseline + AAC — widest mp4 compat
+    'video/mp4;codecs=h264,aac',
+    'video/mp4',
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm',
+  ]
+  const mime = candidates.find((m) => MediaRecorder.isTypeSupported(m)) || 'video/webm'
   const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 5_000_000 })
   const chunks = []
   recorder.ondataavailable = (e) => { if (e.data?.size) chunks.push(e.data) }
@@ -968,17 +979,28 @@ export async function renderWithCanvas(project, onProgress) {
   return new Blob(chunks, { type: mime })
 }
 
-// mode: 'fast' (canvas+MediaRecorder, WebM, ~real-time) or 'mp4' (ffmpeg.wasm).
+// Derive ext from blob.type so Fast Export returns mp4 when the browser
+// (Chrome 122+) recorded MP4 natively, or webm on older browsers.
+function extFromMime(m) {
+  if (!m) return 'webm'
+  if (m.includes('mp4')) return 'mp4'
+  return 'webm'
+}
+
+// mode: 'fast' (canvas+MediaRecorder, prefers MP4 if supported else WebM,
+//   real-time) or 'mp4' (ffmpeg.wasm — always MP4, slower).
 // ffmpeg.wasm needs to download ~30MB of core+wasm on first export and then
 // transcode — for a 5s clip that's typically 30-60s total. The canvas path
-// records the preview in real time, so a 5s clip exports in about 5s with
-// no wasm download. WebM uploads fine to TikTok / IG / YouTube.
+// records in real time and now produces MP4 natively on Chrome 122+ via
+// MediaRecorder with video/mp4;h264 — same speed as WebM, works with
+// Postiz / TikTok / IG / YouTube directly (Postiz refuses WebM).
 export async function renderProject(project, onProgress, opts = {}) {
   const mode = opts.mode || 'fast'
   if (mode === 'fast') {
-    onProgress?.('Recording (canvas WebM — fast mode)...')
+    onProgress?.('Recording (real-time)...')
     const blob = await renderWithCanvas(project, onProgress)
-    return { blob, ext: 'webm', mime: 'video/webm' }
+    const ext = extFromMime(blob.type)
+    return { blob, ext, mime: blob.type || `video/${ext}` }
   }
   // mode === 'mp4' — try ffmpeg first, fall back to canvas if it crashes.
   try {
@@ -987,8 +1009,9 @@ export async function renderProject(project, onProgress, opts = {}) {
     return { blob, ext: 'mp4', mime: 'video/mp4' }
   } catch (e) {
     console.warn('ffmpeg.wasm failed, fallback canvas:', e.message)
-    onProgress?.(`ffmpeg failed (${e.message.slice(0, 80)}) → canvas WebM...`)
+    onProgress?.(`ffmpeg failed (${e.message.slice(0, 80)}) → canvas fallback...`)
     const blob = await renderWithCanvas(project, onProgress)
-    return { blob, ext: 'webm', mime: 'video/webm' }
+    const ext = extFromMime(blob.type)
+    return { blob, ext, mime: blob.type || `video/${ext}` }
   }
 }
