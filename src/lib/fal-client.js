@@ -108,12 +108,14 @@ export function buildVidInput(vidModel, { prompt, image_url, reference_urls, dur
   return { prompt, image_url, duration: parseInt(duration) || 5, aspect_ratio }
 }
 
-// Build the 3×3 storyboard grid LAYOUT HEADER only.
-// Pre-refactor this dumped ad-agency boilerplate ('Professional ... well-balanced
-// composition', 'Cohesive lighting & color grade', 'No watermark') that
-// contradicted UGC/animation camera presets at the compiler stage. Now it
-// returns ONLY the layout instructions — quality / continuity / negatives are
-// owned by prompt-compiler.
+// Build the 3×3 storyboard grid LAYOUT HEADER + tight cells.
+// Pre-refactor this was verbose ad-agency boilerplate. Cells used to be:
+//   Cell N (M detik) — TITLE
+//      Camera: <shot_type>
+//      Action: <visual>
+// That structure is OK for human readers but diffusion models parse it as
+// 4 separate text blobs per cell — eats attention budget. Refactored to
+// woven 1-line cells where camera intent + action are joined naturally.
 //
 // constraints = { skipDialog, skipOnscreen, skipProduct }
 export function buildStoryboardGridPrompt(panels = [], ar = '9:16', concept = '', constraints = {}) {
@@ -121,16 +123,16 @@ export function buildStoryboardGridPrompt(panels = [], ar = '9:16', concept = ''
   let t = 0
   const cells = nine.map((p) => {
     const dur = Math.max(1, parseInt(p.seconds) || 2)
-    const range = `${t}-${t + dur} detik`
     t += dur
-    const lines = [`Cell ${p.n} (${range}) — ${(p.title || '').trim()}`]
-    if (p.shot_type) lines.push(`   Camera: ${p.shot_type}`)
-    lines.push(`   Action: ${(p.visual || p.scene || '').trim()}`)
-    if (!constraints.skipDialog && p.dialog) lines.push(`   Dialog: "${p.dialog.trim()}"`)
-    if (!constraints.skipOnscreen && p.onscreen) lines.push(`   Caption: ${p.onscreen.trim()}`)
-    return lines.join('\n')
-  }).join('\n\n')
-  const conceptLine = concept ? `Concept: ${concept.trim()}.` : ''
+    // Woven single-line cell — camera + action in one sentence model parses cleanly.
+    const shot = p.shot_type ? `${p.shot_type.toLowerCase()} — ` : ''
+    const action = (p.visual || p.scene || '').trim()
+    let line = `Cell ${p.n}: ${shot}${action}`
+    if (!constraints.skipDialog && p.dialog) line += ` (overheard: "${p.dialog.trim()}")`
+    if (!constraints.skipOnscreen && p.onscreen) line += ` [caption: ${p.onscreen.trim()}]`
+    return line
+  }).join('\n')
+  const conceptLine = '' // dropped — action already conveys concept; saves redundancy
   const productRule = constraints.skipProduct
     ? 'No product or brand packaging in any cell — lifestyle moments only.'
     : 'Product appears in cells marked Product Shot only.'

@@ -177,7 +177,13 @@ export function compilePrompt(spec) {
   const cam = getCameraPreset(camera, userPresets)
   const ctx = { cameraId: cam.id, ar, skipProduct, continuousShot, refsCount, wardrobe: !!wardrobe, media }
 
+  // Token stacking — camera tokens repeated as L1 (start) AND L5b (middle of
+  // prompt) so model attention stays anchored throughout. Single mention at
+  // top fades for long prompts; repeating reinforces intent.
   const L1_camera = cam.tokens?.join(', ') || ''
+  const L5b_camera_echo = cam.tokens?.length
+    ? `Throughout, maintain: ${cam.tokens.slice(0, 4).join(', ')}.`
+    : ''
   const L1b_grid = gridHeader || ''
   const L2_identity = identity ? `Subject: ${identity}.` : ''
   // Wardrobe is high-priority but goes AFTER camera — we don't want a long
@@ -195,7 +201,7 @@ export function compilePrompt(spec) {
     ? `Avoid: ${cam.negatives.join(', ')}.`
     : ''
 
-  const layers = [L1_camera, L1b_grid, L2_identity, L3_wardrobe, L4_environment, L5_action, L6_brand, L7_format, L8_continuity, L9_quality]
+  const layers = [L1_camera, L1b_grid, L2_identity, L3_wardrobe, L4_environment, L5_action, L5b_camera_echo, L6_brand, L7_format, L8_continuity, L9_quality]
   // BUG FIX: L10_negatives intentionally NOT sanitized.
   // Sanitizer's job is to drop "cinematic / professional / sharp focus / 8K"
   // from POSITIVE directives when phone-cam preset wins. But those EXACT words
