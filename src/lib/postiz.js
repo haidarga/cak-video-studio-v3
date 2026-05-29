@@ -163,7 +163,11 @@ async function uploadToPostiz(creds, { buffer, name, contentType }) {
 }
 
 // ── Platform-specific default settings ──────────────────────────────
-function defaultSettings(platform) {
+// opts.tiktokAutoAddMusic — workspace-level toggle. When true we tell
+// TikTok via Postiz to auto-attach a trending sound on landing (boosts
+// discoverability via TikTok's sound algorithm). User picks it once in
+// /settings; every TikTok schedule inherits the choice.
+function defaultSettings(platform, opts = {}) {
   const p = (platform || '').toLowerCase()
   if (p.includes('tiktok')) {
     return {
@@ -172,7 +176,7 @@ function defaultSettings(platform) {
       duet: false,
       stitch: false,
       comment: true,
-      autoAddMusic: 'no',
+      autoAddMusic: opts.tiktokAutoAddMusic ? 'yes' : 'no',
       brand_content_toggle: false,
       brand_organic_toggle: false,
       content_posting_method: 'DIRECT_POST',
@@ -192,7 +196,7 @@ function defaultSettings(platform) {
 }
 
 // ── Create post ─────────────────────────────────────────────────────
-export async function createPostizPost({ creds, channelId, content, mediaUrl, scheduledFor, platform }) {
+export async function createPostizPost({ creds, channelId, content, mediaUrl, scheduledFor, platform, tiktokAutoAddMusic }) {
   if (!channelId) throw new Error('channelId kosong — persona belum link ke Postiz channel')
   normCreds(creds) // throws if missing — fail fast before downloading media
 
@@ -216,7 +220,7 @@ export async function createPostizPost({ creds, channelId, content, mediaUrl, sc
   }
 
   const isScheduled = !!scheduledFor
-  const settings = defaultSettings(platform)
+  const settings = defaultSettings(platform, { tiktokAutoAddMusic })
 
   const body = {
     type: isScheduled ? 'schedule' : 'now',

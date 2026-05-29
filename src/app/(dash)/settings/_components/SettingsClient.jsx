@@ -340,6 +340,44 @@ export default function SettingsClient({ initialStatus, initialBudget }) {
             </button>
           </div>
         </div>
+
+        {/* TikTok-specific toggle. Sits under Postiz Accounts because it
+            travels through the Postiz API on TikTok posts. */}
+        <div className="pt-3 border-t border-[var(--border)]">
+          <div className="text-xs font-semibold mb-1 flex items-center gap-2">
+            🎵 TikTok auto-add music
+            <span className="text-[9px] font-normal text-[var(--muted2)]">applies to every TikTok schedule in this workspace</span>
+          </div>
+          <div className="text-[10px] text-[var(--muted2)] mb-2">
+            ON = pas video lo nyampe di TikTok, TikTok auto-attach trending sound (boost discoverability). OFF = video keep audio aslinya doang.
+          </div>
+          <label className="flex items-center gap-2 cursor-pointer p-2 rounded bg-[var(--surface2)] hover:bg-[var(--surface3)] transition-colors">
+            <input type="checkbox" checked={!!status.tiktok_auto_add_music}
+              onChange={async (e) => {
+                const next = e.target.checked
+                setBusy(true); setErr('')
+                try {
+                  const r = await fetch('/api/workspace/tiktok-auto-music', {
+                    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled: next }),
+                  })
+                  const j = await r.json()
+                  if (!j.ok) throw new Error(j.error)
+                  setStatus((s) => ({ ...s, tiktok_auto_add_music: next }))
+                  setMsg(`TikTok auto-music: ${next ? 'ON' : 'OFF'} ✓`); setTimeout(() => setMsg(''), 2500)
+                } catch (e) { setErr(e.message) }
+                setBusy(false)
+              }} className="w-4 h-4 accent-[var(--accent)]" />
+            <div className="flex-1">
+              <div className="text-xs font-semibold">{status.tiktok_auto_add_music ? '✓ Auto-add trending sound' : 'Keep video audio as-is'}</div>
+              <div className="text-[10px] text-[var(--muted2)]">
+                {status.tiktok_auto_add_music
+                  ? 'TikTok will pick a trending sound on landing'
+                  : 'TikTok plays whatever audio is baked into the video file'}
+              </div>
+            </div>
+          </label>
+        </div>
       </section>
 
       {/* ── LLM CONFIG — Default Model + Fallback Chain ───────────────── */}

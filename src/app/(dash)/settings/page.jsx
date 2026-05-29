@@ -9,7 +9,7 @@ export default async function SettingsPage() {
 
   const { data: ms } = await supabase
     .from('workspace_members')
-    .select('workspace_id, workspaces(id, name, fal_key, gemini_key, postiz_url, postiz_key, elevenlabs_key)')
+    .select('workspace_id, workspaces(id, name, fal_key, gemini_key, postiz_url, postiz_key, elevenlabs_key, tiktok_auto_add_music)')
     .eq('user_id', user.id)
     .order('added_at', { ascending: true }).limit(1)
   const ws = ms?.[0]?.workspaces
@@ -27,6 +27,7 @@ export default async function SettingsPage() {
     has_elevenlabs: !!ws.elevenlabs_key,
     postiz_url: ws.postiz_url || '',
     workspace_name: ws.name,
+    tiktok_auto_add_music: !!ws.tiktok_auto_add_music,
   }
   const initialBudget = {
     daily_limit_usd: budget?.daily_limit_usd ?? 50,

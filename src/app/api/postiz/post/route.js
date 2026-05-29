@@ -25,6 +25,12 @@ export async function POST(req) {
     .eq('id', scheduled_post_id).single()
   if (error || !sp) return NextResponse.json({ ok: false, error: 'scheduled post not found' }, { status: 404 })
 
+  // Workspace-level toggle for TikTok's auto-add-music. Read once and pass
+  // through; createPostizPost only applies it on TikTok platform settings.
+  const { data: wsRow } = await supabase
+    .from('workspaces').select('tiktok_auto_add_music').eq('id', sp.workspace_id).maybeSingle()
+  const tiktokAutoAddMusic = !!wsRow?.tiktok_auto_add_music
+
   // Channel resolution priority:
   //   1. target_channel_id (per-row mirror override) — most specific
   //   2. persona's default channel from persona_channels (is_default=true)
@@ -75,6 +81,7 @@ export async function POST(req) {
       mediaUrl,
       scheduledFor: sp.scheduled_for,
       platform,
+      tiktokAutoAddMusic,
     })
 
     const externalId =
