@@ -13,9 +13,13 @@ function ensureConfigured() {
   }
 }
 
-export async function falSubmit(model, input) {
+export async function falSubmit(model, input, { webhookUrl } = {}) {
   ensureConfigured()
-  const { request_id } = await fal.queue.submit(model, { input })
+  // webhookUrl: fal POSTs to it when job COMPLETED/FAILED — eliminates polling.
+  // Without it the SDK still works but caller has to poll fal.queue.status.
+  const opts = { input }
+  if (webhookUrl) opts.webhookUrl = webhookUrl
+  const { request_id } = await fal.queue.submit(model, opts)
   if (!request_id) throw new Error('fal submit: no request_id returned')
   return { request_id }
 }

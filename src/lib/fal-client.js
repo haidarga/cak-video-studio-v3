@@ -1,36 +1,116 @@
 // Browser-side fal helper that proxies through /api/fal/*. The FAL_KEY stays
-// on the server. submitRun returns once the fal job is COMPLETED (or throws).
+// on the server. falRun resolves once the fal job is COMPLETED (or rejects).
+//
+// ── Webhook-based completion, no polling ──
+//
+// Previously this polled /api/fal/status every 3s. Fine for 1-5 parallel jobs;
+// at 200 concurrent gens it instantly hit fal.ai's 429 rate limit and torched
+// every job. New flow:
+//
+//   1. POST /api/fal/submit → server submits to fal with webhookUrl, inserts
+//      a gen_jobs row (status='pending'), returns request_id.
+//   2. Browser SUBSCRIBES to that row via Supabase realtime, filtered by
+//      request_id. Zero polls go to fal from the browser.
+//   3. fal POSTs /api/fal/webhook when the job finishes → server updates the
+//      row to status='done' (or 'error') with the payload URL.
+//   4. Supabase realtime fires → falRun resolves with the fal payload.
+//
+// Safety nets:
+//   - Initial check after subscribe: in case the webhook already fired (row
+//     is already 'done' or 'error') before we subscribed.
+//   - Periodic (every 45s) fallback poll of gen_jobs row in case the realtime
+//     channel silently drops. Cheap — it hits OUR Supabase, not fal.
+//   - Hard timeout at maxWaitMs (10min default) so a stuck row doesn't pin
+//     the UI forever.
 
-export async function falRun(model, input, { onProgress, maxWaitMs = 600000, workspaceId, duration } = {}) {
+import { createClient } from '@/lib/supabase/client'
+
+// Build the result shape callers expect. Returns the raw fal payload (e.g.
+// { video: {url}, ... } or { images: [{url}], ... }) so existing destructures
+// like result.video.url / result.images[0].url keep working.
+function buildResult(row) {
+  if (row.payload && typeof row.payload === 'object') return row.payload
+  // Fallback if webhook only stored the extracted URL.
+  if (row.payload_url) return { video: { url: row.payload_url }, images: [{ url: row.payload_url }] }
+  return {}
+}
+
+export async function falRun(model, input, { onProgress, maxWaitMs = 600000, workspaceId, duration, meta } = {}) {
+  // ── Submit ─────────────────────────────────────────────────────────────
   const submitRes = await fetch('/api/fal/submit', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, input }),
+    body: JSON.stringify({ model, input, meta: meta || { duration, workspaceId } }),
   })
   const submit = await submitRes.json()
   if (!submit.ok) throw new Error(submit.error || 'submit failed')
   const requestId = submit.request_id
   if (!requestId) throw new Error('no request_id from fal')
 
+  onProgress?.('submitted, waiting for webhook...')
+
+  // ── Wait for completion via realtime ──────────────────────────────────
+  const supabase = createClient()
   const start = Date.now()
-  let lastLog = 0
-  while (Date.now() - start < maxWaitMs) {
-    await new Promise((r) => setTimeout(r, 3000))
-    const statusRes = await fetch(`/api/fal/status?model=${encodeURIComponent(model)}&request_id=${requestId}`, { cache: 'no-store' })
-    const s = await statusRes.json()
-    if (!s.ok) throw new Error(s.error || 'status check failed')
-    const elapsed = Math.round((Date.now() - start) / 1000)
-    if (elapsed - lastLog >= 5) { onProgress?.(`${s.status} (${elapsed}s)`); lastLog = elapsed }
-    if (s.status === 'COMPLETED') break
-    if (s.status === 'FAILED' || s.status === 'ERROR') throw new Error(s.error?.message || s.error || 'fal job failed')
-  }
-  // Pass workspace_id + duration ke result endpoint biar usage logger bisa
-  // record cost dengan benar (per-second untuk video, flat untuk image)
-  const ws = workspaceId ? `&workspace_id=${workspaceId}` : ''
-  const dur = duration ? `&duration=${duration}` : ''
-  const resultRes = await fetch(`/api/fal/result?model=${encodeURIComponent(model)}&request_id=${requestId}${ws}${dur}`, { cache: 'no-store' })
-  const r = await resultRes.json()
-  if (!r.ok) throw new Error(r.error || 'result fetch failed')
-  return r
+
+  return await new Promise((resolve, reject) => {
+    let settled = false
+    let channel = null
+    let fallbackInterval = null
+    let timeoutHandle = null
+
+    const cleanup = () => {
+      if (channel) { try { channel.unsubscribe() } catch {} channel = null }
+      if (fallbackInterval) clearInterval(fallbackInterval)
+      if (timeoutHandle) clearTimeout(timeoutHandle)
+    }
+    const finish = (row) => {
+      if (settled) return
+      if (row.status === 'done') {
+        settled = true; cleanup()
+        resolve(buildResult(row))
+      } else if (row.status === 'error') {
+        settled = true; cleanup()
+        reject(new Error(row.error || 'gen failed'))
+      }
+    }
+
+    // Subscribe FIRST — before checking current state — to avoid missing an
+    // update that lands between the read and the subscribe.
+    channel = supabase
+      .channel(`gen_job_${requestId}`)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'gen_jobs',
+        filter: `request_id=eq.${requestId}`,
+      }, (payload) => finish(payload.new))
+      .subscribe()
+
+    // Now check current state — handles the race where webhook fired before
+    // we subscribed (job took <1s, very rare for video but possible for cached
+    // image gens).
+    supabase.from('gen_jobs').select('*').eq('request_id', requestId).maybeSingle()
+      .then(({ data }) => { if (data) finish(data) })
+
+    // Fallback poll every 45s of OUR Supabase (not fal). Catches the case
+    // where the realtime channel quietly drops — Supabase realtime is reliable
+    // but not bulletproof on flaky networks / phone backgrounding.
+    fallbackInterval = setInterval(async () => {
+      if (settled) return
+      const elapsed = Math.round((Date.now() - start) / 1000)
+      onProgress?.(`waiting (${elapsed}s)`)
+      const { data } = await supabase.from('gen_jobs').select('*').eq('request_id', requestId).maybeSingle()
+      if (data) finish(data)
+    }, 45000)
+
+    // Hard timeout — if no webhook AND fallback never sees done, give up.
+    // 10 minutes is generous for video gen (Kling pro ~3min, Seedance ~2min).
+    timeoutHandle = setTimeout(() => {
+      if (settled) return
+      settled = true; cleanup()
+      reject(new Error(`timeout after ${Math.round(maxWaitMs / 1000)}s waiting for fal job ${requestId}`))
+    }, maxWaitMs)
+  })
 }
 
 // ── Image input builder ──
