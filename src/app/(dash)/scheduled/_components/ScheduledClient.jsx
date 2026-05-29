@@ -773,18 +773,21 @@ function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubm
     }))
   }, [channels, selectedChannelIds])
 
-  // Auto-route: per-result target lookup using result.personas.postiz_channel_id.
-  // Returns array aligned with `results` — index i = target for results[i], or
-  // null if that result's persona has no linked channel (we surface that to the
-  // user as a warning so they know which clip to fix).
+  // Auto-route: per-result target lookup. Priority order matches
+  // /api/postiz/post (so the bulk preview agrees with what actually fires):
+  //   1. persona_channels with is_default=true (newer multi-link model)
+  //   2. persona_channels first entry (any link is better than legacy)
+  //   3. legacy personas.postiz_channel_id (single-link fallback)
   const perResultTargets = useMemo(() => {
     if (!autoRoute || !channels) return null
     return results.map((r) => {
-      const personaChId = r.personas?.postiz_channel_id
+      const links = r.personas?.persona_channels || []
+      const defaultLink = links.find((l) => l.is_default) || links[0]
+      const personaChId = defaultLink?.channel_id || r.personas?.postiz_channel_id
       if (!personaChId) return null
       const ch = channels.find((c) => String(c.id) === String(personaChId))
       if (!ch) return null
-      return { id: ch.id, platform: ch.platform, name: ch.name, account_id: ch.account_id || null }
+      return { id: ch.id, platform: ch.platform, name: ch.name, account_id: ch.account_id || defaultLink?.postiz_account_id || null }
     })
   }, [autoRoute, results, channels])
   const missingRoute = autoRoute ? (perResultTargets || []).map((t, i) => t ? null : results[i]).filter(Boolean) : []

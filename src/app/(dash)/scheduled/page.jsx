@@ -16,7 +16,7 @@ export default async function ScheduledPage() {
       .select('*, results(id, type, url, label, ar), personas(id, name, username, avatar_url, postiz_channel_id, postiz_platform)')
       .eq('workspace_id', ws.id).order('scheduled_for', { ascending: true, nullsFirst: false }),
     supabase.from('results')
-      .select('id, type, url, label, ar, personas(id, name, username, avatar_url, postiz_channel_id, postiz_platform)')
+      .select('id, type, url, label, ar, personas(id, name, username, avatar_url, postiz_channel_id, postiz_platform, persona_channels(channel_id, channel_label, platform, postiz_account_id, is_default))')
       .eq('workspace_id', ws.id).eq('qc_status', 'approved').order('created_at', { ascending: false }).limit(50),
   ])
 
