@@ -570,6 +570,34 @@ export async function renderWithCanvas(project, onProgress) {
   canvas.width = W; canvas.height = H
   const ctx = canvas.getContext('2d')
 
+  // Wait for Google Fonts to actually finish loading before any text gets
+  // measured. Without this, ctx.measureText() runs against whatever font
+  // happens to be available at that instant — usually system-ui because
+  // Poppins/Bebas/etc are still streaming in the background. system-ui's
+  // glyphs are narrower than the intended font, so wrap calc underestimates
+  // line widths, the text fails to break where it should, and the export
+  // ends up with one fat line that overshoots the frame. CSS preview
+  // doesn't hit this because the browser relays out automatically once
+  // each font lands. Canvas only measures once per render call.
+  try {
+    if (document.fonts && document.fonts.ready) {
+      onProgress?.('Loading fonts...')
+      // Force-load each unique family used by text clips so document.fonts
+      // .ready actually resolves with them present, not just whatever was
+      // already cached.
+      const families = new Set()
+      ;(project.text_clips || []).forEach((c) => {
+        const css = c.font ? getFontCss(c.font) : 'system-ui'
+        const primary = css.split(',')[0].trim().replace(/^"|"$/g, '')
+        if (primary && primary !== 'system-ui' && primary !== 'sans-serif') families.add(primary)
+      })
+      await Promise.all(Array.from(families).map((fam) =>
+        document.fonts.load(`700 48px "${fam}"`).catch(() => {}),
+      ))
+      await document.fonts.ready
+    }
+  } catch { /* non-fatal — fall back to whatever's loaded */ }
+
   // All src URLs run through proxify() so they're same-origin from the
   // browser's POV — COEP=require-corp blocks cross-origin fetches without
   // CORP, and fal.media / Supabase storage don't send CORP.
