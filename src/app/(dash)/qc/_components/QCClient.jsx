@@ -2,6 +2,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { convertVideoToMp4 } from '@/lib/video-convert'
+import { stripAudioFromVideo } from '@/lib/strip-audio'
 
 const STATUSES = [
   { v: 'pending',  l: '⏳ Review',   color: 'bg-blue-500/20 text-blue-400 border-blue-500/40' },
@@ -132,6 +133,33 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
   // becomes Postiz-compatible); existing MP4 still benefits from the
   // 1080p upscale + higher bitrate re-encode.
   function isWebm(r) { return r.type === 'video' && !!r.url }
+
+  // Strip audio track from a video so TikTok's autoAddMusic flag actually
+  // takes effect — TikTok only adds a trending sound when the uploaded
+  // video has no audio of its own. Stream-copy via ffmpeg so it's instant
+  // (no video re-encode). Replaces result.url in place.
+  async function stripAudio(r) {
+    if (converting) return
+    setConverting({ id: r.id, stage: 'Loading ffmpeg...' })
+    setErr('')
+    try {
+      const blob = await stripAudioFromVideo(r.url, (stage) => {
+        setConverting({ id: r.id, stage })
+      })
+      setConverting({ id: r.id, stage: `Uploading ${(blob.size / 1024 / 1024).toFixed(1)}MB...` })
+      const path = `${workspaceId}/qc-muted-${Date.now()}.mp4`
+      const { error: upErr } = await supabase.storage.from('refs').upload(path, blob, { contentType: 'video/mp4', cacheControl: '3600' })
+      if (upErr) throw upErr
+      const { data: { publicUrl } } = supabase.storage.from('refs').getPublicUrl(path)
+      const { error: updErr } = await supabase.from('results').update({ url: publicUrl }).eq('id', r.id)
+      if (updErr) throw updErr
+      setResults((prev) => prev.map((x) => (x.id === r.id ? { ...x, url: publicUrl } : x)))
+      setConverting(null)
+    } catch (e) {
+      setErr('Strip audio gagal: ' + (e?.message || e))
+      setConverting(null)
+    }
+  }
 
   async function uploadExternal(persona, file) {
     setErr('')
@@ -277,7 +305,7 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
             onSetStatus={setStatus} onRemove={removeFromQC} onOpenNote={setOpenNote}
             onRename={rename} onDeletePerma={deletePerma}
             selectedIds={selectedIds} onToggleSelect={toggleSelect}
-            converting={converting} onConvertToMp4={convertToMp4} isWebm={isWebm} />
+            converting={converting} onConvertToMp4={convertToMp4} onStripAudio={stripAudio} isWebm={isWebm} />
         ))}
 
         {byPersona.length === 0 && (
@@ -295,7 +323,7 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
   )
 }
 
-function PersonaGroup({ persona, items, busyUpload, onUpload, onSetStatus, onRemove, onOpenNote, onRename, onDeletePerma, selectedIds, onToggleSelect, converting, onConvertToMp4, isWebm }) {
+function PersonaGroup({ persona, items, busyUpload, onUpload, onSetStatus, onRemove, onOpenNote, onRename, onDeletePerma, selectedIds, onToggleSelect, converting, onConvertToMp4, onStripAudio, isWebm }) {
   const fileRef = useRef(null)
   const counts = items.reduce((c, r) => ({ ...c, [r.qc_status]: (c[r.qc_status] || 0) + 1 }), {})
 
@@ -355,7 +383,7 @@ function PersonaGroup({ persona, items, busyUpload, onUpload, onSetStatus, onRem
               onSetStatus={onSetStatus} onRemove={onRemove} onOpenNote={onOpenNote}
               onRename={onRename} onDeletePerma={onDeletePerma}
               isWebm={isWebm?.(r)} converting={converting?.id === r.id ? converting : null}
-              onConvertToMp4={() => onConvertToMp4?.(r)} />
+              onConvertToMp4={() => onConvertToMp4?.(r)} onStripAudio={() => onStripAudio?.(r)} />
           ))}
         </div>
       )}
@@ -387,7 +415,7 @@ function qcCardEqual(prev, next) {
 // memo'd: with 300 cards on the page, toggling one selected state was
 // re-rendering all 299 siblings. Now: only the card whose `r` or `selected`
 // actually changed re-renders.
-const QCCard = memo(function QCCard({ result: r, onSetStatus, onRemove, onOpenNote, onRename, onDeletePerma, selected, onToggleSelect, isWebm, converting, onConvertToMp4 }) {
+const QCCard = memo(function QCCard({ result: r, onSetStatus, onRemove, onOpenNote, onRename, onDeletePerma, selected, onToggleSelect, isWebm, converting, onConvertToMp4, onStripAudio }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(r.label || '')
   const statusCfg = STATUSES.find((s) => s.v === r.qc_status) || STATUSES[0]
@@ -461,6 +489,13 @@ const QCCard = memo(function QCCard({ result: r, onSetStatus, onRemove, onOpenNo
               title="Re-encode video di 1080p — upscale + Postiz-compatible MP4"
               className="text-[10px] px-1.5 py-1 rounded bg-yellow-500/30 hover:bg-yellow-500/50 text-yellow-200 border border-yellow-500/40 font-semibold disabled:opacity-50">
               🔁 1080p
+            </button>
+          )}
+          {isWebm && (
+            <button onClick={onStripAudio} disabled={!!converting}
+              title="Strip audio biar TikTok auto-add music kerja (TikTok cuma add music kalo video silent)"
+              className="text-[10px] px-1.5 py-1 rounded bg-pink-500/30 hover:bg-pink-500/50 text-pink-200 border border-pink-500/40 font-semibold disabled:opacity-50">
+              🔇 Mute
             </button>
           )}
           <button onClick={() => onRemove(r.id)} title="Keluarin dari QC" className="text-[10px] px-1.5 py-1 rounded text-[var(--muted)] hover:bg-[var(--surface)]">✕</button>

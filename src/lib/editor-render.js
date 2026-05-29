@@ -41,7 +41,7 @@ export function wrapTextLines(ctx, text, maxWidth) {
   return out.length ? out : ['']
 }
 
-async function getFFmpeg(onLog) {
+export async function getFFmpeg(onLog) {
   if (ffmpegInstance) return ffmpegInstance
   if (ffmpegLoading) return ffmpegLoading
   ffmpegLoading = (async () => {
@@ -65,7 +65,7 @@ async function getFFmpeg(onLog) {
   return ffmpegLoading
 }
 
-async function fetchToUint8(url) {
+export async function fetchToUint8(url) {
   const target = proxify(url)
   const res = await fetch(target, { cache: 'no-store' })
   if (!res.ok) throw new Error(`fetch ${url.slice(-40)} -> ${res.status}`)
