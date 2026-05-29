@@ -1,7 +1,7 @@
 'use client'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { renderProject, totalDuration, clipDuration, activeBaseClipAt, activeOverlaysAt } from '@/lib/editor-render'
+import { renderProject, totalDuration, clipDuration, activeBaseClipAt, activeOverlaysAt, wrapTextLines } from '@/lib/editor-render'
 import { FONT_OPTIONS, DEFAULT_FONT, getFontCss } from '@/lib/editor-fonts'
 import { proxify } from '@/lib/editor-proxy'
 import AudioWaveform from './AudioWaveform'
@@ -162,6 +162,42 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
   const playRafRef = useRef(null)
   // Undo/redo history stack — snapshots of project (max 50)
   const historyRef = useRef({ past: [], future: [] })
+
+  // Hidden canvas just for measureText — used to compute text wrap in JS
+  // (instead of relying on CSS auto-wrap) so preview line breaks match
+  // canvas export line breaks byte-for-byte. CSS preview pane and the
+  // render canvas are different absolute pixel widths, so any wrap that
+  // depends on CSS layout will differ from canvas wrap. Doing the wrap in
+  // JS using the canvas frame W as the reference width and applying the
+  // SAME wrapTextLines fn on both paths fixes the mismatch.
+  const measureCanvasRef = useRef(null)
+  if (!measureCanvasRef.current && typeof document !== 'undefined') {
+    measureCanvasRef.current = document.createElement('canvas')
+  }
+  // fontsReady forces a re-render once Google Fonts finish loading so the
+  // initial wrap measurements use the right glyph widths.
+  const [fontsReady, setFontsReady] = useState(false)
+  useEffect(() => {
+    if (typeof document === 'undefined' || !document.fonts) { setFontsReady(true); return }
+    document.fonts.ready.then(() => setFontsReady(true))
+  }, [])
+  // Compute wrapped lines for a text clip using canvas measureText. Same
+  // function shape as in editor-render.js so preview and export agree.
+  function getCanvasW(ar) {
+    return ar === '16:9' ? 1280 : ar === '1:1' ? 1080 : 720
+  }
+  function computeTextLines(c, ar) {
+    if (!measureCanvasRef.current) return [c.text || '']
+    const ctx = measureCanvasRef.current.getContext('2d')
+    const W = getCanvasW(ar)
+    const fontSize = c.size * (W / 720) // matches editor-render baseFontSize
+    const fontCss = getFontCss(c.font || DEFAULT_FONT)
+    ctx.font = `${c.weight || 400} ${fontSize}px ${fontCss}`
+    const maxLineWidth = W * ((c.max_width_pct ?? 90) / 100)
+    return wrapTextLines(ctx, c.text || '', maxLineWidth)
+  }
+  // eslint-disable-next-line no-unused-vars
+  const _fontsReadyForRender = fontsReady // referenced to keep the dep relevant
   function pushHistory(prevProject) {
     historyRef.current.past.push(JSON.stringify(prevProject))
     if (historyRef.current.past.length > 50) historyRef.current.past.shift()
@@ -1019,12 +1055,17 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                   }
                   // Karaoke: highlight current word(s) in different color
                   const isKaraoke = c.animation === 'karaoke' && Array.isArray(c.words) && c.words.length > 0
-                  // Zoom = pure CSS transform scale. Doesn't touch fontSize
-                  // or wrap calc — just zooms the laid-out block uniformly.
-                  // Wrap budget is owned by Size + Box Width. Canvas uses
-                  // ctx.scale() for the same uniform-zoom effect.
+                  // Zoom = pure CSS transform scale. Doesn't touch wrap calc.
                   const userScale = c.scale ?? 1
                   const finalScale = popScale * userScale
+                  // CRITICAL: wrap is computed in JS using canvas measureText
+                  // against the EXPORT frame width — exactly what the canvas
+                  // render will do. We then render the preview as pre-formatted
+                  // text (whiteSpace: 'pre') joined by \n so CSS DOESN'T
+                  // re-wrap based on its own pane width. This is the only
+                  // way to guarantee preview line breaks == export line breaks
+                  // across different absolute pixel widths.
+                  const wrappedLines = isKaraoke ? null : computeTextLines(c, project.ar)
                   return (
                     <div key={c.id} onClick={(e) => { e.stopPropagation(); setSelected({ kind: 'text', id: c.id }) }}
                       style={{
@@ -1033,13 +1074,9 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                         color: c.color, fontWeight: c.weight, fontSize: `${c.size * 0.4}px`,
                         fontFamily: getFontCss(c.font || DEFAULT_FONT),
                         background: c.bg, padding: '4px 10px', borderRadius: 4, textAlign: c.align,
-                        // pre-wrap = preserve user-entered \n AND word-wrap on long text.
-                        // maxWidth keeps captions inside the preview frame instead of
-                        // bleeding off-screen on long sentences. Canvas render mirrors this.
-                        whiteSpace: 'pre-wrap', maxWidth: `${c.max_width_pct ?? 90}%`, overflowWrap: 'break-word',
-                        cursor: 'pointer',
-                        // Effects: stroke via -webkit-text-stroke, shadow+glow composed into one text-shadow chain.
-                        // Fallback to legacy subtle shadow when no effects field exists (old clips).
+                        // pre = respect explicit \n from our wrap (no CSS auto-wrap that
+                        // would re-break the text based on the preview pane's CSS pixel width).
+                        whiteSpace: 'pre', cursor: 'pointer',
                         textShadow: c.effects ? composeTextShadow(c.effects) : '0 1px 3px rgba(0,0,0,0.8)',
                         WebkitTextStroke: c.effects?.stroke?.enabled
                           ? `${c.effects.stroke.width * 0.4}px ${c.effects.stroke.color}`
@@ -1055,7 +1092,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                             {w.word}{i < c.words.length - 1 ? ' ' : ''}
                           </span>
                         )
-                      }) : c.text}
+                      }) : (wrappedLines || ['']).join('\n')}
                     </div>
                   )
                 })}

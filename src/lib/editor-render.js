@@ -21,7 +21,7 @@ let ffmpegLoading = null
 
 // Word-wrap a string into <= maxWidth lines, honoring explicit \n as hard breaks.
 // ctx.font must be set before calling so measureText returns the right widths.
-function wrapTextLines(ctx, text, maxWidth) {
+export function wrapTextLines(ctx, text, maxWidth) {
   const out = []
   for (const para of String(text || '').split('\n')) {
     if (!para) { out.push(''); continue }
