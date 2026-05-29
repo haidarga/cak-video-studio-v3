@@ -1019,18 +1019,18 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                   }
                   // Karaoke: highlight current word(s) in different color
                   const isKaraoke = c.animation === 'karaoke' && Array.isArray(c.words) && c.words.length > 0
-                  // c.scale is a VISUAL zoom multiplier on top of c.size. Size drives
-                  // wrap/layout; scale is pure CSS transform so the wrapping pattern
-                  // stays the same when user zooms. Combined with the pop animation's
-                  // popScale into one transform.
+                  // Scale baked into fontSize so the CSS wrap calculation runs
+                  // against the VISUAL size — matches canvas export (which
+                  // also wraps at visual size). Was previously a transform:
+                  // scale() that ran AFTER layout, so preview and export
+                  // disagreed on line breaks at scale != 1.
                   const userScale = c.scale ?? 1
-                  const finalScale = popScale * userScale
                   return (
                     <div key={c.id} onClick={(e) => { e.stopPropagation(); setSelected({ kind: 'text', id: c.id }) }}
                       style={{
                         position: 'absolute', left: `${c.x_pct}%`, top: `${c.y_pct}%`,
-                        transform: `translate(-50%, -50%) scale(${finalScale})`,
-                        color: c.color, fontWeight: c.weight, fontSize: `${c.size * 0.4}px`,
+                        transform: `translate(-50%, -50%) scale(${popScale})`,
+                        color: c.color, fontWeight: c.weight, fontSize: `${c.size * 0.4 * userScale}px`,
                         fontFamily: getFontCss(c.font || DEFAULT_FONT),
                         background: c.bg, padding: '4px 10px', borderRadius: 4, textAlign: c.align,
                         // pre-wrap = preserve user-entered \n AND word-wrap on long text.
