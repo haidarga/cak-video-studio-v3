@@ -80,10 +80,24 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
   // Bulk variant: M results × N channels with per-result scheduled_for.
   // plan = [{ result, scheduledFor, caption }] -- one entry per selected result.
   // Used to ngakalin rate limit by drip-scheduling across hours.
-  async function bulkSchedule(plan, targets, sharedCaption) {
+  async function bulkSchedule(plan, targets, sharedCaption, autoRoute) {
     setErr('')
-    if (!targets || targets.length === 0) { setErr('Pilih minimal 1 channel'); return }
     if (!plan || plan.length === 0) { setErr('Gak ada result yang dipilih'); return }
+    // autoRoute mode: each plan item has its own embedded `target` (persona's
+    // linked channel). targets arg is unused / null. 1 plan item → 1 post.
+    if (autoRoute) {
+      const valid = plan.filter((p) => p.target)
+      if (valid.length === 0) { setErr('Gak ada result yang punya persona-channel terlink'); return }
+      setBulkOpen(false)
+      setBulkSelected(new Set())
+      for (const item of valid) {
+        const caption = item.caption || sharedCaption || null
+        await insertAndFire(item.result, item.scheduledFor, caption, [item.target])
+      }
+      return
+    }
+    // Manual mirror mode: cross-product results × targets.
+    if (!targets || targets.length === 0) { setErr('Pilih minimal 1 channel'); return }
     setBulkOpen(false)
     setBulkSelected(new Set())
     for (const item of plan) {
@@ -269,7 +283,7 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
           results={readyToSchedule.filter((r) => bulkSelected.has(r.id))}
           channels={channels} channelsLoading={channelsLoading}
           onClose={() => setBulkOpen(false)}
-          onSubmit={(plan, targets, sharedCaption) => bulkSchedule(plan, targets, sharedCaption)} />
+          onSubmit={(plan, targets, sharedCaption, autoRoute) => bulkSchedule(plan, targets, sharedCaption, autoRoute)} />
       )}
     </div>
   )
@@ -682,6 +696,12 @@ function ScheduleModal({ result, onClose, onSubmit, channels, channelsLoading })
 //   - drip         : first at <startAt> (default now), each next +<gap> minutes
 //   - custom       : manual edit per result
 function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubmit }) {
+  // Auto-route: 1 result → 1 channel based on the result's persona linkage.
+  // Default ON because that's what users almost always want when bulk-
+  // scheduling 5 results from 5 different personas. Was previously doing
+  // results × selectedChannels cross-product, which forced the user to pick
+  // every channel manually and produced N×M posts.
+  const [autoRoute, setAutoRoute] = useState(true)
   const [selectedChannelIds, setSelectedChannelIds] = useState(new Set())
   const [sharedCaption, setSharedCaption] = useState('')
   const [mode, setMode] = useState('drip') // 'all_now' | 'drip' | 'custom'
@@ -753,13 +773,41 @@ function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubm
     }))
   }, [channels, selectedChannelIds])
 
-  const totalPosts = plan.length * targets.length
-  const canSubmit = plan.length > 0 && targets.length > 0 && !busy
+  // Auto-route: per-result target lookup using result.personas.postiz_channel_id.
+  // Returns array aligned with `results` — index i = target for results[i], or
+  // null if that result's persona has no linked channel (we surface that to the
+  // user as a warning so they know which clip to fix).
+  const perResultTargets = useMemo(() => {
+    if (!autoRoute || !channels) return null
+    return results.map((r) => {
+      const personaChId = r.personas?.postiz_channel_id
+      if (!personaChId) return null
+      const ch = channels.find((c) => String(c.id) === String(personaChId))
+      if (!ch) return null
+      return { id: ch.id, platform: ch.platform, name: ch.name, account_id: ch.account_id || null }
+    })
+  }, [autoRoute, results, channels])
+  const missingRoute = autoRoute ? (perResultTargets || []).map((t, i) => t ? null : results[i]).filter(Boolean) : []
+  const autoRouteCount = autoRoute ? (perResultTargets || []).filter(Boolean).length : 0
+
+  const totalPosts = autoRoute ? autoRouteCount : plan.length * targets.length
+  const canSubmit = autoRoute
+    ? plan.length > 0 && autoRouteCount > 0 && !busy
+    : plan.length > 0 && targets.length > 0 && !busy
 
   async function submit() {
     if (!canSubmit) return
     setBusy(true)
-    await onSubmit(plan, targets, sharedCaption || null)
+    if (autoRoute) {
+      // Build a "per-result targets" plan: each item is plan[i] paired with
+      // its own single target. Pass through onSubmit as a flat list — parent
+      // detects the autoRoute shape via the targets arg being an Array of
+      // {result_id → target} entries (we use plan.map with embedded target).
+      const routedPlan = plan.map((item, i) => ({ ...item, target: perResultTargets[i] })).filter((p) => p.target)
+      await onSubmit(routedPlan, null, sharedCaption || null, true)
+    } else {
+      await onSubmit(plan, targets, sharedCaption || null, false)
+    }
     setBusy(false)
   }
 
@@ -768,8 +816,10 @@ function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubm
       <div className="w-full max-w-3xl bg-[var(--surface)] rounded-xl border border-[var(--border)] max-h-[92vh] flex flex-col">
         <div className="px-6 py-4 border-b border-[var(--border)] flex items-center justify-between flex-shrink-0">
           <div>
-            <h2 className="text-lg font-bold">🚀 Bulk Schedule — {results.length} result × {targets.length || '?'} channel</h2>
-            <p className="text-[10px] text-[var(--muted)]">Drip-post antar waktu buat ngakalin rate limit per channel</p>
+            <h2 className="text-lg font-bold">
+              🚀 Bulk Schedule — {autoRoute ? `${autoRouteCount} post (auto-routed)` : `${results.length} result × ${targets.length || '?'} channel`}
+            </h2>
+            <p className="text-[10px] text-[var(--muted)]">{autoRoute ? 'Tiap result auto-route ke channel persona-nya' : 'Drip-post antar waktu buat ngakalin rate limit per channel'}</p>
           </div>
           <button onClick={onClose} className="text-[var(--muted)] hover:text-white">✕</button>
         </div>
@@ -869,7 +919,53 @@ function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubm
               className="w-full text-xs px-3 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] resize-y" />
           </div>
 
-          {/* CHANNELS */}
+          {/* ROUTING MODE — auto vs manual mirror */}
+          <div className="bg-[var(--surface2)]/40 border border-[var(--border)] rounded p-3 space-y-2">
+            <div className="text-[10px] uppercase text-[var(--muted)] font-semibold">🧭 Routing</div>
+            <label className="flex items-start gap-2 cursor-pointer p-2 rounded hover:bg-[var(--surface3)]/30">
+              <input type="radio" checked={autoRoute} onChange={() => setAutoRoute(true)} className="mt-0.5" />
+              <div className="flex-1">
+                <div className="text-xs font-semibold">✨ Auto-route per persona (recommended)</div>
+                <div className="text-[10px] text-[var(--muted2)]">Tiap result post ke channel persona-nya sendiri. 5 result = 5 post total.</div>
+                {autoRoute && (
+                  <div className="mt-2 space-y-0.5 max-h-32 overflow-auto bg-[var(--surface)] rounded p-2">
+                    {results.map((r, i) => {
+                      const t = perResultTargets?.[i]
+                      return (
+                        <div key={r.id} className="flex items-center justify-between text-[10px]">
+                          <span className="truncate flex-1">
+                            <span className="text-[var(--muted)]">#{i + 1}</span>{' '}
+                            <span className="font-semibold">{r.personas?.name || r.label}</span>
+                            {r.personas?.username && <span className="text-[var(--muted2)]"> @{r.personas.username}</span>}
+                          </span>
+                          {t ? (
+                            <span className="text-green-300 font-semibold">→ {t.platform} · {t.name}</span>
+                          ) : (
+                            <span className="text-red-400">⚠ gak ada channel</span>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+                {autoRoute && missingRoute.length > 0 && (
+                  <div className="mt-2 text-[10px] text-yellow-300 bg-yellow-500/10 border border-yellow-500/30 p-2 rounded">
+                    ⚠ {missingRoute.length} result gak punya channel terlink ke persona-nya. Result itu di-skip. Link persona ke channel di <a href="/posting" className="underline">/posting</a>.
+                  </div>
+                )}
+              </div>
+            </label>
+            <label className="flex items-start gap-2 cursor-pointer p-2 rounded hover:bg-[var(--surface3)]/30">
+              <input type="radio" checked={!autoRoute} onChange={() => setAutoRoute(false)} className="mt-0.5" />
+              <div className="flex-1">
+                <div className="text-xs font-semibold">🪞 Mirror to specific channels (manual)</div>
+                <div className="text-[10px] text-[var(--muted2)]">Pilih channel sendiri. Semua result post ke SEMUA channel terpilih (cross-product).</div>
+              </div>
+            </label>
+          </div>
+
+          {/* CHANNELS — only visible in manual mirror mode */}
+          {!autoRoute && (
           <div>
             <div className="flex items-center justify-between mb-2">
               <div className="text-[10px] uppercase text-[var(--muted)] font-semibold">🪞 Mirror to channels ({targets.length} selected)</div>
@@ -926,12 +1022,15 @@ function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubm
               </div>
             )}
           </div>
+          )}
 
           {/* SUMMARY */}
           <div className="bg-[var(--surface2)]/60 border border-[var(--border)] rounded p-3 text-xs">
             <div className="font-bold text-sm mb-1">📊 Summary</div>
             <div className="text-[var(--muted)]">
-              {results.length} result × {targets.length} channel = <b className="text-[var(--text)]">{totalPosts} total post</b>
+              {autoRoute
+                ? <>{autoRouteCount} post (auto-routed) = <b className="text-[var(--text)]">{totalPosts} total post</b></>
+                : <>{results.length} result × {targets.length} channel = <b className="text-[var(--text)]">{totalPosts} total post</b></>}
               {mode === 'drip' && plan.length > 1 && (
                 <> · tersebar selama <b className="text-[var(--text)]">{Math.round((plan.length - 1) * dripGapMin / 60 * 10) / 10}h</b></>
               )}
