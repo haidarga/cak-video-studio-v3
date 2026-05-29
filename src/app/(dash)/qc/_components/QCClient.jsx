@@ -125,10 +125,13 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
       setConverting(null)
     }
   }
-  // Heuristic: a result needs conversion if its URL ends in .webm. We
-  // could also fetch HEAD and check Content-Type, but the extension is
-  // reliable here because our upload code sets it explicitly.
-  function isWebm(r) { return r.type === 'video' && /\.webm($|\?)/i.test(r.url || '') }
+  // Show the re-encode button on EVERY video result — not just WebM.
+  // Reason: older MP4 results in QC are still 720p / low-bitrate from
+  // the pre-1080p pipeline. One click upscales them to 1080p via the
+  // same convert function. WebM gets the BIGGEST quality win (also
+  // becomes Postiz-compatible); existing MP4 still benefits from the
+  // 1080p upscale + higher bitrate re-encode.
+  function isWebm(r) { return r.type === 'video' && !!r.url }
 
   async function uploadExternal(persona, file) {
     setErr('')
@@ -412,8 +415,8 @@ const QCCard = memo(function QCCard({ result: r, onSetStatus, onRemove, onOpenNo
         {r.meta?.source === 'editor' && (
           <span className="absolute bottom-1.5 left-1.5 px-1.5 py-0.5 rounded text-[8px] font-bold bg-cyan-500/30 text-cyan-200 border border-cyan-500/40">✂️ EDIT</span>
         )}
-        {isWebm && (
-          <span className="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded text-[8px] font-bold bg-yellow-500/30 text-yellow-200 border border-yellow-500/40" title="WebM tidak diterima Postiz — klik 🔄 convert">
+        {isWebm && /\.webm($|\?)/i.test(r.url || '') && (
+          <span className="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded text-[8px] font-bold bg-yellow-500/30 text-yellow-200 border border-yellow-500/40" title="WebM tidak diterima Postiz — klik 🔁 re-encode">
             ⚠ WEBM
           </span>
         )}
@@ -454,9 +457,10 @@ const QCCard = memo(function QCCard({ result: r, onSetStatus, onRemove, onOpenNo
             <a href="/scheduled" className="flex-1 text-[10px] px-1.5 py-1 rounded bg-green-500/20 hover:bg-green-500/30 text-green-300 text-center font-semibold">📅</a>
           )}
           {isWebm && (
-            <button onClick={onConvertToMp4} disabled={!!converting} title="Convert WebM → MP4 biar Postiz terima"
+            <button onClick={onConvertToMp4} disabled={!!converting}
+              title="Re-encode video di 1080p — upscale + Postiz-compatible MP4"
               className="text-[10px] px-1.5 py-1 rounded bg-yellow-500/30 hover:bg-yellow-500/50 text-yellow-200 border border-yellow-500/40 font-semibold disabled:opacity-50">
-              🔄 MP4
+              🔁 1080p
             </button>
           )}
           <button onClick={() => onRemove(r.id)} title="Keluarin dari QC" className="text-[10px] px-1.5 py-1 rounded text-[var(--muted)] hover:bg-[var(--surface)]">✕</button>
