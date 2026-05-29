@@ -49,7 +49,12 @@ async function getFFmpeg(onLog) {
     const { toBlobURL } = await import('@ffmpeg/util')
     const ff = new FFmpeg()
     if (onLog) ff.on('log', ({ message }) => onLog(message))
-    const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd'
+    // Self-hosted in /public/ffmpeg so we don't depend on the unpkg.com CDN.
+    // Same-origin = no CORS, no third-party outage risk, much faster than
+    // unpkg cold-cache fetches. ffmpeg.wasm still needs the WASM file
+    // wrapped in a blob URL because some browsers reject .wasm with the
+    // wrong MIME for cross-thread loading inside the worker.
+    const baseURL = '/ffmpeg'
     await ff.load({
       coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
       wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),

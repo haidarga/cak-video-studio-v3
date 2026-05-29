@@ -841,20 +841,20 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
           <button onClick={saveProject} disabled={saving || project.video_clips.length === 0} className="px-3 py-1.5 text-xs rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)] disabled:opacity-50">
             {saving ? '⏳ Save...' : '💾 Save'}
           </button>
-          {/* Two-button export: Fast (canvas WebM) for speed, MP4 for compatibility.
-              Fast records the preview in real-time — a 5s clip exports in ~5s with
-              no ffmpeg.wasm download. MP4 needs the 30MB wasm bundle + transcode
-              (~30-60s first export). Both go through the same renderer + auto-upload
-              to /qc. */}
-          <button onClick={() => exportVideo('fast')} disabled={exporting || project.video_clips.length === 0}
-            title="Canvas WebM — real-time, no ffmpeg load. Fastest. WebM uploads fine to TikTok/IG/YouTube."
-            className="px-4 py-1.5 text-xs font-bold rounded bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-50">
-            {exporting ? `⏳ Rendering...` : `⚡ Fast Export → QC (${totalDur.toFixed(1)}s)`}
-          </button>
+          {/* Primary = MP4 (ffmpeg.wasm). Preserves source video stream — no
+              double-encode, no canvas drawImage resample, constant frame rate.
+              Slower (30-60s for first export, ~10-20s after wasm caches) but
+              quality MATCHES the source clips. Fast is kept as a secondary
+              "draft" option for quick QC previews where quality doesn't matter. */}
           <button onClick={() => exportVideo('mp4')} disabled={exporting || project.video_clips.length === 0}
-            title="ffmpeg.wasm MP4 — slower first time (downloads ~30MB), max compatibility"
+            title="ffmpeg.wasm MP4 — preserves source video quality, constant frame rate. Use for anything you actually post."
+            className="px-4 py-1.5 text-xs font-bold rounded bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-50">
+            {exporting ? `⏳ Rendering...` : `🎬 Export → QC (${totalDur.toFixed(1)}s)`}
+          </button>
+          <button onClick={() => exportVideo('fast')} disabled={exporting || project.video_clips.length === 0}
+            title="Canvas real-time — fastest but re-encodes everything (quality loss + frame-drop risk). Draft only."
             className="px-3 py-1.5 text-xs font-semibold rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)] disabled:opacity-50">
-            MP4 (slow)
+            ⚡ Draft (fast)
           </button>
         </div>
       </div>
