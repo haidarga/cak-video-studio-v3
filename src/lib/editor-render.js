@@ -807,13 +807,13 @@ export async function renderWithCanvas(project, onProgress) {
           alpha = p
         }
       }
-      // User scale = pure visual zoom. We wrap text at the BASE font size,
-      // then apply scale via ctx.translate + ctx.scale so the whole
-      // text+bg block zooms uniformly — exactly what CSS transform: scale()
-      // does in the preview. Wrap pattern stays put when user adjusts scale,
-      // so preview and export agree on line breaks.
+      // User scale baked into the font size so wrap runs at the VISUAL size
+      // and text always stays inside the 85% safe area. Matches the CSS
+      // preview (which now also bakes scale into fontSize). Trade-off: scale
+      // affects wrap (bigger scale = fewer words per line) — only sane way
+      // to keep both WYSIWYG and no-overflow.
       const userScale = c.scale ?? 1
-      const fontSize = c.size * (W / 720) * popScale
+      const fontSize = c.size * (W / 720) * popScale * userScale
       ctx.globalAlpha = alpha
       // Font family resolved from FONT_OPTIONS (shared with EditorClient). The
       // Google Font <link> is injected on the editor page so loaded families
@@ -828,23 +828,18 @@ export async function renderWithCanvas(project, onProgress) {
       const lineHeight = fontSize * 1.25
       const totalH = lines.length * lineHeight
       const padding = fontSize * 0.3
-      // Coords are RELATIVE to (x, y) because we're about to translate+scale.
-      const firstLineYRel = -totalH / 2 + lineHeight / 2
+      const firstLineY = y - totalH / 2 + lineHeight / 2
 
-      ctx.save()
-      ctx.translate(x, y)
-      ctx.scale(userScale, userScale)
-
-      // Background pill — spans all lines, width = widest line.
+      // Background pill — spans ALL lines, width = widest line.
       if (c.bg && c.bg !== 'transparent') {
         const maxLineW = Math.max(...lines.map((l) => ctx.measureText(l).width))
         const bgW = maxLineW + padding * 2
         const bgH = totalH + padding * 0.6
-        let bgX = 0
-        if (c.align === 'center') bgX = -bgW / 2
-        else if (c.align === 'right') bgX = -bgW
+        let bgX = x
+        if (c.align === 'center') bgX = x - bgW / 2
+        else if (c.align === 'right') bgX = x - bgW
         ctx.fillStyle = c.bg
-        ctx.fillRect(bgX, firstLineYRel - lineHeight / 2 - padding * 0.3, bgW, bgH)
+        ctx.fillRect(bgX, firstLineY - lineHeight / 2 - padding * 0.3, bgW, bgH)
       }
 
       // Effects render order per LINE: glow underneath → shadow → stroke → fill.
@@ -854,7 +849,7 @@ export async function renderWithCanvas(project, onProgress) {
       const sizeScale = fontSize / 56 // effects sliders calibrated against 56px base
 
       for (let li = 0; li < lines.length; li++) {
-        const lineY = firstLineYRel + li * lineHeight
+        const lineY = firstLineY + li * lineHeight
         const lineText = lines[li]
         if (!lineText) continue
 
@@ -864,7 +859,7 @@ export async function renderWithCanvas(project, onProgress) {
           ctx.shadowBlur = eff.glow.blur * sizeScale * 2
           ctx.fillStyle = c.color
           // 3 stacked passes = visible halo at canvas resolution.
-          for (let i = 0; i < 3; i++) ctx.fillText(lineText, 0, lineY)
+          for (let i = 0; i < 3; i++) ctx.fillText(lineText, x, lineY)
           ctx.restore()
         }
         // Drop shadow via canvas shadow* — applied to the fill below.
@@ -885,12 +880,11 @@ export async function renderWithCanvas(project, onProgress) {
           ctx.strokeStyle = eff.stroke.color
           ctx.lineJoin = 'round'
           ctx.miterLimit = 2
-          ctx.strokeText(lineText, 0, lineY)
+          ctx.strokeText(lineText, x, lineY)
         }
         ctx.fillStyle = c.color
-        ctx.fillText(lineText, 0, lineY)
+        ctx.fillText(lineText, x, lineY)
       }
-      ctx.restore() // pops the translate+scale
       ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0
       ctx.globalAlpha = 1
     })
