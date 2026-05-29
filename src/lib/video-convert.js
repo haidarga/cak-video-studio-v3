@@ -41,10 +41,31 @@ export async function convertVideoToMp4(url, onProgress) {
     await new Promise((res) => { video.oncanplay = res })
   }
 
+  // Upscale to 1080p for the dominant axis — matches TikTok / IG native
+  // presentation. Source 720p video gets bicubic-upscaled by the canvas
+  // drawImage, which is way smoother than TikTok's upscale would be.
+  // Aspect preserved from source.
+  const srcW = video.videoWidth || 720
+  const srcH = video.videoHeight || 1280
+  const targetMin = 1080
+  let outW, outH
+  if (srcW >= srcH) {
+    outW = Math.max(targetMin * (srcW / srcH), targetMin)
+    outH = targetMin
+  } else {
+    outW = targetMin
+    outH = Math.max(targetMin * (srcH / srcW), targetMin)
+  }
+  outW = Math.round(outW); outH = Math.round(outH)
+  // Already-1080p sources pass through 1:1.
+  if (srcW >= outW && srcH >= outH) { outW = srcW; outH = srcH }
+
   const canvas = document.createElement('canvas')
-  canvas.width = video.videoWidth || 720
-  canvas.height = video.videoHeight || 1280
+  canvas.width = outW
+  canvas.height = outH
   const ctx = canvas.getContext('2d')
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
 
   // Build a MediaStream from canvas (video) + audio (via AudioContext).
   // 60 fps capture ceiling for smoother motion through TikTok's re-encode.

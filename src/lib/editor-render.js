@@ -518,7 +518,11 @@ export async function renderWithFFmpeg(project, onProgress) {
   }
 
   const ar = project.ar || '9:16'
-  const [W, H] = ar === '16:9' ? [1280, 720] : ar === '1:1' ? [1080, 1080] : [720, 1280]
+  // 1080p output dims — match TikTok / IG Reels native presentation size.
+  // Was 720p; their re-encode pipeline upscales 720→1080 which adds
+  // softness + blocking artifacts. Feeding 1080p source means no
+  // upscale, way cleaner result.
+  const [W, H] = ar === '16:9' ? [1920, 1080] : ar === '1:1' ? [1080, 1080] : [1080, 1920]
 
   // Write ASS subtitle file if karaoke clips exist
   const karaokeClips = (project.text_clips || []).filter((c) => c.animation === 'karaoke' && Array.isArray(c.words) && c.words.length > 0)
@@ -565,7 +569,9 @@ export async function renderWithCanvas(project, onProgress) {
   if (base.length === 0) throw new Error('Belum ada video di base track')
 
   const ar = project.ar || '9:16'
-  const [W, H] = ar === '16:9' ? [1280, 720] : ar === '1:1' ? [1080, 1080] : [720, 1280]
+  // 1080p output — matches TikTok / IG Reels native presentation size.
+  // Was 720p; their pipeline upscaled 720→1080 with visible softness.
+  const [W, H] = ar === '16:9' ? [1920, 1080] : ar === '1:1' ? [1080, 1080] : [1080, 1920]
   const canvas = document.createElement('canvas')
   canvas.width = W; canvas.height = H
   const ctx = canvas.getContext('2d')
@@ -661,11 +667,11 @@ export async function renderWithCanvas(project, onProgress) {
   const baseVideos = baseMedia.map((m) => m.v)
   const overlayVideos = overlayMedia.map((m) => m.v)
 
-  // captureStream(60) doubles frame rate vs 30 — smoother motion in the export,
-  // critical because TikTok / IG re-encode aggressively and any source jitter
-  // gets amplified by their compressor. The browser still emits whatever real
-  // frame rate the draw loop produces; 60 is just the ceiling.
-  const stream = canvas.captureStream(60)
+  // captureStream(30) — matches TikTok / IG's playback frame rate. 60fps was
+  // tested but caused frame drops on slower machines (the draw loop couldn't
+  // keep up at 1080p, MediaRecorder recorded variable timing, output stuttered
+  // on TikTok). 30fps is rock-solid + TikTok's player resamples 60→30 anyway.
+  const stream = canvas.captureStream(30)
   const audioCtx = new (window.AudioContext || window.webkitAudioContext)()
   const dest = audioCtx.createMediaStreamDestination()
   // Route each clip: cloned audio takes priority over native, gain set to clip.volume
