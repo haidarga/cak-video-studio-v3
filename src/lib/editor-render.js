@@ -59,8 +59,25 @@ async function getFFmpeg(onLog) {
   return ffmpegLoading
 }
 
+// Route cross-origin fetches through our /api/proxy so the response gains a
+// Cross-Origin-Resource-Policy header. Required because /editor sets
+// COEP=require-corp (for ffmpeg.wasm's SharedArrayBuffer). fal.media and
+// Supabase storage don't set CORP, so a direct fetch is blocked with
+// ERR_BLOCKED_BY_RESPONSE.NotSameOriginAfterDefaultedToSameOriginByCoep.
+// Same-origin URLs (/editor relative, blob:, data:) are left alone.
+function proxify(url) {
+  if (!url || typeof url !== 'string') return url
+  if (url.startsWith('blob:') || url.startsWith('data:')) return url
+  try {
+    const u = new URL(url, typeof window !== 'undefined' ? window.location.href : 'https://x.local')
+    if (typeof window !== 'undefined' && u.origin === window.location.origin) return url
+    return `/api/proxy?url=${encodeURIComponent(url)}`
+  } catch { return url }
+}
+
 async function fetchToUint8(url) {
-  const res = await fetch(url, { cache: 'no-store' })
+  const target = proxify(url)
+  const res = await fetch(target, { cache: 'no-store' })
   if (!res.ok) throw new Error(`fetch ${url.slice(-40)} -> ${res.status}`)
   return new Uint8Array(await res.arrayBuffer())
 }
@@ -568,10 +585,13 @@ export async function renderWithCanvas(project, onProgress) {
   canvas.width = W; canvas.height = H
   const ctx = canvas.getContext('2d')
 
+  // All src URLs run through proxify() so they're same-origin from the
+  // browser's POV — COEP=require-corp blocks cross-origin fetches without
+  // CORP, and fal.media / Supabase storage don't send CORP.
   const overlayImages = await Promise.all((project.image_clips || []).map(async (c) => {
     const img = new Image()
     img.crossOrigin = 'anonymous'
-    img.src = c.src_url
+    img.src = proxify(c.src_url)
     await new Promise((res, rej) => { img.onload = res; img.onerror = rej })
     return img
   }))
@@ -579,7 +599,7 @@ export async function renderWithCanvas(project, onProgress) {
   let musicEl = null
   const firstAudio = (project.audio_clips || [])[0]
   if (firstAudio?.src_url) {
-    musicEl = new Audio(firstAudio.src_url)
+    musicEl = new Audio(proxify(firstAudio.src_url))
     musicEl.crossOrigin = 'anonymous'
     musicEl.volume = firstAudio.volume ?? 0.3
     await new Promise((res, rej) => { musicEl.oncanplay = res; musicEl.onerror = () => rej(new Error('Music load failed')) })
@@ -590,7 +610,7 @@ export async function renderWithCanvas(project, onProgress) {
   // and mute the video — the cloned voice takes its place in the mix.
   async function loadClipMedia(c) {
     const v = document.createElement('video')
-    v.src = c.src_url; v.crossOrigin = 'anonymous'
+    v.src = proxify(c.src_url); v.crossOrigin = 'anonymous'
     const wantsCloned = c.cloned_audio_url && c.use_cloned_voice !== false
     v.muted = !!wantsCloned // mute native when cloned voice is in play
     v.playbackRate = c.speed || 1
@@ -598,7 +618,7 @@ export async function renderWithCanvas(project, onProgress) {
     let cloned = null
     if (wantsCloned) {
       cloned = document.createElement('audio')
-      cloned.src = c.cloned_audio_url; cloned.crossOrigin = 'anonymous'
+      cloned.src = proxify(c.cloned_audio_url); cloned.crossOrigin = 'anonymous'
       cloned.preload = 'auto'
       try { await new Promise((res, rej) => { cloned.oncanplay = res; cloned.onerror = () => rej(new Error('Cloned audio load failed')) }) } catch {}
     }
