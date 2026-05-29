@@ -65,6 +65,28 @@ const DEFAULT_PROJECT = {
 
 function uid() { return Math.random().toString(36).slice(2, 10) }
 
+// Pick the lowest track_idx where a new clip [start, end] doesn't overlap any
+// existing clip on that track. Lets multiple text/image/audio overlays stack
+// VISUALLY in the timeline on separate rows instead of crashing into one
+// confusing pile, while still rendering layered in the preview.
+//   getStart/getEnd extract the time bounds from a clip — audio uses
+//   start + duration, text/image use start/end directly.
+function pickTrackIdx(clips, start, end, getStart, getEnd) {
+  for (let idx = 0; idx < 20; idx++) {
+    const conflict = clips.some((c) => {
+      if ((c.track_idx || 0) !== idx) return false
+      return !(getEnd(c) <= start || getStart(c) >= end)
+    })
+    if (!conflict) return idx
+  }
+  return 19 // safety cap so a runaway pile doesn't pin the UI
+}
+const _bounds = {
+  text: { s: (c) => c.start, e: (c) => c.end },
+  image: { s: (c) => c.start, e: (c) => c.end },
+  audio: { s: (c) => c.start, e: (c) => c.start + c.duration },
+}
+
 function normalizeProject(raw) {
   if (!raw) return DEFAULT_PROJECT
   // v4 native (has track_idx + in_track)
@@ -267,15 +289,20 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
   }
 
   function addTextClip() {
-    const c = {
-      id: uid(), kind: 'text', text: 'Tap to edit',
-      start: Math.max(0, currentTime), end: Math.min(totalDur || 5, (currentTime || 0) + 2),
-      x_pct: 50, y_pct: 80, size: 48, color: '#ffffff', weight: 700, font: DEFAULT_FONT,
-      bg: 'rgba(0,0,0,0.6)', align: 'center', animation: 'fade',
-      effects: DEFAULT_EFFECTS,
-    }
-    patch((p) => ({ ...p, text_clips: [...p.text_clips, c] }))
-    setSelected({ kind: 'text', id: c.id })
+    const start = Math.max(0, currentTime)
+    const end = Math.min(totalDur || 5, (currentTime || 0) + 2)
+    patch((p) => {
+      const track_idx = pickTrackIdx(p.text_clips, start, end, _bounds.text.s, _bounds.text.e)
+      const c = {
+        id: uid(), kind: 'text', text: 'Tap to edit',
+        start, end, track_idx,
+        x_pct: 50, y_pct: 80, size: 48, color: '#ffffff', weight: 700, font: DEFAULT_FONT,
+        bg: 'rgba(0,0,0,0.6)', align: 'center', animation: 'fade',
+        effects: DEFAULT_EFFECTS,
+      }
+      setSelected({ kind: 'text', id: c.id })
+      return { ...p, text_clips: [...p.text_clips, c] }
+    })
   }
 
   async function onImageFile(e) {
@@ -286,13 +313,18 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
       const { error: upErr } = await supabase.storage.from('refs').upload(path, f, { contentType: f.type })
       if (upErr) throw upErr
       const { data: { publicUrl } } = supabase.storage.from('refs').getPublicUrl(path)
-      const c = {
-        id: uid(), kind: 'image', src_url: publicUrl, src_name: f.name,
-        start: currentTime, end: Math.min(totalDur || 5, currentTime + 3),
-        x_pct: 90, y_pct: 10, w_pct: 15, opacity: 1,
-      }
-      patch((p) => ({ ...p, image_clips: [...p.image_clips, c] }))
-      setSelected({ kind: 'image', id: c.id })
+      const start = currentTime
+      const end = Math.min(totalDur || 5, currentTime + 3)
+      patch((p) => {
+        const track_idx = pickTrackIdx(p.image_clips, start, end, _bounds.image.s, _bounds.image.e)
+        const c = {
+          id: uid(), kind: 'image', src_url: publicUrl, src_name: f.name,
+          start, end, track_idx,
+          x_pct: 90, y_pct: 10, w_pct: 15, opacity: 1,
+        }
+        setSelected({ kind: 'image', id: c.id })
+        return { ...p, image_clips: [...p.image_clips, c] }
+      })
     } catch (e) { setErr('Upload image: ' + e.message) }
   }
 
@@ -335,7 +367,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
       const { error: upErr } = await supabase.storage.from('refs').upload(path, f, { contentType: f.type })
       if (upErr) throw upErr
       const { data: { publicUrl } } = supabase.storage.from('refs').getPublicUrl(path)
-      const c = { id: uid(), kind: 'audio', src_url: publicUrl, src_name: f.name, start: 0, duration: totalDur || 15, volume: 0.3 }
+      const c = { id: uid(), kind: 'audio', src_url: publicUrl, src_name: f.name, start: 0, duration: totalDur || 15, volume: 0.3, track_idx: 0 }
       patch({ audio_clips: [c] })
       setSelected({ kind: 'audio', id: c.id })
     } catch (e) { setErr('Upload audio: ' + e.message) }
@@ -359,16 +391,24 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
         if (!data.ok) throw new Error(`Clip ${i + 1}: ${data.error}`)
         if (!data.segments?.length) continue
         const offset = clip.in_track || 0
-        const clipsForThis = data.segments.map((s) => ({
-          id: uid(), kind: 'text', text: s.text.toUpperCase(),
-          start: offset + s.start, end: offset + s.end,
-          x_pct: 50, y_pct: 75, size: 56, color: '#ffffff', weight: 900, font: DEFAULT_FONT,
-          bg: 'rgba(0,0,0,0.85)', align: 'center', effects: EFFECT_PRESETS.tiktok,
-          animation: karaoke ? 'karaoke' : 'fade',
-          // Karaoke: per-word data for highlight
-          words: karaoke && s.words ? s.words.map((w) => ({ ...w, start: offset + w.start, end: offset + w.end })) : null,
-        }))
-        allNewClips.push(...clipsForThis)
+        const clipsForThis = data.segments.map((s) => {
+          const start = offset + s.start
+          const end = offset + s.end
+          // Track-assign against ALL accumulated clips so subsequent clips
+          // land beside, not on top of, earlier auto-sub batches.
+          const track_idx = pickTrackIdx(allNewClips, start, end, _bounds.text.s, _bounds.text.e)
+          const c = {
+            id: uid(), kind: 'text', text: s.text.toUpperCase(),
+            start, end, track_idx,
+            x_pct: 50, y_pct: 75, size: 56, color: '#ffffff', weight: 900, font: DEFAULT_FONT,
+            bg: 'rgba(0,0,0,0.85)', align: 'center', effects: EFFECT_PRESETS.tiktok,
+            animation: karaoke ? 'karaoke' : 'fade',
+            // Karaoke: per-word data for highlight
+            words: karaoke && s.words ? s.words.map((w) => ({ ...w, start: offset + w.start, end: offset + w.end })) : null,
+          }
+          allNewClips.push(c) // push as we go so next clip sees this one for collision check
+          return c
+        })
       }
       patch((p) => ({ ...p, text_clips: [...p.text_clips, ...allNewClips] }))
       setTranscribeProgress(`✓ Generated ${allNewClips.length} subtitle clips dari ${baseClips.length} base clip${baseClips.length > 1 ? 's' : ''}${karaoke ? ' (karaoke)' : ''}`)
@@ -1230,40 +1270,64 @@ function Timeline({ project, baseClips, overlayList, overlayTrackIdxs, totalDur,
           </div>
         </div>
 
-        {/* Overlay tracks (image/text/audio) */}
+        {/* Overlay tracks (image/text/audio). Each kind splits into MULTIPLE
+            rows by track_idx so clips that overlap in TIME render on separate
+            visual rows — no more crashing into a confusing pile of bars.
+            Auto-collapses to 1 row when only track 0 is in use. */}
         {[
           { kind: 'image', label: '🖼 img', color: 'bg-blue-900/20', pillBg: 'bg-blue-600' },
           { kind: 'text', label: '📝 txt', color: 'bg-purple-900/20', pillBg: 'bg-purple-600' },
           { kind: 'audio', label: '🎵 aud', color: 'bg-orange-900/20', pillBg: 'bg-orange-600' },
         ].map((trk) => {
-          const items = trk.kind === 'audio'
+          const raw = trk.kind === 'audio'
             ? (project.audio_clips || []).map((c) => ({ ...c, end: c.start + c.duration }))
             : (project[`${trk.kind}_clips`] || [])
+          // Group by track_idx, sort ascending. Always show at least row 0 so
+          // empty tracks still display a labelled lane (user can drop a clip).
+          const trackMap = new Map()
+          raw.forEach((c) => {
+            const t = c.track_idx || 0
+            if (!trackMap.has(t)) trackMap.set(t, [])
+            trackMap.get(t).push(c)
+          })
+          if (!trackMap.has(0)) trackMap.set(0, [])
+          const trackIdxs = Array.from(trackMap.keys()).sort((a, b) => a - b)
           return (
-            <div key={trk.kind} className="flex items-center gap-2 mb-1">
-              <div className="w-14 text-[9px] text-[var(--muted)] font-semibold flex-shrink-0">{trk.label}</div>
-              <div className={`relative flex-1 h-6 ${trk.color} rounded`}>
-                {items.map((c) => {
-                  const isSel = selected?.kind === trk.kind && selected.id === c.id
-                  return (
-                    <div key={c.id}
-                      onMouseDown={(e) => { startDrag(e, 'clipMove', trk.kind, c.id); onSelect({ kind: trk.kind, id: c.id }) }}
-                      onClick={(e) => { e.stopPropagation(); onSelect({ kind: trk.kind, id: c.id }) }}
-                      className={`absolute top-0.5 bottom-0.5 rounded text-[9px] text-white font-semibold flex items-center px-1.5 cursor-grab overflow-hidden ${trk.pillBg} ${isSel ? 'ring-2 ring-white' : ''}`}
-                      style={{ left: `${timeToPct(c.start)}%`, width: `${Math.max(2, timeToPct(c.end - c.start))}%` }}>
-                      {/* Audio: render waveform in background */}
-                      {trk.kind === 'audio' && c.src_url && (
-                        <div className="absolute inset-0 opacity-50 pointer-events-none">
-                          <AudioWaveform url={c.src_url} color="rgba(255,255,255,0.7)" />
-                        </div>
-                      )}
-                      <div onMouseDown={(e) => startDrag(e, 'clipStart', trk.kind, c.id)} className="absolute left-0 top-0 bottom-0 w-1.5 bg-white/30 cursor-ew-resize rounded-l z-10" />
-                      <div onMouseDown={(e) => startDrag(e, 'clipEnd', trk.kind, c.id)} className="absolute right-0 top-0 bottom-0 w-1.5 bg-white/30 cursor-ew-resize rounded-r z-10" />
-                      <span className="truncate px-1 relative z-10">{trk.kind === 'text' ? `📝 ${c.text?.slice(0, 10)}` : trk.kind === 'image' ? `🖼 ${c.src_name?.slice(0, 10)}` : `🎵 ${c.src_name?.slice(0, 10)}`}</span>
+            <div key={trk.kind} className="space-y-0.5 mb-1">
+              {trackIdxs.map((trkIdx, rowI) => {
+                const items = trackMap.get(trkIdx)
+                const isFirstRow = rowI === 0
+                return (
+                  <div key={`${trk.kind}-${trkIdx}`} className="flex items-center gap-2">
+                    <div className="w-14 text-[9px] text-[var(--muted)] font-semibold flex-shrink-0">
+                      {isFirstRow ? trk.label : ''}
+                      {trackIdxs.length > 1 && <span className="ml-1 opacity-60">{trkIdx}</span>}
                     </div>
-                  )
-                })}
-              </div>
+                    <div className={`relative flex-1 h-6 ${trk.color} rounded`}>
+                      {items.map((c) => {
+                        const isSel = selected?.kind === trk.kind && selected.id === c.id
+                        return (
+                          <div key={c.id}
+                            onMouseDown={(e) => { startDrag(e, 'clipMove', trk.kind, c.id); onSelect({ kind: trk.kind, id: c.id }) }}
+                            onClick={(e) => { e.stopPropagation(); onSelect({ kind: trk.kind, id: c.id }) }}
+                            className={`absolute top-0.5 bottom-0.5 rounded text-[9px] text-white font-semibold flex items-center px-1.5 cursor-grab overflow-hidden ${trk.pillBg} ${isSel ? 'ring-2 ring-white' : ''}`}
+                            style={{ left: `${timeToPct(c.start)}%`, width: `${Math.max(2, timeToPct(c.end - c.start))}%` }}>
+                            {/* Audio: render waveform in background */}
+                            {trk.kind === 'audio' && c.src_url && (
+                              <div className="absolute inset-0 opacity-50 pointer-events-none">
+                                <AudioWaveform url={c.src_url} color="rgba(255,255,255,0.7)" />
+                              </div>
+                            )}
+                            <div onMouseDown={(e) => startDrag(e, 'clipStart', trk.kind, c.id)} className="absolute left-0 top-0 bottom-0 w-1.5 bg-white/30 cursor-ew-resize rounded-l z-10" />
+                            <div onMouseDown={(e) => startDrag(e, 'clipEnd', trk.kind, c.id)} className="absolute right-0 top-0 bottom-0 w-1.5 bg-white/30 cursor-ew-resize rounded-r z-10" />
+                            <span className="truncate px-1 relative z-10">{trk.kind === 'text' ? `📝 ${c.text?.slice(0, 10)}` : trk.kind === 'image' ? `🖼 ${c.src_name?.slice(0, 10)}` : `🎵 ${c.src_name?.slice(0, 10)}`}</span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           )
         })}
