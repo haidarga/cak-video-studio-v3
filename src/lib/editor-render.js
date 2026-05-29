@@ -245,12 +245,23 @@ function videoClipFilter(c, label) {
 function audioClipFilter(c, label) {
   const speed = c.speed || 1
   const vol = c.volume ?? 1
-  const tempos = []
-  let s = speed
-  while (s < 0.5) { tempos.push('atempo=0.5'); s /= 0.5 }
-  while (s > 2.0) { tempos.push('atempo=2.0'); s /= 2.0 }
-  tempos.push(`atempo=${s.toFixed(4)}`)
-  return `atrim=start=${c.src_in}:end=${c.src_out},asetpts=PTS-STARTPTS,${tempos.join(',')},volume=${vol.toFixed(2)}${label}`
+  // Build filter chain — SKIP atempo + volume when at default values. Even
+  // identity filters (atempo=1.0, volume=1.0) can introduce subtle resampling
+  // artifacts which compounded across concat sound like noise on playback.
+  const filters = [
+    `atrim=start=${c.src_in || 0}:end=${c.src_out}`,
+    'asetpts=PTS-STARTPTS',
+  ]
+  if (Math.abs(speed - 1) > 0.001) {
+    let s = speed
+    while (s < 0.5) { filters.push('atempo=0.5'); s /= 0.5 }
+    while (s > 2.0) { filters.push('atempo=2.0'); s /= 2.0 }
+    filters.push(`atempo=${s.toFixed(4)}`)
+  }
+  if (Math.abs(vol - 1) > 0.001) {
+    filters.push(`volume=${vol.toFixed(2)}`)
+  }
+  return filters.join(',') + label
 }
 
 // Collect clips whose audio should be replaced by a cloned voice track.
@@ -570,9 +581,10 @@ export async function renderWithFFmpeg(project, onProgress) {
     // inconsistent frame timestamps and renders it as stutter. CFR fixes it.
     '-r', '30', '-fps_mode', 'cfr',
     // Audio: 192k AAC at standard 48kHz so TikTok/IG don't re-resample.
+    // NO -async 1 — it caused audible noise / pitch artifacts by force-stretching
+    // audio when filter graph introduced tiny timing diffs. Let ffmpeg sync
+    // naturally; filter chain (atrim + asetpts + concat) already handles timing.
     '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
-    // -async 1 keeps audio in sync if filter graph introduces tiny drift.
-    '-async', '1',
     '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
     '-y', 'output.mp4'
   )
