@@ -574,27 +574,46 @@ export async function renderWithCanvas(project, onProgress) {
   // measured. Without this, ctx.measureText() runs against whatever font
   // happens to be available at that instant — usually system-ui because
   // Poppins/Bebas/etc are still streaming in the background. system-ui's
-  // glyphs are narrower than the intended font, so wrap calc underestimates
-  // line widths, the text fails to break where it should, and the export
-  // ends up with one fat line that overshoots the frame. CSS preview
-  // doesn't hit this because the browser relays out automatically once
-  // each font lands. Canvas only measures once per render call.
+  // glyphs are 10-15% narrower than the intended font, so wrap calc
+  // under-estimates line widths and the text fails to break where it
+  // should. CSS preview doesn't hit this because the browser relays out
+  // automatically once each font lands. Canvas only measures once.
+  //
+  // CRITICAL: must load the EXACT (family, weight) combos the clips use.
+  // document.fonts.load('700 48px Poppins') does NOT pre-load weight 600
+  // — Google Fonts ships each weight as a separate font face. We collect
+  // every (family, weight) pair used in the project and load them all.
   try {
-    if (document.fonts && document.fonts.ready) {
+    if (document.fonts && document.fonts.load) {
       onProgress?.('Loading fonts...')
-      // Force-load each unique family used by text clips so document.fonts
-      // .ready actually resolves with them present, not just whatever was
-      // already cached.
-      const families = new Set()
+      const pairs = new Set() // "family|weight" strings, deduped
       ;(project.text_clips || []).forEach((c) => {
         const css = c.font ? getFontCss(c.font) : 'system-ui'
         const primary = css.split(',')[0].trim().replace(/^"|"$/g, '')
-        if (primary && primary !== 'system-ui' && primary !== 'sans-serif') families.add(primary)
+        if (!primary || primary === 'system-ui' || primary === 'sans-serif' || primary === 'Impact') return
+        const weight = c.weight || 400
+        pairs.add(`${primary}|${weight}`)
       })
-      await Promise.all(Array.from(families).map((fam) =>
-        document.fonts.load(`700 48px "${fam}"`).catch(() => {}),
-      ))
-      await document.fonts.ready
+      await Promise.all(Array.from(pairs).map((p) => {
+        const [fam, weight] = p.split('|')
+        return document.fonts.load(`${weight} 48px "${fam}"`).catch(() => {})
+      }))
+      // document.fonts.ready waits for ALL pending loads to complete, not
+      // just ours — handles the case where the editor page is still
+      // streaming fonts from the <link> tag.
+      if (document.fonts.ready) await document.fonts.ready
+      // Sanity check: if any (family, weight) we asked for isn't actually
+      // loaded, the wrap calc will be wrong. Small extra wait helps in
+      // rare race cases. document.fonts.check() returns true/false without
+      // triggering a load.
+      const unloaded = Array.from(pairs).filter((p) => {
+        const [fam, weight] = p.split('|')
+        return !document.fonts.check(`${weight} 48px "${fam}"`)
+      })
+      if (unloaded.length) {
+        onProgress?.(`Waiting for ${unloaded.length} font(s)...`)
+        await new Promise((r) => setTimeout(r, 400))
+      }
     }
   } catch { /* non-fatal — fall back to whatever's loaded */ }
 
