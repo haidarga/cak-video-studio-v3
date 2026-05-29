@@ -1019,18 +1019,21 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                   }
                   // Karaoke: highlight current word(s) in different color
                   const isKaraoke = c.animation === 'karaoke' && Array.isArray(c.words) && c.words.length > 0
-                  // Scale baked into fontSize so the CSS wrap calculation runs
-                  // against the VISUAL size — matches canvas export (which
-                  // also wraps at visual size). Was previously a transform:
-                  // scale() that ran AFTER layout, so preview and export
-                  // disagreed on line breaks at scale != 1.
+                  // Scale = pure visual zoom via CSS transform. Wrap calculation
+                  // runs at base fontSize, then the whole laid-out block (text
+                  // + bg pill) gets scaled uniformly. Canvas render mirrors this
+                  // by wrapping at base size and using ctx.scale() to zoom the
+                  // entire draw. Trade-off: at scale > ~1.1 the scaled text may
+                  // visually overshoot the 85% safe area, but preview shows
+                  // that immediately so the user can dial it back.
                   const userScale = c.scale ?? 1
+                  const finalScale = popScale * userScale
                   return (
                     <div key={c.id} onClick={(e) => { e.stopPropagation(); setSelected({ kind: 'text', id: c.id }) }}
                       style={{
                         position: 'absolute', left: `${c.x_pct}%`, top: `${c.y_pct}%`,
-                        transform: `translate(-50%, -50%) scale(${popScale})`,
-                        color: c.color, fontWeight: c.weight, fontSize: `${c.size * 0.4 * userScale}px`,
+                        transform: `translate(-50%, -50%) scale(${finalScale})`,
+                        color: c.color, fontWeight: c.weight, fontSize: `${c.size * 0.4}px`,
                         fontFamily: getFontCss(c.font || DEFAULT_FONT),
                         background: c.bg, padding: '4px 10px', borderRadius: 4, textAlign: c.align,
                         // pre-wrap = preserve user-entered \n AND word-wrap on long text.
