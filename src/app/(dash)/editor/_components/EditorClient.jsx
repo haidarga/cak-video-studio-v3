@@ -159,6 +159,16 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
   const [uploadingVideo, setUploadingVideo] = useState(null) // { name, sizeMB, stage }
 
   const videoSources = useMemo(() => results.filter((r) => r.type === 'video' && r.url), [results])
+
+  // Delete a video result from the workspace (removes from results table + this
+  // picker). Confirm because this is destructive — also affects QC, /results,
+  // and any project that currently references it.
+  async function deleteVideoSource(r) {
+    if (!confirm(`Hapus "${r.label || 'video'}" dari workspace?\n\nIni juga ngehapus dari QC + /results. Project yang udah pakai clip ini tetep jalan (URL still valid sampai storage cleanup), tapi gak bisa di-pilih ulang.`)) return
+    const { error } = await supabase.from('results').delete().eq('id', r.id)
+    if (error) { setErr('Hapus gagal: ' + error.message); return }
+    setResults((prev) => prev.filter((x) => x.id !== r.id))
+  }
   const totalDur = useMemo(() => totalDuration(project.video_clips), [project.video_clips])
   const baseClips = useMemo(() => project.video_clips.filter((c) => (c.track_idx || 0) === 0).sort((a, b) => (a.in_track || 0) - (b.in_track || 0)), [project.video_clips])
   const overlayList = useMemo(() => project.video_clips.filter((c) => (c.track_idx || 0) > 0), [project.video_clips])
@@ -722,10 +732,16 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
               {videoSources.length === 0 ? (
                 <div className="text-[10px] text-[var(--muted)] p-2">Belum ada video. Klik <strong>📤 Upload</strong> atau gen di /generate.</div>
               ) : videoSources.map((r) => (
-                <div key={r.id} className="bg-[var(--surface2)] rounded p-1.5 border border-[var(--border)]">
+                <div key={r.id} className="bg-[var(--surface2)] rounded p-1.5 border border-[var(--border)] group relative">
+                  {/* Delete button — small ✕ at top-right corner, only visible on hover */}
+                  <button onClick={() => deleteVideoSource(r)}
+                    className="absolute top-1 right-1 text-[10px] w-5 h-5 rounded-full bg-red-500/20 border border-red-500/40 text-red-300 hover:bg-red-500/60 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center font-bold z-10"
+                    title="Hapus video ini dari workspace">
+                    ✕
+                  </button>
                   <div className="flex gap-2 mb-1.5">
                     <video src={r.url} muted className="w-10 aspect-[9/16] object-cover rounded bg-black flex-shrink-0" />
-                    <div className="min-w-0 flex-1">
+                    <div className="min-w-0 flex-1 pr-5">
                       <div className="text-[11px] font-semibold truncate flex items-center gap-1">
                         {r.label || 'untitled'}
                         {r.meta?.cloned_audio_url && <span title={`Voice cloned: ${r.meta?.voice_name || 'cloned'}`} className="text-[8px] px-1 rounded bg-green-500/30 text-green-200 font-bold">🎙</span>}
