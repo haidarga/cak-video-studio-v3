@@ -342,6 +342,32 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
   )
 }
 
+// Translate raw fal.ai error blobs into a human-actionable message. fal
+// surfaces partner failures as JSON-ish strings like
+//   [{"ctx":{"extra_info":{"reason":"partner_validation_failed"}}}]
+// which is useless to the user. We pattern-match the most common cases and
+// hint a concrete next step (switch model, retry, etc).
+function friendlyFalError(raw) {
+  const s = String(raw || '')
+  if (/partner_validation_failed/i.test(s)) {
+    return 'Konten ditolak partner (kemungkinan content moderation OpenAI — sensitif sama anak/keluarga). Coba ganti Image Model ke Nano Banana 2 atau Seedream V4.'
+  }
+  if (/content[_\s]?policy|safety|moderation|nsfw|inappropriate/i.test(s)) {
+    return 'Konten kena content moderation. Ganti model atau hapus elemen sensitif dari prompt.'
+  }
+  if (/rate[_\s]?limit|too many requests|429/i.test(s)) {
+    return 'Rate limited. Tunggu beberapa detik lalu coba lagi.'
+  }
+  if (/unprocessable entity|422/i.test(s)) {
+    return 'Model gak terima input (kemungkinan reject moderation). Coba ganti model atau ubah prompt.'
+  }
+  if (/timeout/i.test(s)) {
+    return 'Job timeout — fal.ai gak balas dalam 10 menit. Coba lagi atau ganti model yang lebih cepet.'
+  }
+  if (s.length > 120) return s.slice(0, 120) + '...'
+  return s
+}
+
 function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch, globalConfig, userCameraPresets = [], activeBrand, workspaceId, userId, onErr, supabase }) {
   const personaOwnRefs = (persona.persona_refs || []).map((pr) => pr.refs).filter(Boolean)
 
@@ -555,7 +581,7 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
         }
       })
     } catch (e) {
-      patchShot(idx, { image: { status: 'error', error: String(e?.message || e) } })
+      patchShot(idx, { image: { status: 'error', error: friendlyFalError(e?.message || e) } })
     }
   }
 
@@ -667,7 +693,7 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
         }
       }
     } catch (e) {
-      patchShot(idx, { video: { status: 'error', error: String(e?.message || e) } })
+      patchShot(idx, { video: { status: 'error', error: friendlyFalError(e?.message || e) } })
     }
   }
 
@@ -893,10 +919,10 @@ function ShotEditor({ shot, idx, onChangeRaw, onGenImage, onGenVideo, onPickImag
               <div className="absolute bottom-1 left-1 right-1 text-[9px] bg-orange-600 text-white px-1.5 py-0.5 rounded truncate">🎬 {vidStatus}</div>
             )}
             {imgStatus === 'error' && (
-              <div className="absolute inset-x-1 bottom-1 text-[9px] bg-red-700 text-white px-1.5 py-0.5 rounded">⚠ {shot.image.error?.slice(0, 50)}</div>
+              <div className="absolute inset-x-1 bottom-1 text-[9px] bg-red-700 text-white px-1.5 py-1 rounded leading-tight max-h-[60%] overflow-y-auto" title={shot.image.error}>⚠ {shot.image.error}</div>
             )}
             {vidStatus === 'error' && (
-              <div className="absolute inset-x-1 bottom-1 text-[9px] bg-red-700 text-white px-1.5 py-0.5 rounded">⚠ {shot.video.error?.slice(0, 50)}</div>
+              <div className="absolute inset-x-1 bottom-1 text-[9px] bg-red-700 text-white px-1.5 py-1 rounded leading-tight max-h-[60%] overflow-y-auto" title={shot.video.error}>⚠ {shot.video.error}</div>
             )}
           </div>
 
@@ -1067,10 +1093,10 @@ function StoryboardEditor({ shot, idx, ar, onChangeRaw, onChangePanel, onGenImag
               <div className="absolute bottom-1 left-1 right-1 text-[10px] bg-orange-600 text-white px-1.5 py-0.5 rounded truncate">🎬 vid: {vidStatus}</div>
             )}
             {imgStatus === 'error' && (
-              <div className="absolute inset-x-1 bottom-1 text-[10px] bg-red-700 text-white px-1.5 py-0.5 rounded">⚠ {shot.image.error?.slice(0, 60)}</div>
+              <div className="absolute inset-x-1 bottom-1 text-[10px] bg-red-700 text-white px-1.5 py-1 rounded leading-tight max-h-[60%] overflow-y-auto" title={shot.image.error}>⚠ {shot.image.error}</div>
             )}
             {vidStatus === 'error' && (
-              <div className="absolute inset-x-1 bottom-1 text-[10px] bg-red-700 text-white px-1.5 py-0.5 rounded">⚠ {shot.video.error?.slice(0, 60)}</div>
+              <div className="absolute inset-x-1 bottom-1 text-[10px] bg-red-700 text-white px-1.5 py-1 rounded leading-tight max-h-[60%] overflow-y-auto" title={shot.video.error}>⚠ {shot.video.error}</div>
             )}
           </div>
 
