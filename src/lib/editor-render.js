@@ -661,7 +661,11 @@ export async function renderWithCanvas(project, onProgress) {
   const baseVideos = baseMedia.map((m) => m.v)
   const overlayVideos = overlayMedia.map((m) => m.v)
 
-  const stream = canvas.captureStream(30)
+  // captureStream(60) doubles frame rate vs 30 — smoother motion in the export,
+  // critical because TikTok / IG re-encode aggressively and any source jitter
+  // gets amplified by their compressor. The browser still emits whatever real
+  // frame rate the draw loop produces; 60 is just the ceiling.
+  const stream = canvas.captureStream(60)
   const audioCtx = new (window.AudioContext || window.webkitAudioContext)()
   const dest = audioCtx.createMediaStreamDestination()
   // Route each clip: cloned audio takes priority over native, gain set to clip.volume
@@ -706,8 +710,13 @@ export async function renderWithCanvas(project, onProgress) {
   // This way Fast Export produces MP4 with NO ffmpeg.wasm download — same
   // real-time speed as WebM mode but the file actually works with Postiz
   // and other services that don't accept WebM.
+  // Codec order: HIGH profile first (best quality), then main, then baseline
+  // as wide-compat fallback. TikTok / IG re-encode whatever we send, so
+  // feeding them a cleaner source = cleaner output the second pass.
   const candidates = [
-    'video/mp4;codecs=avc1.42E01E,mp4a.40.2', // H264 baseline + AAC — widest mp4 compat
+    'video/mp4;codecs=avc1.640028,mp4a.40.2', // H264 High @ L4.0 + AAC
+    'video/mp4;codecs=avc1.4D401F,mp4a.40.2', // H264 Main @ L3.1 + AAC
+    'video/mp4;codecs=avc1.42E01E,mp4a.40.2', // H264 Baseline + AAC (fallback)
     'video/mp4;codecs=h264,aac',
     'video/mp4',
     'video/webm;codecs=vp9,opus',
@@ -715,7 +724,14 @@ export async function renderWithCanvas(project, onProgress) {
     'video/webm',
   ]
   const mime = candidates.find((m) => MediaRecorder.isTypeSupported(m)) || 'video/webm'
-  const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 5_000_000 })
+  // 12 Mbps video + 256 kbps audio = TikTok/IG-recommended quality tier for
+  // 9:16 720p-1080p. Was 5 Mbps which is fine for direct playback but gets
+  // visibly mushy after the platform's re-encode.
+  const recorder = new MediaRecorder(stream, {
+    mimeType: mime,
+    videoBitsPerSecond: 12_000_000,
+    audioBitsPerSecond: 256_000,
+  })
   const chunks = []
   recorder.ondataavailable = (e) => { if (e.data?.size) chunks.push(e.data) }
 

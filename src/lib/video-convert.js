@@ -12,9 +12,12 @@
 // Falls back with a clear error on browsers that don't.
 
 export async function convertVideoToMp4(url, onProgress) {
-  // Pick best MP4 mime — bail if browser can't record MP4.
+  // Pick best MP4 mime — bail if browser can't record MP4. High profile
+  // first for best quality after TikTok / IG re-encode.
   const candidates = [
-    'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+    'video/mp4;codecs=avc1.640028,mp4a.40.2', // H264 High @ L4.0
+    'video/mp4;codecs=avc1.4D401F,mp4a.40.2', // H264 Main @ L3.1
+    'video/mp4;codecs=avc1.42E01E,mp4a.40.2', // H264 Baseline (fallback)
     'video/mp4;codecs=h264,aac',
     'video/mp4',
   ]
@@ -44,7 +47,8 @@ export async function convertVideoToMp4(url, onProgress) {
   const ctx = canvas.getContext('2d')
 
   // Build a MediaStream from canvas (video) + audio (via AudioContext).
-  const canvasStream = canvas.captureStream(30)
+  // 60 fps capture ceiling for smoother motion through TikTok's re-encode.
+  const canvasStream = canvas.captureStream(60)
 
   let audioCtx = null
   try {
@@ -61,7 +65,13 @@ export async function convertVideoToMp4(url, onProgress) {
     console.warn('audio route failed, converting video-only:', e?.message)
   }
 
-  const recorder = new MediaRecorder(canvasStream, { mimeType: mime, videoBitsPerSecond: 5_000_000 })
+  // 12 Mbps + 256 kbps — matches Fast Export quality tier so converted
+  // clips look as clean as freshly-rendered ones after TikTok re-encode.
+  const recorder = new MediaRecorder(canvasStream, {
+    mimeType: mime,
+    videoBitsPerSecond: 12_000_000,
+    audioBitsPerSecond: 256_000,
+  })
   const chunks = []
   recorder.ondataavailable = (e) => { if (e.data?.size) chunks.push(e.data) }
   recorder.start()
