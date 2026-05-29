@@ -184,7 +184,12 @@ function defaultSettings(platform, opts = {}) {
       autoAddMusic: opts.tiktokAutoAddMusic ? 'yes' : 'no',
       brand_content_toggle: false,
       brand_organic_toggle: false,
-      video_made_with_ai: false,
+      // Set TRUE: our renders ARE AI-generated (Grok/Kling/Seedance output).
+      // TikTok requires this disclosure flag for AI content, and the Postiz
+      // docs example that turns autoAddMusic on ALSO sets this true — they
+      // may be paired flags (auto-music may be gated on proper AI disclosure).
+      // Even if not paired, setting this is correct compliance.
+      video_made_with_ai: true,
       content_posting_method: 'DIRECT_POST',
     }
   }
