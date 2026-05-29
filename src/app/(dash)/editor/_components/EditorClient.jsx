@@ -1019,18 +1019,18 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                   }
                   // Karaoke: highlight current word(s) in different color
                   const isKaraoke = c.animation === 'karaoke' && Array.isArray(c.words) && c.words.length > 0
-                  // Scale baked into fontSize — CSS wrap runs at the visual
-                  // size, matching the canvas export. Trade-off accepted:
-                  // larger scale = fewer words per line (wrap changes). This
-                  // guarantees text stays inside the frame at any scale and
-                  // that preview line breaks identical to export.
+                  // Zoom = pure CSS transform scale. Doesn't touch fontSize
+                  // or wrap calc — just zooms the laid-out block uniformly.
+                  // Wrap budget is owned by Size + Box Width. Canvas uses
+                  // ctx.scale() for the same uniform-zoom effect.
                   const userScale = c.scale ?? 1
+                  const finalScale = popScale * userScale
                   return (
                     <div key={c.id} onClick={(e) => { e.stopPropagation(); setSelected({ kind: 'text', id: c.id }) }}
                       style={{
                         position: 'absolute', left: `${c.x_pct}%`, top: `${c.y_pct}%`,
-                        transform: `translate(-50%, -50%) scale(${popScale})`,
-                        color: c.color, fontWeight: c.weight, fontSize: `${c.size * 0.4 * userScale}px`,
+                        transform: `translate(-50%, -50%) scale(${finalScale})`,
+                        color: c.color, fontWeight: c.weight, fontSize: `${c.size * 0.4}px`,
                         fontFamily: getFontCss(c.font || DEFAULT_FONT),
                         background: c.bg, padding: '4px 10px', borderRadius: 4, textAlign: c.align,
                         // pre-wrap = preserve user-entered \n AND word-wrap on long text.
@@ -1641,7 +1641,7 @@ function TextPanel({ clip, duration, onUpdate, onDelete }) {
           User asked for these to be separate so they can pump up the visual
           size without the caption breaking into more rows. */}
       <Field label={`Size: ${clip.size}px`}><LiveRange min={16} max={120} step={1} value={clip.size} onDrag={(v) => onUpdate({ size: Math.round(v) })} onCommit={(v) => onUpdate({ size: Math.round(v) })} /></Field>
-      <Field label={`Zoom: ${((clip.scale ?? 1) * 100).toFixed(0)}% (gede = text gede + wrap lebih cepet)`}>
+      <Field label={`Zoom: ${((clip.scale ?? 1) * 100).toFixed(0)}% (pure visual zoom in/out — gak ngubah wrap)`}>
         <LiveRange min={0.3} max={3} step={0.05} value={clip.scale ?? 1}
           onDrag={(v) => onUpdate({ scale: Math.round(v * 100) / 100 })}
           onCommit={(v) => onUpdate({ scale: Math.round(v * 100) / 100 })} />
@@ -1649,7 +1649,7 @@ function TextPanel({ clip, duration, onUpdate, onDelete }) {
       {/* Box Width = how much of the frame the wrap budget can use. Default 90.
           Bump UP if text wraps too tight (using only 60% of frame). Bump DOWN
           if you want narrower captions. */}
-      <Field label={`Box Width: ${clip.max_width_pct ?? 90}% (kalo wrap terlalu sempit, naikin ini)`}>
+      <Field label={`Box Width: ${clip.max_width_pct ?? 90}% (lebar wrap — kalo terlalu sempit, naikin)`}>
         <LiveRange min={40} max={100} step={1} value={clip.max_width_pct ?? 90}
           onDrag={(v) => onUpdate({ max_width_pct: Math.round(v) })}
           onCommit={(v) => onUpdate({ max_width_pct: Math.round(v) })} />
