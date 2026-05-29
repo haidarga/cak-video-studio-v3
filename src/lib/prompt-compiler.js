@@ -154,6 +154,7 @@ export const LAYER_ORDER = [
   'L8_continuity',
   'L9_quality',
   'L10_negatives',
+  'L11_edit_commands',
 ]
 
 // Main entry. Returns final prompt string ready to send to fal.ai.
@@ -186,11 +187,12 @@ export function compilePrompt(spec) {
     : ''
   const L1b_grid = gridHeader || ''
   const L2_identity = identity ? `Subject: ${identity}.` : ''
-  // Wardrobe is high-priority but goes AFTER camera — we don't want a long
-  // wardrobe paragraph to push the camera tokens past the model's attention
-  // window. Plus the sanitizer drops the harmful "IGNORE reference outfit"
-  // line when wardrobe is empty (it confuses the model otherwise).
-  const L3_wardrobe = wardrobe ? `Wardrobe (must persist throughout, overrides reference outfit): ${wardrobe}.` : ''
+  // L3 = soft early-token ANCHOR only. Wardrobe seen near the top primes
+  // non-edit generation models (nano-banana-2, gpt-image-2 generation).
+  // The actual IMPERATIVE COMMAND lives in L11 at the end of the prompt —
+  // user proved empirically that edit endpoints (gpt-image-2/edit etc) parse
+  // trailing "CHANGE X to Y" verbs via recency bias.
+  const L3_wardrobe = wardrobe ? `Wardrobe: ${wardrobe}.` : ''
   const L4_environment = environment ? `Setting: ${environment}.` : ''
   const L5_action = action || ''
   const L6_brand = (!skipProduct && brand) ? `Product: ${brand}.` : ''
@@ -201,17 +203,33 @@ export function compilePrompt(spec) {
     ? `Avoid: ${cam.negatives.join(', ')}.`
     : ''
 
+  // L11 — imperative EDIT command at end of prompt.
+  //
+  // User proved empirically on fal.ai sandbox that gpt-image-2/edit (and
+  // seedream/v4/edit, qwen-image-edit, imagen-4-fast/edit) reward TRAILING
+  // imperatives via recency bias. The passive "Wardrobe (must persist...)"
+  // line buried in the middle was being ignored — model treated it as
+  // description, not instruction. But the same intent rephrased as
+  //   "change her outfit into casual outfit, and the kid into casual too"
+  // placed at the very end actually swaps clothing while preserving
+  // face/hair identity. That's the entire fix.
+  //
+  // Identity guardrail ("Keep face, hair, body and identity IDENTICAL —
+  // only swap clothing") prevents the model from re-generating the face
+  // along with the outfit. We only want to mutate clothing.
+  const L11_edit_commands = wardrobe
+    ? `CHANGE the subjects' outfit to: ${wardrobe}. Replace the reference photo outfit completely. Keep face, hair, body and identity IDENTICAL — only swap clothing.`
+    : ''
+
   const layers = [L1_camera, L1b_grid, L2_identity, L3_wardrobe, L4_environment, L5_action, L5b_camera_echo, L6_brand, L7_format, L8_continuity, L9_quality]
-  // BUG FIX: L10_negatives intentionally NOT sanitized.
+  // BUG FIX: L10_negatives + L11_edit_commands intentionally NOT sanitized.
   // Sanitizer's job is to drop "cinematic / professional / sharp focus / 8K"
-  // from POSITIVE directives when phone-cam preset wins. But those EXACT words
-  // also appear inside the camera's `negatives` list — that's the whole point,
-  // we tell the model to AVOID them. If we sanitize the negatives layer too,
-  // it strips "cinematic" → output becomes "Avoid:. professional studio,
-  // glossy., photography. 8K" (broken fragments). Negatives layer pass-through
-  // raw so the Avoid: clause stays intact.
+  // from POSITIVE directives when phone-cam preset wins. Those words also
+  // appear inside negatives list — sanitizer would strip them and break the
+  // Avoid: clause. L11 also pass-through raw so the imperative verb stays intact.
   const cleaned = layers.map((l) => sanitize(l, ctx)).filter(Boolean)
   if (L10_negatives) cleaned.push(L10_negatives)
+  if (L11_edit_commands) cleaned.push(L11_edit_commands)
   return cleaned.join('\n')
 }
 
