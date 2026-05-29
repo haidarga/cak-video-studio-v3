@@ -4,6 +4,7 @@
 
 export const IMAGE_COSTS = {
   'fal-ai/nano-banana-2/edit': 0.04,
+  'openai/gpt-image-2': 0.06,
   'fal-ai/nano-banana/edit': 0.03,
   'fal-ai/imagen-4-fast/edit': 0.025,
   'fal-ai/seedream/v4/edit': 0.05,

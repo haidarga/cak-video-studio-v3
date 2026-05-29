@@ -45,6 +45,13 @@ export function buildImgInput(imgModel, { prompt, refUrls = [], ar = '9:16' }) {
   if (imgModel.includes('gpt-image-2/edit')) {
     return { prompt, ...(refs.length ? { image_urls: refs.slice(0, 10) } : {}), image_size, quality: 'medium', num_images: 1 }
   }
+  // GPT Image 2 GENERATION mode (no /edit suffix) — same underlying model
+  // as gpt-image-2/edit but in text-to-image generation mode. Refs treated
+  // as style/identity hints, NOT pixel-preserve source. Outfit + aesthetic
+  // free to follow text prompt instead of mirroring reference photo.
+  if (imgModel.includes('gpt-image-2') && !imgModel.includes('edit')) {
+    return { prompt, ...(refs.length ? { image_urls: refs.slice(0, 10) } : {}), image_size, quality: 'medium', num_images: 1 }
+  }
   if (imgModel.includes('imagen-4-fast/edit')) {
     return { prompt, ...(refs.length ? { image_urls: refs.slice(0, 8) } : {}), aspect_ratio: ar, num_images: 1 }
   }
@@ -173,6 +180,7 @@ export const VIDEO_MODELS = [
   { v: 'fal-ai/kling-video/v3/pro/image-to-video', l: 'Kling v3 Pro — ~$0.28/dtk (best quality)' },
 ]
 export const IMAGE_MODELS = [
-  { v: 'fal-ai/nano-banana-2/edit', l: 'Nano Banana 2 — fast multi-ref' },
-  { v: 'openai/gpt-image-2/edit', l: 'GPT Image 2 Edit — best text' },
+  { v: 'fal-ai/nano-banana-2/edit', l: 'Nano Banana 2 — fast multi-ref, outfit adapts' },
+  { v: 'openai/gpt-image-2', l: '🆕 GPT Image 2 (generation mode) — refs as hints, NOT pixel-locked' },
+  { v: 'openai/gpt-image-2/edit', l: 'GPT Image 2 Edit — best text, pixel-locks refs' },
 ]
