@@ -178,13 +178,20 @@ export function compilePrompt(spec) {
   const cam = getCameraPreset(camera, userPresets)
   const ctx = { cameraId: cam.id, ar, skipProduct, continuousShot, refsCount, wardrobe: !!wardrobe, media }
 
-  // Token stacking — camera tokens repeated as L1 (start) AND L5b (middle of
-  // prompt) so model attention stays anchored throughout. Single mention at
-  // top fades for long prompts; repeating reinforces intent.
-  const L1_camera = cam.tokens?.join(', ') || ''
-  const L5b_camera_echo = cam.tokens?.length
-    ? `Throughout, maintain: ${cam.tokens.slice(0, 4).join(', ')}.`
-    : ''
+  // ── NASKAH-DRIVEN OVERRIDE ──
+  // If the user's action text already specifies its own camera/style direction
+  // (CCTV, found footage, security cam, dashcam, smartphone X, iPhone XX, body
+  // cam, etc.), DROP the camera preset L1/L5b tokens entirely. Otherwise the
+  // preset "shot on iPhone 15 Pro, clean handheld..." conflicts with the
+  // naskah's "CCTV grainy found footage" and the model picks the dominant
+  // one (preset, since it sits at L1) — user's explicit direction loses.
+  const actionStr = String(action || '').toLowerCase()
+  const userOverrodeStyle = /\b(cctv|security cam|dashcam|body cam|found footage|surveillance|webcam|gopro|drone shot|aerial|bird's? eye|fisheye|vhs|film grain|polaroid|disposable camera|night vision|infrared|thermal)\b/i.test(actionStr)
+    || /\b(iphone|samsung|xiaomi|nokia)\s*\d/i.test(actionStr) // explicit phone model in naskah
+  const L1_camera = userOverrodeStyle ? '' : (cam.tokens?.join(', ') || '')
+  const L5b_camera_echo = userOverrodeStyle
+    ? ''
+    : (cam.tokens?.length ? `Throughout, maintain: ${cam.tokens.slice(0, 4).join(', ')}.` : '')
   const L1b_grid = gridHeader || ''
   const L2_identity = identity ? `Subject: ${identity}.` : ''
   // L3 = soft early-token ANCHOR only. Wardrobe seen near the top primes
@@ -198,8 +205,11 @@ export function compilePrompt(spec) {
   const L6_brand = (!skipProduct && brand) ? `Product: ${brand}.` : ''
   const L7_format = `${ar} composition.`
   const L8_continuity = refsCount ? 'Keep character identity consistent with references.' : ''
-  const L9_quality = pickQuality(cam, media, skipProduct)
-  const L10_negatives = (cam.negatives?.length)
+  // Quality + negatives also drop when user overrode style — preset negatives
+  // like "anamorphic, film grain, vintage filter" directly contradict a user
+  // prompt asking for CCTV grainy / found-footage / VHS aesthetic.
+  const L9_quality = userOverrodeStyle ? '' : pickQuality(cam, media, skipProduct)
+  const L10_negatives = (cam.negatives?.length && !userOverrodeStyle)
     ? `Avoid: ${cam.negatives.join(', ')}.`
     : ''
 
