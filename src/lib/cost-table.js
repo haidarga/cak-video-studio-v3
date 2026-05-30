@@ -5,12 +5,16 @@
 export const IMAGE_COSTS = {
   'fal-ai/nano-banana-2/edit': 0.04,
   'openai/gpt-image-2': 0.06,
+  'openai/gpt-image-2/edit': 0.06,
   'fal-ai/nano-banana/edit': 0.03,
   'fal-ai/imagen-4-fast/edit': 0.025,
   'fal-ai/seedream/v4/edit': 0.05,
   'fal-ai/qwen-image-edit-plus': 0.03,
   'fal-ai/flux-pro/v1.1-ultra': 0.06,
   'fal-ai/flux/dev': 0.025,
+  // Grok Imagine Edit — $0.05 output (1k) + ~$0.01 per input image.
+  // Estimate assumes 2 input refs (character + product) for budget calc.
+  'xai/grok-imagine-image/quality/edit': 0.07,
   // Add more as needed; default below
   _default: 0.03,
 }

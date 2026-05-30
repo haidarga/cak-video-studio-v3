@@ -141,6 +141,19 @@ export function buildImgInput(imgModel, { prompt, refUrls = [], ar = '9:16' }) {
   if (imgModel.includes('qwen-image-edit')) {
     return { prompt, ...(refs.length ? { image_urls: refs.slice(0, 4) } : {}), aspect_ratio: ar, num_images: 1 }
   }
+  // Grok Imagine Image Quality Edit — xAI's edit model. Accepts image_urls
+  // for multi-ref edit. Resolution 1k ($0.05) or 2k ($0.07) per output +
+  // $0.01 per input image. aspect_ratio='auto' lets it infer from source.
+  if (imgModel.includes('grok-imagine-image')) {
+    return {
+      prompt,
+      ...(refs.length ? { image_urls: refs.slice(0, 8) } : {}),
+      resolution: '1k', // bump to 2k manually if user wants — costs more
+      aspect_ratio: ar || 'auto',
+      num_images: 1,
+      output_format: 'jpeg',
+    }
+  }
   // Single-ref fallback (flux/dev, flux-pro/v1.1-ultra). Warn if dropping refs.
   if (refs.length > 1 && typeof console !== 'undefined') {
     console.warn(`[buildImgInput] ${imgModel} is single-ref; dropping ${refs.length - 1} ref(s)`)
@@ -263,4 +276,5 @@ export const IMAGE_MODELS = [
   { v: 'fal-ai/nano-banana-2/edit', l: 'Nano Banana 2 — fast multi-ref, outfit adapts' },
   { v: 'openai/gpt-image-2', l: '🆕 GPT Image 2 (generation mode) — refs as hints, NOT pixel-locked' },
   { v: 'openai/gpt-image-2/edit', l: 'GPT Image 2 Edit — best text, pixel-locks refs' },
+  { v: 'xai/grok-imagine-image/quality/edit', l: '🆕 Grok Imagine Edit — multi-ref, $0.05 (1k) / $0.07 (2k) + $0.01/input' },
 ]
