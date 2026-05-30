@@ -35,7 +35,42 @@ function buildResult(row) {
   return {}
 }
 
-export async function falRun(model, input, { onProgress, maxWaitMs = 600000, workspaceId, duration, meta } = {}) {
+// Recognize fal/Grok errors that are FLAKY (non-deterministic). Same prompt
+// can pass on retry. The big one is xAI's content checker which returns
+// false-positives constantly — user verified the exact same input goes
+// through on a second submit. Retrying these is safe and effective.
+function isFlakyFalError(err) {
+  const s = String(err?.message || err || '').toLowerCase()
+  return (
+    s.includes('content checker') ||
+    s.includes('flagged by a content checker') ||
+    s.includes('content could not be processed') ||
+    s.includes('partner_validation_failed') ||
+    s.includes('temporarily unavailable') ||
+    s.includes('please try again')
+  )
+}
+
+export async function falRun(model, input, opts = {}) {
+  const { onProgress, maxRetries = 3 } = opts
+  let lastErr
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      if (attempt > 0) onProgress?.(`retry ${attempt}/${maxRetries - 1} (flaky content check)...`)
+      return await falRunOnce(model, input, opts)
+    } catch (e) {
+      lastErr = e
+      // Only retry on flaky errors — real bugs (auth, invalid input) bail out immediately.
+      if (!isFlakyFalError(e)) throw e
+      if (attempt === maxRetries - 1) throw e
+      // Brief backoff before retry — gives Grok's content checker a moment.
+      await new Promise((r) => setTimeout(r, 2000 + attempt * 1500))
+    }
+  }
+  throw lastErr
+}
+
+async function falRunOnce(model, input, { onProgress, maxWaitMs = 600000, workspaceId, duration, meta } = {}) {
   // ── Submit ─────────────────────────────────────────────────────────────
   const submitRes = await fetch('/api/fal/submit', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
