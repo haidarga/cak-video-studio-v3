@@ -356,6 +356,18 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
   )
 }
 
+// Coerce LLM response field to a primitive string. Gemini sometimes returns
+// arrays / objects for fields the schema declared as string — calling .trim()
+// on those throws "trim is not a function" which kills the gen flow. Arrays
+// join with ", "; objects fall back to JSON; anything else gets String()'d.
+function toStr(v) {
+  if (v == null) return ''
+  if (typeof v === 'string') return v
+  if (Array.isArray(v)) return v.filter(Boolean).map(String).join(', ')
+  if (typeof v === 'object') { try { return JSON.stringify(v) } catch { return '' } }
+  return String(v)
+}
+
 // Translate raw fal.ai error blobs into a human-actionable message. fal
 // surfaces partner failures as JSON-ish strings like
 //   [{"ctx":{"extra_info":{"reason":"partner_validation_failed"}}}]
@@ -477,14 +489,17 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
         shotsInit = [{
           id: `${persona.id}-storyboard-${Date.now()}`,
           raw: {
-            concept: data.parsed.concept || '',
+            concept: toStr(data.parsed.concept),
             // NEW: parser now extracts shared environment + wardrobe (auto-
             // detected from naskah) + sequence motion. Compiler picks parsed
             // wardrobe first, falls back to globalConfig.wardrobeOverride only
             // if parser didn't extract any.
-            environment: data.parsed.environment || '',
-            wardrobe: data.parsed.wardrobe || '',
-            video_motion: data.parsed.video_motion || '',
+            // toStr() coerces array/object responses from LLM into a string —
+            // some Gemini responses return wardrobe as ["formal", "pastel"]
+            // instead of "formal outfit, pastel" which broke .trim() downstream.
+            environment: toStr(data.parsed.environment),
+            wardrobe: toStr(data.parsed.wardrobe),
+            video_motion: toStr(data.parsed.video_motion),
             panels: panels.map((p) => ({
               n: p.n, title: p.title || '', visual: p.visual || p.scene || '',
               dialog: p.dialog || '', onscreen: p.onscreen || p.purpose || '',
@@ -502,14 +517,14 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
         }]
       } else {
         const items = data.parsed.shots || []
-        const sharedEnv = data.parsed.environment || ''
-        const sharedWardrobe = data.parsed.wardrobe || ''
+        const sharedEnv = toStr(data.parsed.environment)
+        const sharedWardrobe = toStr(data.parsed.wardrobe)
         shotsInit = items.map((it, i) => ({
           id: `${persona.id}-${i}-${Date.now()}`,
           raw: {
-            image_prompt: it.image_prompt || '',
-            video_motion: it.video_motion || '',
-            dialogue: it.dialogue || '',
+            image_prompt: toStr(it.image_prompt),
+            video_motion: toStr(it.video_motion),
+            dialogue: toStr(it.dialogue),
             environment: sharedEnv,
             wardrobe: sharedWardrobe,
             chars_in_shot: it.chars_in_shot || [],
@@ -532,7 +547,7 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
     if (!shot) return
     patchShot(idx, { image: { status: 'generating' } })
     try {
-      const productKnowledge = selectedRefs.map((r) => (r.knowledge || '').trim()).filter(Boolean).join('\n')
+      const productKnowledge = selectedRefs.map((r) => String(r.knowledge || '').trim()).filter(Boolean).join('\n')
       const characterProductUrls = selectedRefs.map((r) => r.fal_url).filter(Boolean)
       const styleUrls = styleRefs.map((r) => r.fal_url).filter(Boolean)
       const refUrls = [...characterProductUrls, ...styleUrls]
@@ -561,7 +576,9 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
       // Wardrobe = parser-extracted from naskah, period. Single source of
       // truth. If user wrote outfit in naskah, parser picks it up; if not,
       // reference photo handles outfit. No more dual-source confusion.
-      const wardrobe = shot.raw.wardrobe?.trim() || null
+      // Safe coerce — parser sometimes returns array/object for wardrobe; .trim() on
+      // those throws "trim is not a function". String() forces a primitive first.
+      const wardrobe = String(shot.raw.wardrobe || '').trim() || null
 
       // Visual Compiler — owns ordering, sanitization, style-aware quality.
       const fullPrompt = compilePrompt({
@@ -631,12 +648,14 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
       const identity = persona.character_prompt
         ? `${persona.name} (${persona.character_prompt.slice(0, 200)})`
         : null
-      const productKnowledge2 = selectedRefs.map((r) => (r.knowledge || '').trim()).filter(Boolean).join('\n')
+      const productKnowledge2 = selectedRefs.map((r) => String(r.knowledge || '').trim()).filter(Boolean).join('\n')
       const brand = (!globalConfig.skipProduct)
         ? productNotesShort(productKnowledge2 || activeBrand?.notes)
         : null
 
-      const wardrobe = shot.raw.wardrobe?.trim() || null
+      // Safe coerce — parser sometimes returns array/object for wardrobe; .trim() on
+      // those throws "trim is not a function". String() forces a primitive first.
+      const wardrobe = String(shot.raw.wardrobe || '').trim() || null
       const motion = compileVideoPrompt({
         camera: globalConfig.cameraPreset || DEFAULT_CAMERA,
         identity,
@@ -1010,6 +1029,19 @@ function ShotEditor({ shot, idx, onChangeRaw, onGenImage, onGenVideo, onPickImag
           <FieldRow label="🎥 Video Motion">
             <textarea rows={2} value={shot.raw.video_motion || ''} onChange={(e) => onChangeRaw('video_motion', e.target.value)}
               placeholder="English motion + camera movement, max 20 kata"
+              className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] resize-y" />
+          </FieldRow>
+          {/* Shared fields extracted by parser from naskah. Editable so user
+              can override per-shot if needed. These get inlined into the
+              final prompt by the compiler — not garbage, just hidden before. */}
+          <FieldRow label="🌅 Environment (set + lighting from naskah)">
+            <textarea rows={1} value={shot.raw.environment || ''} onChange={(e) => onChangeRaw('environment', e.target.value)}
+              placeholder="auto-filled by parser from naskah, edit if needed"
+              className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] resize-y" />
+          </FieldRow>
+          <FieldRow label="👔 Wardrobe (outfit from naskah)">
+            <textarea rows={1} value={shot.raw.wardrobe || ''} onChange={(e) => onChangeRaw('wardrobe', e.target.value)}
+              placeholder="auto-filled by parser if naskah mentions outfit, blank if not"
               className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] resize-y" />
           </FieldRow>
           <div className="grid grid-cols-[1fr_80px] gap-2">
