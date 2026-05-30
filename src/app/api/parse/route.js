@@ -67,10 +67,19 @@ export async function POST(req) {
   // Hard rules applied universally (used to be guard only in per-shot mode).
   const universalRules = [
     'NEVER describe faces in detail (eye color, exact features, hair texture). Character identity is locked by reference photos.',
-    'Use VISUAL TOKENS — concrete actions, camera angles, props. Avoid EMPTY adjectives ("beautiful", "stunning", "amazing", "perfect") — they convey no concrete visual.',
-    'PRESERVE USER INTENT: if the naskah explicitly specifies mood / style / composition / camera-feel words (candid, intimate, raw, handheld, shaky, natural lighting, pastel tones, golden hour, gritty, polished, etc.), ECHO them verbatim into the image_prompt and video_motion. Those convey concrete artistic direction — do NOT strip them. Only filter out the empty adjectives above.',
-    'Set extras (lighting, time-of-day, backdrop) go in the shared `environment` field. Per-panel `visual` is ACTION + framing + any user-specified mood/style words from the naskah.',
-    'OUTFIT EXTRACTION (strict — single source of truth): scan ONLY the naskah text for explicit clothing words (oversized t-shirt, kemeja batik, daster, jeans, gamis, kerudung, sneakers, formal outfit, casual outfit, pastel colors, etc). Put it in the shared `wardrobe` field. Preserve modifiers the user wrote ("kinda pastel", "smart casual", "all black", etc.). STRICT RULES: (1) If the naskah text does NOT contain explicit clothing words, set wardrobe to empty string ""; (2) NEVER infer outfit from persona name, persona description, or reference photo context; (3) NEVER guess or default to "blazer", "shirt", or any generic clothing — empty string is correct when naskah is silent. The reference photo handles outfit when wardrobe is empty.',
+    'CARDINAL RULE — ADAPT THE NASKAH FAITHFULLY. If the user wrote specific instructions, OBEY them verbatim. Treat the naskah as a brief: every concrete direction in it (camera move, mood, style label, composition cue, action verb, prop, color hint, time-of-day, lighting word) belongs in the appropriate output field. DO NOT generalize away the user\'s specifics. Generic output is a failure.',
+    'Mapping for explicit instructions in the naskah → output fields:',
+    '  • Camera moves / shakiness / handheld / dolly / pan / push-in / pull-back → video_motion.',
+    '  • Camera framing / shot type / angle (close-up, wide, low angle, OTS) → image_prompt.',
+    '  • Action / what subjects DO → image_prompt.',
+    '  • Mood / style / vibe words (candid, intimate, raw, gritty, polished, dreamy, cozy, tense) → BOTH image_prompt and video_motion (so the still and the motion both carry the tone).',
+    '  • Color palette / tone hints (pastel, warm, moody, monochrome, vibrant) → image_prompt.',
+    '  • Outfit / wardrobe / clothing description → wardrobe field (single source of truth).',
+    '  • Set / location / time-of-day / lighting context → environment field.',
+    '  • Style references the user names (UGC, iPhone 13 style, BTS doc, music-video, TVC) → image_prompt + video_motion as a short tag.',
+    'Use VISUAL TOKENS — concrete actions, camera angles, props, named styles. ONLY filter EMPTY adjectives that convey no visual ("beautiful", "stunning", "amazing", "perfect", "epic"). Everything else the user wrote is signal — keep it.',
+    'OUTFIT EXTRACTION (strict — single source of truth): scan ONLY the naskah text for explicit clothing words (oversized t-shirt, kemeja batik, daster, jeans, gamis, kerudung, sneakers, formal outfit, casual outfit, pastel colors, etc). Put it in the shared `wardrobe` field. Preserve modifiers the user wrote ("kinda pastel", "smart casual", "all black", "parents formal, kids casual pastel", etc.). STRICT RULES: (1) If the naskah text does NOT contain explicit clothing words, set wardrobe to empty string ""; (2) NEVER infer outfit from persona name, persona description, or reference photo context; (3) NEVER guess or default to "blazer", "shirt", or any generic clothing — empty string is correct when naskah is silent.',
+    'OUTPUT TYPE STRICTNESS: every string field in the schema must be a JSON STRING, not an array or object. If the naskah lists multiple outfits, JOIN them into one string ("parents wear formal outfit, kids wear casual pastel"). If multiple camera moves, join with commas. Never return [].',
     refLabels.length ? `Character names MUST come from this list (use exact names in chars_in_shot): ${refLabels.join(', ')}` : null,
   ].filter(Boolean).map((r) => `- ${r}`).join('\n')
 
