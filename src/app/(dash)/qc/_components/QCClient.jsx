@@ -338,13 +338,23 @@ function PersonaGroup({ persona, items, busyUpload, onUpload, onSetStatus, onRem
 
         {persona && (
           <>
-            <input ref={fileRef} type="file" accept="video/*,image/*" className="hidden"
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) onUpload(f); e.target.value = '' }} />
+            <input ref={fileRef} type="file" accept="video/*,image/*" multiple className="hidden"
+              onChange={async (e) => {
+                const files = Array.from(e.target.files || [])
+                e.target.value = ''
+                for (const f of files) {
+                  // Sequential — onUpload is async and sets busyUpload state.
+                  // Parallel uploads would clobber the busy indicator + race
+                  // multiple inserts to the same persona.
+                  // eslint-disable-next-line no-await-in-loop
+                  await onUpload(f)
+                }
+              }} />
             <button onClick={() => fileRef.current?.click()} disabled={!!busyUpload}
               className="ml-auto px-3 py-1.5 rounded text-xs font-semibold bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)] disabled:opacity-50">
               {busyUpload
                 ? `⏳ ${busyUpload.stage === 'inserting' ? 'Saving...' : `Uploading ${busyUpload.name} (${busyUpload.sizeMB}MB)`}`
-                : '+ Upload External Video'}
+                : '+ Upload External Video (multi)'}
             </button>
           </>
         )}

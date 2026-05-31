@@ -22,6 +22,7 @@ export const IMAGE_COSTS = {
 // Per-second cost untuk video gen — multiply by duration
 export const VIDEO_COSTS_PER_SECOND = {
   'xai/grok-imagine-video/image-to-video': 0.07,
+  'xai/grok-imagine-video/reference-to-video': 0.07,
   'fal-ai/kling-video/v3/standard/image-to-video': 0.08,
   'fal-ai/kling-video/o3/standard/image-to-video': 0.11,
   'fal-ai/kling-video/v2.5-turbo/pro/image-to-video': 0.12,

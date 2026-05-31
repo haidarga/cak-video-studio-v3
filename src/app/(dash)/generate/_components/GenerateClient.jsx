@@ -173,7 +173,21 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
           </button>
           {showConfigDetails && (
             <div className="mt-2 grid grid-cols-2 md:grid-cols-3 gap-3">
-              <Sel label="Mode" value={globalConfig.mode} onChange={(v) => setGlobalConfig({ ...globalConfig, mode: v })}
+              <Sel label="Mode" value={globalConfig.mode} onChange={(v) => {
+                // Auto-switch video model on mode change. Storyboard works best
+                // with reference-to-video (no morphing from grid image); shots
+                // mode wants image-to-video (animates the still). Skip the
+                // override if user has manually picked an explicit ref/i2v
+                // model already.
+                const next = { ...globalConfig, mode: v }
+                const curr = globalConfig.vidModel || ''
+                if (v === 'storyboard' && !curr.includes('ref-to-video') && !curr.includes('reference-to-video')) {
+                  next.vidModel = 'xai/grok-imagine-video/reference-to-video'
+                } else if (v === 'shots' && (curr.includes('ref-to-video') || curr.includes('reference-to-video'))) {
+                  next.vidModel = 'xai/grok-imagine-video/image-to-video'
+                }
+                setGlobalConfig(next)
+              }}
                 options={[['shots', '🎬 Per-Shot (auto count from naskah)'], ['storyboard', '🗂 Storyboard 3×3 (~15s)']]} />
               {globalConfig.mode === 'shots' && (
                 <div>
@@ -689,8 +703,17 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
         refsCount: refUrls.length,
         userPresets: userCameraPresets,
       })
+      // For storyboard + reference-to-video: include the approved 3x3 grid
+      // image as the FIRST reference. Model sees the panel layout intent +
+      // character identity (from refs) — no morphing of the grid like
+      // image-to-video would do. Without prepending the grid the model would
+      // hallucinate a fresh layout instead of following the storyboard.
+      const isRefVid = globalConfig.vidModel.includes('reference-to-video') || globalConfig.vidModel.includes('ref-to-video')
+      const vidRefUrls = (isGrid && isRefVid)
+        ? [shot.image.url, ...refUrls].filter(Boolean)
+        : refUrls
       const vidInput = buildVidInput(globalConfig.vidModel, {
-        prompt: motion, image_url: shot.image.url, reference_urls: refUrls,
+        prompt: motion, image_url: shot.image.url, reference_urls: vidRefUrls,
         duration: shot.raw.duration || 5, aspect_ratio: globalConfig.ar,
       })
       const vidResult = await falRun(globalConfig.vidModel, vidInput, { onProgress: (p) => patchShot(idx, { video: { status: p } }), workspaceId, duration: shot.raw.duration || 5 })
@@ -1305,15 +1328,50 @@ function RefsPicker({ personaOwnRefs, workspaceRefs, showWorkspace, onToggleShow
     return workspaceRefs.filter((r) => !personaIds.has(r.id))
   }, [workspaceRefs, personaScope])
 
-  function onFilePicked(e) {
-    const f = e.target.files?.[0]
-    if (!f) return
-    setPendingFile(f)
-    setPLabel('')
-    setPKnowledge('')
-    setPKind('character')
-    setOpening(true)
+  async function onFilePicked(e) {
+    const files = Array.from(e.target.files || [])
     e.target.value = ''
+    if (files.length === 0) return
+    // Single file → open the label/knowledge modal as before.
+    if (files.length === 1) {
+      setPendingFile(files[0])
+      setPLabel('')
+      setPKnowledge('')
+      setPKind('character')
+      setOpening(true)
+      return
+    }
+    // Multi-file → batch upload with filename as label + kind=character.
+    // User can edit label/knowledge per ref later from /refs. This unblocks
+    // the "I have 8 reference photos, just take them all" flow.
+    setBusy(true); onErr('')
+    let added = 0
+    try {
+      for (const f of files) {
+        if (!f.type.startsWith('image/')) continue
+        try {
+          const { url: publicUrl } = await uploadFile(f, 'refs')
+          const { data: row, error } = await supabase.from('refs')
+            .insert({
+              workspace_id: workspaceId, fal_url: publicUrl,
+              label: f.name.replace(/\.[^.]+$/, ''), knowledge: null,
+              kind: 'character', created_by: userId,
+            })
+            .select('id, fal_url, label, knowledge, kind').single()
+          if (error) throw error
+          if (personaId) {
+            await supabase.from('persona_refs').insert({ persona_id: personaId, ref_id: row.id })
+          }
+          setExtras((p) => [{ ...row, source: 'just-uploaded' }, ...p])
+          onAdded(row)
+          added++
+        } catch (perFileErr) {
+          onErr(`${f.name}: ${perFileErr.message}`)
+        }
+      }
+      if (added > 0) onErr(`✓ ${added} ref(s) uploaded — edit label/knowledge di /refs kalau perlu.`)
+    } catch (e) { onErr('Batch upload: ' + e.message) }
+    setBusy(false)
   }
 
   async function savePending() {
@@ -1382,13 +1440,13 @@ function RefsPicker({ personaOwnRefs, workspaceRefs, showWorkspace, onToggleShow
         {personaScope.map((r) => <RefTile key={r.id} r={r} />)}
         {showWorkspace && workspaceScope.map((r) => <RefTile key={r.id} r={r} />)}
 
-        <button type="button" onClick={() => fileRef.current?.click()}
-          className="w-[88px] rounded border-2 border-dashed border-[var(--border)] flex flex-col items-center justify-center gap-1 text-[var(--muted)] hover:border-[var(--accent)] hover:text-[var(--accent)]"
+        <button type="button" onClick={() => fileRef.current?.click()} disabled={busy}
+          className="w-[88px] rounded border-2 border-dashed border-[var(--border)] flex flex-col items-center justify-center gap-1 text-[var(--muted)] hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-50"
           style={{ height: 116 }}>
-          <span className="text-2xl">+</span>
-          <span className="text-[9px] font-semibold">Upload</span>
+          <span className="text-2xl">{busy ? '⏳' : '+'}</span>
+          <span className="text-[9px] font-semibold">{busy ? 'Upload...' : 'Upload (multi)'}</span>
         </button>
-        <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onFilePicked} />
+        <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={onFilePicked} />
       </div>
 
       {opening && pendingFile && (

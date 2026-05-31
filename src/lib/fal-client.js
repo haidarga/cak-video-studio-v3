@@ -229,16 +229,27 @@ export function buildVidInput(vidModel, { prompt, image_url, reference_urls, dur
     return { prompt, ...srcField, duration: parseInt(duration) || 5, aspect_ratio, resolution: '720p' }
   }
   if (vidModel.includes('grok-imagine')) {
-    // xAI Grok Imagine Video — image-to-video with audio. Cap at 15s per
-    // fal.ai schema. Resolution 720p ($0.07/s) — 480p ($0.05/s) available but
-    // we prefer quality. aspect_ratio='auto' lets the model infer from source.
-    return {
+    // xAI Grok Imagine Video — has TWO variants:
+    //   image-to-video    : single source image, animate motion from prompt
+    //   reference-to-video: multiple reference photos (up to ~4-6), the model
+    //     composes a fresh video that respects the references' identity +
+    //     style. Picked for storyboard mode so each panel can stay as a
+    //     reference without being morphed by image-to-video frame-warping.
+    // Both share resolution / aspect / duration handling.
+    const base = {
       prompt,
-      image_url,
       duration: Math.max(5, Math.min(15, parseInt(duration) || 5)),
       resolution: '720p',
       aspect_ratio: aspect_ratio || 'auto',
     }
+    if (isRef) {
+      const refs = (reference_urls || []).filter(Boolean).slice(0, 6)
+      // Fall back to image_url as first reference if caller didn't pass refs
+      // (e.g. storyboard auto-route where the grid image IS the reference).
+      const finalRefs = refs.length ? refs : (image_url ? [image_url] : [])
+      return { ...base, image_urls: finalRefs }
+    }
+    return { ...base, image_url }
   }
   return { prompt, image_url, duration: parseInt(duration) || 5, aspect_ratio }
 }
@@ -299,6 +310,7 @@ export const VID_STABILITY = ''
 
 export const VIDEO_MODELS = [
   { v: 'xai/grok-imagine-video/image-to-video', l: 'Grok Imagine — ~$0.07/dtk 720p (audio) 💰' },
+  { v: 'xai/grok-imagine-video/reference-to-video', l: '🎭 Grok Imagine Ref-to-Video — ~$0.07/dtk (multi-ref, NO grid morph) 💰' },
   { v: 'fal-ai/kling-video/v3/standard/image-to-video', l: 'Kling v3 — ~$0.08/dtk 💰' },
   { v: 'fal-ai/kling-video/o3/standard/image-to-video', l: 'Kling O3 — ~$0.11/dtk (audio)' },
   { v: 'fal-ai/kling-video/v2.5-turbo/pro/ref-to-video', l: '🎭 Kling 2.5 Pro Ref-to-Video — ~$0.12/dtk (NO morphing dari grid)' },
