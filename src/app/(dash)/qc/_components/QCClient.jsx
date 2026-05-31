@@ -1,6 +1,7 @@
 'use client'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { uploadFile, uploadBlob } from '@/lib/upload-client'
 import { convertVideoToMp4 } from '@/lib/video-convert'
 import { stripAudioFromVideo } from '@/lib/strip-audio'
 
@@ -113,10 +114,7 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
         setConverting({ id: r.id, stage })
       })
       setConverting({ id: r.id, stage: `Uploading ${(blob.size / 1024 / 1024).toFixed(1)}MB...` })
-      const path = `${workspaceId}/qc-converted-${Date.now()}.mp4`
-      const { error: upErr } = await supabase.storage.from('refs').upload(path, blob, { contentType: 'video/mp4', cacheControl: '3600' })
-      if (upErr) throw upErr
-      const { data: { publicUrl } } = supabase.storage.from('refs').getPublicUrl(path)
+      const { url: publicUrl } = await uploadBlob(blob, `qc-converted-${Date.now()}.mp4`, 'qc')
       const { error: updErr } = await supabase.from('results').update({ url: publicUrl }).eq('id', r.id)
       if (updErr) throw updErr
       setResults((prev) => prev.map((x) => (x.id === r.id ? { ...x, url: publicUrl } : x)))
@@ -147,10 +145,7 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
         setConverting({ id: r.id, stage })
       })
       setConverting({ id: r.id, stage: `Uploading ${(blob.size / 1024 / 1024).toFixed(1)}MB...` })
-      const path = `${workspaceId}/qc-muted-${Date.now()}.mp4`
-      const { error: upErr } = await supabase.storage.from('refs').upload(path, blob, { contentType: 'video/mp4', cacheControl: '3600' })
-      if (upErr) throw upErr
-      const { data: { publicUrl } } = supabase.storage.from('refs').getPublicUrl(path)
+      const { url: publicUrl } = await uploadBlob(blob, `qc-muted-${Date.now()}.mp4`, 'qc')
       const { error: updErr } = await supabase.from('results').update({ url: publicUrl }).eq('id', r.id)
       if (updErr) throw updErr
       setResults((prev) => prev.map((x) => (x.id === r.id ? { ...x, url: publicUrl } : x)))
@@ -177,24 +172,8 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
 
     setBusyUpload({ id: persona.id, name: file.name, sizeMB: sizeMB.toFixed(1), stage: 'uploading' })
     try {
-      const ext = (file.name.split('.').pop() || 'mp4').toLowerCase()
-      const path = `${workspaceId}/external-${persona.id}-${Date.now()}.${ext}`
-      const { error: upErr } = await supabase.storage.from('refs').upload(path, file, {
-        upsert: false, contentType: file.type, cacheControl: '3600',
-      })
-      if (upErr) {
-        // Surface meaningful storage errors
-        const msg = upErr.message || ''
-        if (msg.includes('exceeded') || msg.includes('size')) {
-          throw new Error(`File terlalu besar buat bucket. Jalanin migration 0004_raise_upload_limit.sql di Supabase SQL Editor dulu. (${msg})`)
-        }
-        if (msg.includes('mime') || msg.includes('type')) {
-          throw new Error(`MIME type ditolak bucket. Migration 0004 set allowed_mime_types=null biar terima semua. (${msg})`)
-        }
-        throw new Error(`Storage upload gagal: ${msg}`)
-      }
+      const { url: publicUrl } = await uploadFile(file, 'external', { name: `${persona.id}-${file.name || 'upload'}` })
       setBusyUpload((s) => ({ ...s, stage: 'inserting' }))
-      const { data: { publicUrl } } = supabase.storage.from('refs').getPublicUrl(path)
       const isVideo = file.type.startsWith('video/')
       const { error: insErr } = await supabase.from('results').insert({
         workspace_id: workspaceId,

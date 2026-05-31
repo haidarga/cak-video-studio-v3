@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { uploadFile } from '@/lib/upload-client'
 
 export default function RefsClient({ workspaceId, userId, initialRefs }) {
   const supabase = createClient()
@@ -26,13 +27,9 @@ export default function RefsClient({ workspaceId, userId, initialRefs }) {
     setBusy(true); setErr('')
     try {
       for (const file of files) {
-        const ext = (file.name.split('.').pop() || 'jpg').toLowerCase()
-        const path = `${workspaceId}/ref-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
-        const { error } = await supabase.storage.from('refs').upload(path, file, { upsert: false, contentType: file.type })
-        if (error) throw error
-        const { data: { publicUrl } } = supabase.storage.from('refs').getPublicUrl(path)
+        const { url } = await uploadFile(file, 'refs')
         await supabase.from('refs').insert({
-          workspace_id: workspaceId, fal_url: publicUrl, label: '', kind: 'character', created_by: userId,
+          workspace_id: workspaceId, fal_url: url, label: '', kind: 'character', created_by: userId,
         })
       }
     } catch (e) { setErr(e.message) }

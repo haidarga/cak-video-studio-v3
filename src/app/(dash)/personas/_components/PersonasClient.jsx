@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { uploadFile } from '@/lib/upload-client'
 import { Modal, Field, Input, Textarea } from '../../brands/_components/BrandsClient'
 import { PERSONA_TEMPLATES } from '@/lib/persona-templates'
 
@@ -563,12 +564,10 @@ function PersonaEditor({ persona, workspaceId, userId, onClose, onError }) {
   const refsInputRef = useRef(null)
 
   async function uploadToStorage(file, prefix) {
-    const ext = (file.name.split('.').pop() || 'jpg').toLowerCase()
-    const path = `${workspaceId}/${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
-    const { error } = await supabase.storage.from('refs').upload(path, file, { upsert: false, contentType: file.type })
-    if (error) throw error
-    const { data: { publicUrl } } = supabase.storage.from('refs').getPublicUrl(path)
-    return publicUrl
+    // Use 'refs' as logical folder; the prefix label survives via the filename
+    // (now stable on R2 with random suffix).
+    const { url } = await uploadFile(file, 'refs', { name: `${prefix}-${file.name || 'file'}` })
+    return url
   }
 
   async function onAvatarPick(e) {

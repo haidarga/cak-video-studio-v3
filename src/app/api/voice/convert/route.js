@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { voiceChange, extractAudio, getWorkspaceKey } from '@/lib/elevenlabs-server'
 import { getActiveWorkspace } from '@/lib/workspace'
 import { assertBudget } from '@/lib/budget-gate'
+import { uploadToR2 } from '@/lib/r2-client'
 
 // Rough ElevenLabs Speech-to-Speech cost per call. Actual cost depends on
 // minutes of audio; this is a conservative estimate for one shot (~10s) used
@@ -33,12 +34,9 @@ export async function POST(req) {
     const audioBuf = await extractAudio(video_url)
     // 2. Speech-to-Speech
     const convertedBuf = await voiceChange(key, voice_id, new Uint8Array(audioBuf))
-    // 3. Upload to Supabase storage
-    const path = `${wsId}/voice/${voice_id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp3`
-    const { error: upErr } = await supabase.storage.from('refs')
-      .upload(path, new Uint8Array(convertedBuf), { contentType: 'audio/mpeg', upsert: false })
-    if (upErr) throw new Error('storage upload: ' + upErr.message)
-    const { data: { publicUrl } } = supabase.storage.from('refs').getPublicUrl(path)
+    // 3. Upload to R2 (cheap egress for cloned-voice mp3s)
+    const r2Key = `cloned-voice/${wsId}/${voice_id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp3`
+    const publicUrl = await uploadToR2(r2Key, Buffer.from(new Uint8Array(convertedBuf)), 'audio/mpeg')
 
     // 4. Patch result row if caller provided one
     if (result_id) {

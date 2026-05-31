@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { uploadFile, uploadBlob } from '@/lib/upload-client'
 import { renderProject, totalDuration, clipDuration, activeBaseClipAt, activeOverlaysAt, wrapTextLines } from '@/lib/editor-render'
 import { FONT_OPTIONS, DEFAULT_FONT, getFontCss } from '@/lib/editor-fonts'
 import { proxify } from '@/lib/editor-proxy'
@@ -346,10 +347,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
     const f = e.target.files?.[0]; if (!f) return; e.target.value = ''
     if (!f.type.startsWith('image/')) { setErr('File harus image'); return }
     try {
-      const path = `${workspaceId}/editor-img-${Date.now()}.${f.name.split('.').pop()}`
-      const { error: upErr } = await supabase.storage.from('refs').upload(path, f, { contentType: f.type })
-      if (upErr) throw upErr
-      const { data: { publicUrl } } = supabase.storage.from('refs').getPublicUrl(path)
+      const { url: publicUrl } = await uploadFile(f, 'editor-img')
       const start = currentTime
       const end = Math.min(totalDur || 5, currentTime + 3)
       patch((p) => {
@@ -372,11 +370,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
     if (sizeMB > 200) { setErr(`File ${sizeMB.toFixed(1)}MB > 200MB max. Compress dulu.`); return }
     setUploadingVideo({ name: f.name, sizeMB: sizeMB.toFixed(1), stage: 'uploading' }); setErr('')
     try {
-      const ext = (f.name.split('.').pop() || 'mp4').toLowerCase()
-      const path = `${workspaceId}/editor-upload-${Date.now()}.${ext}`
-      const { error: upErr } = await supabase.storage.from('refs').upload(path, f, { contentType: f.type, cacheControl: '3600' })
-      if (upErr) throw upErr
-      const { data: { publicUrl } } = supabase.storage.from('refs').getPublicUrl(path)
+      const { url: publicUrl } = await uploadFile(f, 'editor-upload')
 
       setUploadingVideo((s) => ({ ...s, stage: 'inserting' }))
       // INSERT to results so it appears in media library + persona-filtered.
@@ -400,10 +394,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
     const f = e.target.files?.[0]; if (!f) return; e.target.value = ''
     if (!f.type.startsWith('audio/')) { setErr('File harus audio'); return }
     try {
-      const path = `${workspaceId}/editor-audio-${Date.now()}.${f.name.split('.').pop()}`
-      const { error: upErr } = await supabase.storage.from('refs').upload(path, f, { contentType: f.type })
-      if (upErr) throw upErr
-      const { data: { publicUrl } } = supabase.storage.from('refs').getPublicUrl(path)
+      const { url: publicUrl } = await uploadFile(f, 'editor-audio')
       // src_start = where in the source music file to begin (skip intro).
       // src_end   = where in the source music file to end (cut tail). null = play to natural end.
       // start     = where in the VIDEO TIMELINE the music begins (delay before first note).
@@ -563,10 +554,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
     try {
       const { blob, ext, mime } = await renderProject(project, setExportProgress, { mode })
       setExportProgress(`Uploading ${(blob.size / 1024 / 1024).toFixed(1)}MB...`)
-      const path = `${workspaceId}/editor-${Date.now()}.${ext}`
-      const { error: upErr } = await supabase.storage.from('refs').upload(path, blob, { upsert: false, contentType: mime, cacheControl: '3600' })
-      if (upErr) throw upErr
-      const { data: { publicUrl } } = supabase.storage.from('refs').getPublicUrl(path)
+      const { url: publicUrl } = await uploadBlob(blob, `editor-${Date.now()}.${ext}`, 'editor-export')
       const { error: insErr } = await supabase.from('results').insert({
         workspace_id: workspaceId, type: 'video', url: publicUrl,
         label: project.name + ' (edited)', ar: project.ar,

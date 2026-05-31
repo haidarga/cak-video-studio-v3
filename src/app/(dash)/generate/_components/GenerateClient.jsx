@@ -11,6 +11,7 @@ import { STYLE_PRESETS } from '@/lib/style-presets'
 import { compileImagePrompt, compileVideoPrompt } from '@/lib/prompt-compiler'
 import { CAMERA_PRESETS, listAllPresets, DEFAULT_CAMERA, getCameraPreset } from '@/lib/camera-presets'
 import { buildIdentitySentence, productNotesShort } from '@/lib/identity'
+import { uploadFile } from '@/lib/upload-client'
 
 export default function GenerateClient({ workspaceId, userId, activeBrand, personas: initialPersonas, workspaceRefs: initialRefs }) {
   const supabase = createClient()
@@ -1319,11 +1320,7 @@ function RefsPicker({ personaOwnRefs, workspaceRefs, showWorkspace, onToggleShow
     if (!pendingFile) return
     setBusy(true); onErr('')
     try {
-      const ext = (pendingFile.name.split('.').pop() || 'jpg').toLowerCase()
-      const path = `${workspaceId}/ref-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
-      const { error: upErr } = await supabase.storage.from('refs').upload(path, pendingFile, { upsert: false, contentType: pendingFile.type })
-      if (upErr) throw upErr
-      const { data: { publicUrl } } = supabase.storage.from('refs').getPublicUrl(path)
+      const { url: publicUrl } = await uploadFile(pendingFile, 'refs')
       const { data: row, error } = await supabase.from('refs')
         .insert({
           workspace_id: workspaceId, fal_url: publicUrl,
@@ -1625,12 +1622,8 @@ function PresetEditorModal({ preset, onChange, err, busy, workspaceId, onCancel,
     try {
       for (const f of take) {
         if (!f.type.startsWith('image/')) continue
-        const ext = (f.name.split('.').pop() || 'png').toLowerCase()
-        const path = `${workspaceId}/preset-style-${preset.preset_key || 'new'}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`
-        const { error: upErr } = await supabase.storage.from('refs').upload(path, f, { contentType: f.type })
-        if (upErr) throw upErr
-        const { data: { publicUrl } } = supabase.storage.from('refs').getPublicUrl(path)
-        newUrls.push(publicUrl)
+        const { url } = await uploadFile(f, 'preset-style', { name: `${preset.preset_key || 'new'}-${f.name || 'img'}` })
+        newUrls.push(url)
       }
       onChange({ ...preset, style_ref_urls: [...styleRefs, ...newUrls] })
     } catch (e) { setUploadErr(e.message || String(e)) }
@@ -1837,11 +1830,7 @@ function StyleRefsPicker({ workspaceId, userId, selectedIds, onChange }) {
     if (!f.type.startsWith('image/')) { setErr('File harus image'); return }
     setBusy(true); setErr('')
     try {
-      const ext = (f.name.split('.').pop() || 'jpg').toLowerCase()
-      const path = `${workspaceId}/style-${Date.now()}-${Math.random().toString(36).slice(2,6)}.${ext}`
-      const { error: upErr } = await supabase.storage.from('refs').upload(path, f, { contentType: f.type, cacheControl: '3600' })
-      if (upErr) throw upErr
-      const { data: { publicUrl } } = supabase.storage.from('refs').getPublicUrl(path)
+      const { url: publicUrl } = await uploadFile(f, 'style')
       const { data: row, error } = await supabase.from('refs').insert({
         workspace_id: workspaceId, fal_url: publicUrl,
         label: f.name.replace(/\.[^.]+$/, ''),
