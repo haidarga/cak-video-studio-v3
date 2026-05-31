@@ -24,8 +24,8 @@ export async function GET() {
     .eq('workspace_id', wsId)
     .order('created_at', { ascending: true })
   if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
-  // Normalize shape: tokens/negatives/conflicts_with are jsonb arrays already.
-  // preset_key becomes the dropdown id; ensure unique per workspace.
+  // Normalize shape: tokens/negatives/conflicts_with/style_ref_urls are jsonb
+  // arrays already. preset_key becomes the dropdown id; unique per workspace.
   const presets = (data || []).map((p) => ({
     id: p.preset_key,             // public id used in globalConfig
     _row_id: p.id,                // DB row id (for PATCH/DELETE)
@@ -37,6 +37,7 @@ export async function GET() {
     conflicts_with: Array.isArray(p.conflicts_with) ? p.conflicts_with : [],
     dominance: p.dominance,
     is_favorite: p.is_favorite,
+    style_ref_urls: Array.isArray(p.style_ref_urls) ? p.style_ref_urls : [],
   }))
   return NextResponse.json({ ok: true, presets })
 }
@@ -64,6 +65,11 @@ export async function POST(req) {
     conflicts_with: Array.isArray(body.conflicts_with) ? body.conflicts_with : [],
     dominance: Number.isFinite(Number(body.dominance)) ? Number(body.dominance) : 5,
     is_favorite: !!body.is_favorite,
+    // Cap at 8 — same ceiling as multi-ref image models. Filter out non-string
+    // / empty entries so the DB never stores garbage.
+    style_ref_urls: Array.isArray(body.style_ref_urls)
+      ? body.style_ref_urls.map((u) => String(u || '').trim()).filter(Boolean).slice(0, 8)
+      : [],
   }
   const { data, error } = await supabase.from('camera_presets').insert(row).select('id').single()
   if (error) {
@@ -93,6 +99,9 @@ export async function PATCH(req) {
   if (Array.isArray(body.conflicts_with)) patch.conflicts_with = body.conflicts_with
   if (body.dominance != null) patch.dominance = Number(body.dominance) || 5
   if (body.is_favorite != null) patch.is_favorite = !!body.is_favorite
+  if (Array.isArray(body.style_ref_urls)) {
+    patch.style_ref_urls = body.style_ref_urls.map((u) => String(u || '').trim()).filter(Boolean).slice(0, 8)
+  }
 
   const { error } = await supabase
     .from('camera_presets')

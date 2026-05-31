@@ -9,7 +9,7 @@ import {
 import { imageCost, videoCost, fmtCost } from '@/lib/cost-table'
 import { STYLE_PRESETS } from '@/lib/style-presets'
 import { compileImagePrompt, compileVideoPrompt } from '@/lib/prompt-compiler'
-import { CAMERA_PRESETS, listAllPresets, DEFAULT_CAMERA } from '@/lib/camera-presets'
+import { CAMERA_PRESETS, listAllPresets, DEFAULT_CAMERA, getCameraPreset } from '@/lib/camera-presets'
 import { buildIdentitySentence, productNotesShort } from '@/lib/identity'
 
 export default function GenerateClient({ workspaceId, userId, activeBrand, personas: initialPersonas, workspaceRefs: initialRefs }) {
@@ -549,7 +549,14 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
     try {
       const productKnowledge = selectedRefs.map((r) => String(r.knowledge || '').trim()).filter(Boolean).join('\n')
       const characterProductUrls = selectedRefs.map((r) => r.fal_url).filter(Boolean)
-      const styleUrls = styleRefs.map((r) => r.fal_url).filter(Boolean)
+      // Style refs = ad-hoc mood board (global section) PLUS the camera
+      // preset's own mood board (per-preset attachment). Dedupe so a user-
+      // selected ref doesn't end up double-counted if it's also pinned to
+      // the active preset.
+      const adhocStyleUrls = styleRefs.map((r) => r.fal_url).filter(Boolean)
+      const cam = getCameraPreset(globalConfig.cameraPreset || DEFAULT_CAMERA, userCameraPresets)
+      const presetStyleUrls = Array.isArray(cam?.style_ref_urls) ? cam.style_ref_urls : []
+      const styleUrls = Array.from(new Set([...adhocStyleUrls, ...presetStyleUrls]))
       // ORDER MATTERS: style refs go LAST so the compiler's L8b "the last N
       // images are style references" claim is literally true to the model.
       const refUrls = [...characterProductUrls, ...styleUrls]
@@ -1587,6 +1594,7 @@ function CameraPresetPicker({ workspaceId, value, onChange, userPresets, onUserP
           onChange={setEditing}
           err={err}
           busy={busy}
+          workspaceId={workspaceId}
           onCancel={() => { setModalOpen(false); setEditing(null) }}
           onSave={save}
           onDelete={editing._row_id ? () => deletePreset(editing) : null} />
@@ -1595,9 +1603,42 @@ function CameraPresetPicker({ workspaceId, value, onChange, userPresets, onUserP
   )
 }
 
-function PresetEditorModal({ preset, onChange, err, busy, onCancel, onSave, onDelete }) {
+function PresetEditorModal({ preset, onChange, err, busy, workspaceId, onCancel, onSave, onDelete }) {
   const tokensText = (preset.tokens || []).join('\n')
   const negativesText = (preset.negatives || []).join('\n')
+  const styleRefs = preset.style_ref_urls || []
+  const [uploading, setUploading] = useState(false)
+  const [uploadErr, setUploadErr] = useState('')
+  // Lazy supabase client — only needed when user actually uploads.
+  const supabase = useMemo(() => createClient(), [])
+
+  async function onPickFiles(e) {
+    const files = Array.from(e.target.files || [])
+    e.target.value = ''
+    if (files.length === 0) return
+    if (!workspaceId) { setUploadErr('Workspace belum siap'); return }
+    const room = 8 - styleRefs.length
+    if (room <= 0) { setUploadErr('Max 8 style refs per preset'); return }
+    const take = files.slice(0, room)
+    setUploading(true); setUploadErr('')
+    const newUrls = []
+    try {
+      for (const f of take) {
+        if (!f.type.startsWith('image/')) continue
+        const ext = (f.name.split('.').pop() || 'png').toLowerCase()
+        const path = `${workspaceId}/preset-style-${preset.preset_key || 'new'}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`
+        const { error: upErr } = await supabase.storage.from('refs').upload(path, f, { contentType: f.type })
+        if (upErr) throw upErr
+        const { data: { publicUrl } } = supabase.storage.from('refs').getPublicUrl(path)
+        newUrls.push(publicUrl)
+      }
+      onChange({ ...preset, style_ref_urls: [...styleRefs, ...newUrls] })
+    } catch (e) { setUploadErr(e.message || String(e)) }
+    setUploading(false)
+  }
+  function removeRef(url) {
+    onChange({ ...preset, style_ref_urls: styleRefs.filter((u) => u !== url) })
+  }
   return (
     <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6" onClick={(e) => { if (e.target === e.currentTarget) onCancel() }}>
       <div className="w-full max-w-2xl bg-[var(--surface)] rounded-xl border border-[var(--border)] max-h-[92vh] flex flex-col">
@@ -1658,6 +1699,32 @@ function PresetEditorModal({ preset, onChange, err, busy, onCancel, onSave, onDe
               placeholder={`cinematic\nARRI Alexa\nprofessional studio\nglossy\ncolor graded\nsharp focus\nhigh-detail photography\nwell-balanced composition`}
               className="w-full text-[11px] font-mono px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)] resize-y" />
           </Field>
+          <div className="pt-2 border-t border-[var(--border)]">
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-[10px] uppercase text-[var(--muted)] font-semibold">🖼 Visual Style References (mood board) — {styleRefs.length}/8</div>
+              <label className={`text-[10px] px-2 py-1 rounded font-semibold cursor-pointer ${uploading ? 'bg-[var(--surface2)] text-[var(--muted)]' : 'bg-[var(--accent)] text-white'}`}>
+                {uploading ? '⏳ Upload...' : '+ Upload image'}
+                <input type="file" accept="image/*" multiple disabled={uploading || styleRefs.length >= 8} onChange={onPickFiles} className="hidden" />
+              </label>
+            </div>
+            <div className="text-[9px] text-[var(--muted2)] mb-2 leading-relaxed">
+              Auto-inject ke image gen sebagai <strong>style refs</strong> pas preset ini aktif. Model bakal cocokin palette, lighting, render style — TIDAK ngambil karakter/wajah dari gambar.
+            </div>
+            {uploadErr && <div className="text-[10px] text-red-400 mb-1.5">⚠ {uploadErr}</div>}
+            {styleRefs.length > 0 ? (
+              <div className="grid grid-cols-4 gap-2">
+                {styleRefs.map((url) => (
+                  <div key={url} className="relative group aspect-square bg-[var(--surface2)] rounded overflow-hidden border border-[var(--border)]">
+                    <img src={url} alt="" className="w-full h-full object-cover" />
+                    <button onClick={() => removeRef(url)} type="button"
+                      className="absolute top-1 right-1 w-5 h-5 rounded-full bg-red-500/90 text-white text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity">×</button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-[10px] text-[var(--muted2)] italic">Belum ada style ref. Upload 1-3 gambar yang nge-represent look yang lo mau.</div>
+            )}
+          </div>
         </div>
         <div className="px-6 py-4 border-t border-[var(--border)] flex justify-between gap-3 flex-shrink-0">
           <div>
