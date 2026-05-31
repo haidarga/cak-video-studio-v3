@@ -157,10 +157,26 @@ export const LAYER_ORDER = [
   'L11_edit_commands',
 ]
 
-// Main entry. Returns final prompt string ready to send to fal.ai.
-export function compilePrompt(spec) {
+// Detect naskah-explicit style hints that should disable camera preset injection.
+// Shared between image + video paths so the trigger logic stays consistent.
+function detectStyleOverride(actionStr) {
+  const s = String(actionStr || '').toLowerCase()
+  return /\b(cctv|security cam|dashcam|body cam|found footage|surveillance|webcam|gopro|drone shot|aerial|bird's? eye|fisheye|vhs|film grain|polaroid|disposable camera|night vision|infrared|thermal|ugc)\b/i.test(s)
+    // Phone-model refs: "iphone 13", "samsung a13", "galaxy s22", "pixel 8 pro", "redmi note 12".
+    || /\b(iphone|samsung|xiaomi|nokia|pixel|galaxy|redmi|oppo|vivo|huawei|realme)\s+(?:[a-z]+\s*)?\d+/i.test(s)
+    || /\b(?:samsung\s+galaxy|galaxy\s+[a-z]\d|note\s*\d|pixel\s*\d)/i.test(s)
+}
+
+// ── IMAGE PATH ──
+// Full 11-layer compile for STILL FRAME gen (nano-banana-2/edit, gpt-image-2,
+// grok-imagine-image, seedream, qwen-image-edit, etc). Layers: camera preset,
+// identity, wardrobe, environment, action, brand, AR, continuity, quality,
+// negatives, L11 trailing edit imperative.
+//
+// Owns: camera preset injection, contradiction sanitizer, style-aware quality,
+// trailing CHANGE-outfit imperative (recency bias on edit endpoints).
+export function compileImagePrompt(spec) {
   const {
-    media = 'image',
     identity = null,
     camera = 'iphone_15_clean',
     environment = null,
@@ -176,78 +192,79 @@ export function compilePrompt(spec) {
   } = spec
 
   const cam = getCameraPreset(camera, userPresets)
-  const ctx = { cameraId: cam.id, ar, skipProduct, continuousShot, refsCount, wardrobe: !!wardrobe, media }
+  const ctx = { cameraId: cam.id, ar, skipProduct, continuousShot, refsCount, wardrobe: !!wardrobe, media: 'image' }
 
-  // ── NASKAH-DRIVEN OVERRIDE ──
-  // If the user's action text already specifies its own camera/style direction
-  // (CCTV, found footage, security cam, dashcam, smartphone X, iPhone XX, body
-  // cam, etc.), DROP the camera preset L1/L5b tokens entirely. Otherwise the
-  // preset "shot on iPhone 15 Pro, clean handheld..." conflicts with the
-  // naskah's "CCTV grainy found footage" and the model picks the dominant
-  // one (preset, since it sits at L1) — user's explicit direction loses.
-  const actionStr = String(action || '').toLowerCase()
-  const userOverrodeStyle = /\b(cctv|security cam|dashcam|body cam|found footage|surveillance|webcam|gopro|drone shot|aerial|bird's? eye|fisheye|vhs|film grain|polaroid|disposable camera|night vision|infrared|thermal|ugc)\b/i.test(actionStr)
-    // Match phone-model references: "iphone 13", "samsung a13", "galaxy s22",
-    // "pixel 8", "redmi note 12", "iphone 15 pro" etc. Previous regex only
-    // caught a digit directly after the brand name and missed "samsung A13".
-    || /\b(iphone|samsung|xiaomi|nokia|pixel|galaxy|redmi|oppo|vivo|huawei|realme)\s+(?:[a-z]+\s*)?\d+/i.test(actionStr)
-    || /\b(?:samsung\s+galaxy|galaxy\s+[a-z]\d|note\s*\d|pixel\s*\d)/i.test(actionStr)
+  // If the naskah specifies its own camera/style direction (CCTV, found footage,
+  // smartphone X, iPhone XX, etc.), DROP camera preset + quality + negatives.
+  // Otherwise the preset fights the user's explicit direction.
+  const userOverrodeStyle = detectStyleOverride(action)
   const L1_camera = userOverrodeStyle ? '' : (cam.tokens?.join(', ') || '')
   const L5b_camera_echo = userOverrodeStyle
     ? ''
     : (cam.tokens?.length ? `Throughout, maintain: ${cam.tokens.slice(0, 4).join(', ')}.` : '')
   const L1b_grid = gridHeader || ''
   const L2_identity = identity ? `Subject: ${identity}.` : ''
-  // L3 = soft early-token ANCHOR only. Wardrobe seen near the top primes
-  // non-edit generation models (nano-banana-2, gpt-image-2 generation).
-  // The actual IMPERATIVE COMMAND lives in L11 at the end of the prompt —
-  // user proved empirically that edit endpoints (gpt-image-2/edit etc) parse
-  // trailing "CHANGE X to Y" verbs via recency bias.
+  // L3 = soft early-token anchor; L11 carries the imperative.
   const L3_wardrobe = wardrobe ? `Wardrobe: ${wardrobe}.` : ''
   const L4_environment = environment ? `Setting: ${environment}.` : ''
   const L5_action = action || ''
   const L6_brand = (!skipProduct && brand) ? `Product: ${brand}.` : ''
   const L7_format = `${ar} composition.`
   const L8_continuity = refsCount ? 'Keep character identity consistent with references.' : ''
-  // Quality + negatives also drop when user overrode style — preset negatives
-  // like "anamorphic, film grain, vintage filter" directly contradict a user
-  // prompt asking for CCTV grainy / found-footage / VHS aesthetic.
-  const L9_quality = userOverrodeStyle ? '' : pickQuality(cam, media, skipProduct)
+  const L9_quality = userOverrodeStyle ? '' : pickQuality(cam, 'image', skipProduct)
   const L10_negatives = (cam.negatives?.length && !userOverrodeStyle)
     ? `Avoid: ${cam.negatives.join(', ')}.`
     : ''
 
-  // L11 — imperative EDIT command at end of prompt.
-  //
-  // User proved empirically on fal.ai sandbox that gpt-image-2/edit (and
-  // seedream/v4/edit, qwen-image-edit, imagen-4-fast/edit) reward TRAILING
-  // imperatives via recency bias. The passive "Wardrobe (must persist...)"
-  // line buried in the middle was being ignored — model treated it as
-  // description, not instruction. But the same intent rephrased as
-  //   "change her outfit into casual outfit, and the kid into casual too"
-  // placed at the very end actually swaps clothing while preserving
-  // face/hair identity. That's the entire fix.
-  //
-  // Identity guardrail ("Keep face, hair, body and identity IDENTICAL —
-  // only swap clothing") prevents the model from re-generating the face
-  // along with the outfit. We only want to mutate clothing.
+  // L11 — trailing imperative for edit endpoints (recency bias).
   const L11_edit_commands = wardrobe
     ? `CHANGE the subjects' outfit to: ${wardrobe}. Replace the reference photo outfit completely. Keep face, hair, body and identity IDENTICAL — only swap clothing.`
     : ''
 
   const layers = [L1_camera, L1b_grid, L2_identity, L3_wardrobe, L4_environment, L5_action, L5b_camera_echo, L6_brand, L7_format, L8_continuity, L9_quality]
-  // BUG FIX: L10_negatives + L11_edit_commands intentionally NOT sanitized.
-  // Sanitizer's job is to drop "cinematic / professional / sharp focus / 8K"
-  // from POSITIVE directives when phone-cam preset wins. Those words also
-  // appear inside negatives list — sanitizer would strip them and break the
-  // Avoid: clause. L11 also pass-through raw so the imperative verb stays intact.
+  // L10 + L11 pass-through raw so sanitizer doesn't strip words from the Avoid:
+  // clause or break the imperative verb.
   const cleaned = layers.map((l) => sanitize(l, ctx)).filter(Boolean)
   if (L10_negatives) cleaned.push(L10_negatives)
   if (L11_edit_commands) cleaned.push(L11_edit_commands)
   return cleaned.join('\n')
 }
 
-// Video variant — same compiler with media='video'.
+// ── VIDEO PATH ──
+// Image-to-video gen takes a still that ALREADY contains identity + wardrobe +
+// camera style baked in. Video model's job is to animate that still — so the
+// prompt only needs MOTION + ACTION TIMELINE. Camera tokens, quality blob, and
+// negatives are noise here: they describe how the FRAME looks (already locked)
+// not how it should MOVE.
+//
+// Owns: minimum context (subject + setting), the action timeline verbatim from
+// naskah.video_motion (passed in via `action`), AR, continuity. Nothing else.
+//
+// Per user directive — "TUGAS ELU CUMAN MASUKIN PRMPTNYA KE FAL.AI": no
+// 11-layer compile, no preset injection, no sanitizer rewrites. Just pass
+// the naskah motion through.
 export function compileVideoPrompt(spec) {
-  return compilePrompt({ ...spec, media: 'video' })
+  const {
+    identity = null,
+    environment = null,
+    action = null,
+    wardrobe = null,
+    ar = '9:16',
+    refsCount = 0,
+  } = spec
+
+  const lines = []
+  if (identity) lines.push(`Subject: ${identity}.`)
+  if (wardrobe) lines.push(`Wardrobe: ${wardrobe}.`)
+  if (environment) lines.push(`Setting: ${environment}.`)
+  if (action) lines.push(action)
+  lines.push(`${ar} composition.`)
+  if (refsCount) lines.push('Keep character identity consistent with references.')
+  return lines.filter(Boolean).join('\n')
+}
+
+// @deprecated — use compileImagePrompt / compileVideoPrompt directly.
+// Kept as a thin alias so any stale import doesn't crash.
+export function compilePrompt(spec) {
+  return spec?.media === 'video' ? compileVideoPrompt(spec) : compileImagePrompt(spec)
 }

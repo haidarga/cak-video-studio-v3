@@ -8,7 +8,7 @@ import {
 } from '@/lib/fal-client'
 import { imageCost, videoCost, fmtCost } from '@/lib/cost-table'
 import { STYLE_PRESETS } from '@/lib/style-presets'
-import { compilePrompt, compileVideoPrompt } from '@/lib/prompt-compiler'
+import { compileImagePrompt, compileVideoPrompt } from '@/lib/prompt-compiler'
 import { CAMERA_PRESETS, listAllPresets, DEFAULT_CAMERA } from '@/lib/camera-presets'
 import { buildIdentitySentence, productNotesShort } from '@/lib/identity'
 
@@ -580,9 +580,9 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
       // those throws "trim is not a function". String() forces a primitive first.
       const wardrobe = String(shot.raw.wardrobe || '').trim() || null
 
-      // Visual Compiler — owns ordering, sanitization, style-aware quality.
-      const fullPrompt = compilePrompt({
-        media: 'image',
+      // IMAGE path — full 11-layer compile (camera, identity, wardrobe, env,
+      // action, brand, AR, continuity, quality, negatives, L11 edit imperative).
+      const fullPrompt = compileImagePrompt({
         camera: globalConfig.cameraPreset || DEFAULT_CAMERA,
         identity,
         wardrobe,
