@@ -713,11 +713,22 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
         // wait until elapsed reaches tDelay; RAF loop starts it.
       }
     }
+    // Display-rate throttle for setCurrentTime. RAF fires at ~60Hz but React
+    // re-rendering EditorClient (1900 LOC) at that rate stalls preview — the
+    // BGM-duck + overlay-sync useEffects also re-fire each render. Cap state
+    // updates to ~10Hz: the timeline cursor still moves smoothly (visually),
+    // useEffects only run 10x/sec instead of 60x. The RAF loop itself keeps
+    // running at full RAF rate using the local `t` variable for accurate sync.
+    let lastDisplayUpdate = 0
     function loop() {
       const elapsed = (performance.now() - startWall) / 1000
       const t = Math.min(totalDur, startT + elapsed)
-      setCurrentTime(t)
-      if (t >= totalDur) { setPlaying(false); return }
+      const now = performance.now()
+      if (now - lastDisplayUpdate >= 100) {
+        setCurrentTime(t)
+        lastDisplayUpdate = now
+      }
+      if (t >= totalDur) { setCurrentTime(t); setPlaying(false); return }
       // Sync base video
       const bi = activeBaseClipAt(t, project.video_clips)
       if (bi && baseVideoRef.current) {
@@ -784,6 +795,17 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
   function stopPlayback() {
     setPlaying(false)
     if (playRafRef.current) { cancelAnimationFrame(playRafRef.current); playRafRef.current = null }
+    // Final cursor sync — the play loop throttles setCurrentTime to 10Hz, so
+    // on stop the state can lag the actual frame by up to ~100ms. Snap to the
+    // active video's time so cursor lands where audio actually paused.
+    if (baseVideoRef.current && baseInfo) {
+      const v = baseVideoRef.current
+      const inTrack = baseInfo.clip.in_track || 0
+      const srcIn = baseInfo.clip.src_in || 0
+      const speed = baseInfo.clip.speed || 1
+      const t = inTrack + (v.currentTime - srcIn) / speed
+      if (isFinite(t) && t >= 0) setCurrentTime(Math.min(totalDur, t))
+    }
     if (baseVideoRef.current) baseVideoRef.current.pause()
     overlayList.forEach((c) => { const v = overlayRefs.current.get(c.id); if (v) v.pause() })
     clonedAudioRefs.current.forEach((el) => { if (el && !el.paused) el.pause() })
@@ -1038,7 +1060,13 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                     loop={false} />
                 )}
 
-                {/* Overlay videos (B-roll) */}
+                {/* Overlay videos (B-roll).
+                    preload="metadata" prevents the browser from eagerly
+                    decoding every overlay's frame data at mount. Without this
+                    a project with 5+ overlays would have all of them buffering
+                    + decoding in the background even when only one is
+                    visible — that's the preview-lag root cause. The browser
+                    upgrades preload to "auto" once .play() is called. */}
                 {overlayList.map((c) => {
                   const isActive = currentTime >= (c.in_track || 0) && currentTime < (c.in_track || 0) + clipDuration(c)
                   const on = selected?.kind === 'video' && selected.id === c.id
@@ -1046,6 +1074,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                   return (
                     <video key={c.id} ref={(el) => { if (el) overlayRefs.current.set(c.id, el); else overlayRefs.current.delete(c.id) }}
                       src={proxify(c.src_url)} crossOrigin="anonymous" muted={!isActive}
+                      preload="metadata"
                       onClick={(e) => { e.stopPropagation(); setSelected({ kind: 'video', id: c.id }) }}
                       style={{
                         position: 'absolute', left: `${pos.x_pct}%`, top: `${pos.y_pct}%`,

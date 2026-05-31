@@ -1064,8 +1064,16 @@ export async function renderWithCanvas(project, onProgress) {
       setTimeout(() => recorder.stop(), 100)
       return
     }
-    requestAnimationFrame(draw)
+    // Cap to ~30Hz — captureStream(30) only samples at 30Hz, so drawing at
+    // RAF's native 60Hz is 2x wasted work. The symptom on slower machines
+    // was exported MP4 looking slow / having duplicate frames because each
+    // 33ms draw window slipped behind real time. Capping leaves headroom.
+    const drewMs = performance.now() - lastFrameStart
+    const wait = Math.max(0, 33 - drewMs)
+    if (wait > 0) setTimeout(() => { lastFrameStart = performance.now(); requestAnimationFrame(draw) }, wait)
+    else { lastFrameStart = performance.now(); requestAnimationFrame(draw) }
   }
+  let lastFrameStart = performance.now()
   draw()
   await new Promise((res) => { recorder.onstop = res })
   return new Blob(chunks, { type: mime })
