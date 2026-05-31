@@ -404,7 +404,10 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
       const { error: upErr } = await supabase.storage.from('refs').upload(path, f, { contentType: f.type })
       if (upErr) throw upErr
       const { data: { publicUrl } } = supabase.storage.from('refs').getPublicUrl(path)
-      const c = { id: uid(), kind: 'audio', src_url: publicUrl, src_name: f.name, start: 0, duration: totalDur || 15, volume: 0.3, track_idx: 0 }
+      // src_start = where in the source music file to begin (skip intro).
+      // src_end   = where in the source music file to end (cut tail). null = play to natural end.
+      // start     = where in the VIDEO TIMELINE the music begins (delay before first note).
+      const c = { id: uid(), kind: 'audio', src_url: publicUrl, src_name: f.name, start: 0, src_start: 0, src_end: null, duration: totalDur || 15, volume: 0.3, track_idx: 0 }
       patch({ audio_clips: [c] })
       setSelected({ kind: 'audio', id: c.id })
     } catch (e) { setErr('Upload audio: ' + e.message) }
@@ -694,11 +697,21 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
     const startWall = performance.now()
     const startT = currentTime >= totalDur ? 0 : currentTime
     if (currentTime >= totalDur) setCurrentTime(0)
-    // BGM starts too
+    // BGM: respects 3 controls — timeline delay (a.start), source crop start
+    // (a.src_start), source crop end (a.src_end). If we're before timeline
+    // delay, don't .play() yet; the RAF loop will kick it off when t crosses
+    // a.start (see below).
     if (bgmAudioRef.current && project.audio_clips?.[0]?.src_url) {
       const a = project.audio_clips[0]
-      bgmAudioRef.current.currentTime = (a.start || 0) + startT
-      bgmAudioRef.current.play().catch(() => {})
+      const tDelay = a.start || 0
+      const srcStart = a.src_start || 0
+      if (startT >= tDelay) {
+        bgmAudioRef.current.currentTime = srcStart + (startT - tDelay)
+        bgmAudioRef.current.play().catch(() => {})
+      } else {
+        bgmAudioRef.current.currentTime = srcStart
+        // wait until elapsed reaches tDelay; RAF loop starts it.
+      }
     }
     function loop() {
       const elapsed = (performance.now() - startWall) / 1000
@@ -724,7 +737,8 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
           if (cv.paused) cv.play().catch(() => {})
         }
       }
-      // Sync overlay videos + their cloned audio
+      // Sync overlay videos + their cloned audio. Cloned voice volume tracks
+      // clip.volume so user can scale it down (incl. set to 0 = full mute).
       project.video_clips.forEach((c) => {
         if ((c.track_idx || 0) === 0) return
         const v = overlayRefs.current.get(c.id)
@@ -737,8 +751,32 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
           return
         }
         if (v.paused) v.play().catch(() => {})
-        if (cv && c.cloned_audio_url && c.use_cloned_voice !== false && cv.paused) cv.play().catch(() => {})
+        if (cv && c.cloned_audio_url && c.use_cloned_voice !== false) {
+          cv.volume = Math.min(1, c.volume ?? 1)
+          if (cv.paused) cv.play().catch(() => {})
+        }
       })
+      // BGM gating: start/stop based on timeline position vs a.start. Without
+      // this, music with a delay would either start immediately (wrong) or
+      // never start when scrubbing past delay during playback.
+      const a = project.audio_clips?.[0]
+      const bgm = bgmAudioRef.current
+      if (a && bgm) {
+        const tDelay = a.start || 0
+        const srcStart = a.src_start || 0
+        const srcEnd = a.src_end || null
+        const srcDuration = srcEnd != null ? Math.max(0, srcEnd - srcStart) : null
+        const timelineEnd = srcDuration != null ? tDelay + srcDuration : null
+        const shouldPlay = t >= tDelay && (timelineEnd == null || t < timelineEnd)
+        if (shouldPlay) {
+          if (bgm.paused) {
+            bgm.currentTime = srcStart + (t - tDelay)
+            bgm.play().catch(() => {})
+          }
+        } else if (!bgm.paused) {
+          bgm.pause()
+        }
+      }
       playRafRef.current = requestAnimationFrame(loop)
     }
     playRafRef.current = requestAnimationFrame(loop)
