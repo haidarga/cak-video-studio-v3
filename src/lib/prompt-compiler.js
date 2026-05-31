@@ -171,7 +171,8 @@ export const LAYER_ORDER = [
 //   L5b  Throughout, maintain: <first 4 camera tokens>.
 //   L6   Product:   <brand>
 //   L7   <ar> composition.
-//   L8   Keep character identity consistent with references.
+//   L8   Keep character identity consistent with references.    (character refs only)
+//   L8b  STYLE REFERENCE: the last N image(s) ...               (style refs only)
 //   L9   <style-aware quality line>
 //   L10  Avoid: <preset negatives>.
 //   L11  CHANGE the subjects' outfit ... (trailing imperative for edit endpoints)
@@ -179,6 +180,11 @@ export const LAYER_ORDER = [
 // Camera preset / quality / negatives are ALWAYS injected — user wants the full
 // preset structure as the default. To opt out of preset injection, the user
 // picks a different cameraPreset in the UI (not autodetected from naskah).
+//
+// CHARACTER vs STYLE refs are distinguished by separate counts so the model
+// doesn't treat the style image's people as additional characters. Caller MUST
+// order refUrls as [character/product refs..., style refs...] (style refs LAST)
+// so the "last N images" claim in L8b is literally true.
 export function compileImagePrompt(spec) {
   const {
     identity = null,
@@ -190,6 +196,7 @@ export function compileImagePrompt(spec) {
     skipProduct = false,
     continuousShot = false,
     refsCount = 0,
+    styleRefsCount = 0,
     gridHeader = null,
     wardrobe = null,
     userPresets = [],
@@ -211,6 +218,15 @@ export function compileImagePrompt(spec) {
   const L6_brand = (!skipProduct && brand) ? `Product: ${brand}.` : ''
   const L7_format = `${ar} composition.`
   const L8_continuity = refsCount ? 'Keep character identity consistent with references.' : ''
+  // L8b — STYLE reference anchor. Tells the model the trailing N images are
+  // AESTHETIC inspiration (palette, lighting, rendering, composition), NOT
+  // identity sources. Without this, models like nano-banana / grok-imagine /
+  // seedream treat every image_url as a face-identity source and bleed the
+  // style ref's people into the output.
+  const styleN = Math.max(0, Number(styleRefsCount) || 0)
+  const L8b_style = styleN > 0
+    ? `STYLE REFERENCE: the last ${styleN === 1 ? 'image is a style reference' : `${styleN} images are style references`} — match their color palette, lighting, rendering style, and overall aesthetic. Do NOT copy characters, faces, or specific objects from them. Use them ONLY as visual mood/style guide.`
+    : ''
   const L9_quality = pickQuality(cam, 'image', skipProduct)
   const L10_negatives = cam.negatives?.length ? `Avoid: ${cam.negatives.join(', ')}.` : ''
 
@@ -220,9 +236,11 @@ export function compileImagePrompt(spec) {
     : ''
 
   const layers = [L1_camera, L1b_grid, L2_identity, L3_wardrobe, L4_environment, L5_action, L5b_camera_echo, L6_brand, L7_format, L8_continuity, L9_quality]
-  // L10 + L11 pass-through raw so sanitizer doesn't strip words from the Avoid:
-  // clause or break the imperative verb.
+  // L8b + L10 + L11 pass-through raw so sanitizer doesn't strip "color palette",
+  // "lighting", "well-balanced composition" from the style anchor / negatives /
+  // imperative.
   const cleaned = layers.map((l) => sanitize(l, ctx)).filter(Boolean)
+  if (L8b_style) cleaned.push(L8b_style)
   if (L10_negatives) cleaned.push(L10_negatives)
   if (L11_edit_commands) cleaned.push(L11_edit_commands)
   return cleaned.join('\n')

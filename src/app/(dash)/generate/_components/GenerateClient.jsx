@@ -550,6 +550,8 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
       const productKnowledge = selectedRefs.map((r) => String(r.knowledge || '').trim()).filter(Boolean).join('\n')
       const characterProductUrls = selectedRefs.map((r) => r.fal_url).filter(Boolean)
       const styleUrls = styleRefs.map((r) => r.fal_url).filter(Boolean)
+      // ORDER MATTERS: style refs go LAST so the compiler's L8b "the last N
+      // images are style references" claim is literally true to the model.
       const refUrls = [...characterProductUrls, ...styleUrls]
 
       // Storyboard mode = grid layout description only. Per-shot mode = single action.
@@ -582,6 +584,9 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
 
       // IMAGE path — full 11-layer compile (camera, identity, wardrobe, env,
       // action, brand, AR, continuity, quality, negatives, L11 edit imperative).
+      // refsCount = character/product refs only; styleRefsCount keeps the
+      // style-ref count separate so L8b can tell the model "the last N images
+      // are style references — match aesthetic, don't borrow characters".
       const fullPrompt = compileImagePrompt({
         camera: globalConfig.cameraPreset || DEFAULT_CAMERA,
         identity,
@@ -592,7 +597,8 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
         ar: globalConfig.ar,
         skipProduct: !!globalConfig.skipProduct,
         continuousShot: !!globalConfig.continuousShot,
-        refsCount: refUrls.length,
+        refsCount: characterProductUrls.length,
+        styleRefsCount: styleUrls.length,
         gridHeader,
         userPresets: userCameraPresets,
       })
