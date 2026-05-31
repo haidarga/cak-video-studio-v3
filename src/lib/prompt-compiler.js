@@ -157,24 +157,28 @@ export const LAYER_ORDER = [
   'L11_edit_commands',
 ]
 
-// Detect naskah-explicit style hints that should disable camera preset injection.
-// Shared between image + video paths so the trigger logic stays consistent.
-function detectStyleOverride(actionStr) {
-  const s = String(actionStr || '').toLowerCase()
-  return /\b(cctv|security cam|dashcam|body cam|found footage|surveillance|webcam|gopro|drone shot|aerial|bird's? eye|fisheye|vhs|film grain|polaroid|disposable camera|night vision|infrared|thermal|ugc)\b/i.test(s)
-    // Phone-model refs: "iphone 13", "samsung a13", "galaxy s22", "pixel 8 pro", "redmi note 12".
-    || /\b(iphone|samsung|xiaomi|nokia|pixel|galaxy|redmi|oppo|vivo|huawei|realme)\s+(?:[a-z]+\s*)?\d+/i.test(s)
-    || /\b(?:samsung\s+galaxy|galaxy\s+[a-z]\d|note\s*\d|pixel\s*\d)/i.test(s)
-}
-
 // ── IMAGE PATH ──
 // Full 11-layer compile for STILL FRAME gen (nano-banana-2/edit, gpt-image-2,
-// grok-imagine-image, seedream, qwen-image-edit, etc). Layers: camera preset,
-// identity, wardrobe, environment, action, brand, AR, continuity, quality,
-// negatives, L11 trailing edit imperative.
+// grok-imagine-image, seedream, qwen-image-edit, etc).
 //
-// Owns: camera preset injection, contradiction sanitizer, style-aware quality,
-// trailing CHANGE-outfit imperative (recency bias on edit endpoints).
+// Output structure (per user spec — matches Gambar 1 reference):
+//   L1   camera preset tokens (UGC / cinematic / animation etc)
+//   L1b  grid header (storyboard mode only)
+//   L2   Subject:   <identity>
+//   L3   Wardrobe:  <wardrobe>
+//   L4   Setting:   <environment>
+//   L5   <action>
+//   L5b  Throughout, maintain: <first 4 camera tokens>.
+//   L6   Product:   <brand>
+//   L7   <ar> composition.
+//   L8   Keep character identity consistent with references.
+//   L9   <style-aware quality line>
+//   L10  Avoid: <preset negatives>.
+//   L11  CHANGE the subjects' outfit ... (trailing imperative for edit endpoints)
+//
+// Camera preset / quality / negatives are ALWAYS injected — user wants the full
+// preset structure as the default. To opt out of preset injection, the user
+// picks a different cameraPreset in the UI (not autodetected from naskah).
 export function compileImagePrompt(spec) {
   const {
     identity = null,
@@ -194,14 +198,10 @@ export function compileImagePrompt(spec) {
   const cam = getCameraPreset(camera, userPresets)
   const ctx = { cameraId: cam.id, ar, skipProduct, continuousShot, refsCount, wardrobe: !!wardrobe, media: 'image' }
 
-  // If the naskah specifies its own camera/style direction (CCTV, found footage,
-  // smartphone X, iPhone XX, etc.), DROP camera preset + quality + negatives.
-  // Otherwise the preset fights the user's explicit direction.
-  const userOverrodeStyle = detectStyleOverride(action)
-  const L1_camera = userOverrodeStyle ? '' : (cam.tokens?.join(', ') || '')
-  const L5b_camera_echo = userOverrodeStyle
-    ? ''
-    : (cam.tokens?.length ? `Throughout, maintain: ${cam.tokens.slice(0, 4).join(', ')}.` : '')
+  const L1_camera = cam.tokens?.join(', ') || ''
+  const L5b_camera_echo = cam.tokens?.length
+    ? `Throughout, maintain: ${cam.tokens.slice(0, 4).join(', ')}.`
+    : ''
   const L1b_grid = gridHeader || ''
   const L2_identity = identity ? `Subject: ${identity}.` : ''
   // L3 = soft early-token anchor; L11 carries the imperative.
@@ -211,10 +211,8 @@ export function compileImagePrompt(spec) {
   const L6_brand = (!skipProduct && brand) ? `Product: ${brand}.` : ''
   const L7_format = `${ar} composition.`
   const L8_continuity = refsCount ? 'Keep character identity consistent with references.' : ''
-  const L9_quality = userOverrodeStyle ? '' : pickQuality(cam, 'image', skipProduct)
-  const L10_negatives = (cam.negatives?.length && !userOverrodeStyle)
-    ? `Avoid: ${cam.negatives.join(', ')}.`
-    : ''
+  const L9_quality = pickQuality(cam, 'image', skipProduct)
+  const L10_negatives = cam.negatives?.length ? `Avoid: ${cam.negatives.join(', ')}.` : ''
 
   // L11 — trailing imperative for edit endpoints (recency bias).
   const L11_edit_commands = wardrobe
