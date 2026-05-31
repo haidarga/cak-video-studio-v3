@@ -637,11 +637,17 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
         : (isGrid
           ? shot.raw.panels.map((p) => p.dialog).filter(Boolean).join(' ')
           : (shot.raw.dialogue || ''))
+      // ALWAYS use the user's video_motion from the parsed naskah. continuousShot
+      // toggle = "single take, no cuts" — that's a CONSTRAINT we ADD to the
+      // user's motion, NOT a replacement for it. Previously the toggle was
+      // throwing away the user's video_motion entirely and substituting a
+      // hardcoded string, which is why their naskah direction wasn't reaching
+      // the video model.
+      const userMotion = shot.raw.video_motion
+        || (isGrid ? 'Smooth motion through the storyboard moments in order.' : 'Natural cinematic motion.')
       const defaultMotion = globalConfig.continuousShot
-        ? 'Single fluid take, gentle reframing on subject, no cuts.'
-        : (isGrid
-          ? (shot.raw.video_motion || 'Smooth motion through the storyboard moments in order.')
-          : (shot.raw.video_motion || 'Natural cinematic motion.'))
+        ? `${userMotion} Single continuous take, no cuts.`
+        : userMotion
       const action = dialogs
         ? `${defaultMotion} The subject speaks in fluent native ${globalConfig.lang}: "${dialogs}"`
         : defaultMotion

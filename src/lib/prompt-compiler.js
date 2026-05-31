@@ -186,8 +186,12 @@ export function compilePrompt(spec) {
   // naskah's "CCTV grainy found footage" and the model picks the dominant
   // one (preset, since it sits at L1) — user's explicit direction loses.
   const actionStr = String(action || '').toLowerCase()
-  const userOverrodeStyle = /\b(cctv|security cam|dashcam|body cam|found footage|surveillance|webcam|gopro|drone shot|aerial|bird's? eye|fisheye|vhs|film grain|polaroid|disposable camera|night vision|infrared|thermal)\b/i.test(actionStr)
-    || /\b(iphone|samsung|xiaomi|nokia)\s*\d/i.test(actionStr) // explicit phone model in naskah
+  const userOverrodeStyle = /\b(cctv|security cam|dashcam|body cam|found footage|surveillance|webcam|gopro|drone shot|aerial|bird's? eye|fisheye|vhs|film grain|polaroid|disposable camera|night vision|infrared|thermal|ugc)\b/i.test(actionStr)
+    // Match phone-model references: "iphone 13", "samsung a13", "galaxy s22",
+    // "pixel 8", "redmi note 12", "iphone 15 pro" etc. Previous regex only
+    // caught a digit directly after the brand name and missed "samsung A13".
+    || /\b(iphone|samsung|xiaomi|nokia|pixel|galaxy|redmi|oppo|vivo|huawei|realme)\s+(?:[a-z]+\s*)?\d+/i.test(actionStr)
+    || /\b(?:samsung\s+galaxy|galaxy\s+[a-z]\d|note\s*\d|pixel\s*\d)/i.test(actionStr)
   const L1_camera = userOverrodeStyle ? '' : (cam.tokens?.join(', ') || '')
   const L5b_camera_echo = userOverrodeStyle
     ? ''
