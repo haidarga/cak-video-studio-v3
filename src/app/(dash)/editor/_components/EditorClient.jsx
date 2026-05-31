@@ -1913,15 +1913,38 @@ function ImagePanel({ clip, duration, onUpdate, onDelete }) {
 
 function AudioPanel({ clip, duration, onUpdate, onDelete }) {
   if (!clip) return null
+  const srcStart = clip.src_start || 0
+  const srcEnd = clip.src_end
+  // Probe element max duration via audio.duration once loaded. Until then,
+  // bound src_end by a reasonable ceiling so the slider still works.
+  const [srcDur, setSrcDur] = useState(srcEnd ?? 300)
   return (
     <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-3 space-y-2 text-xs">
       <div className="flex items-center justify-between">
         <div className="text-[10px] uppercase font-semibold text-[var(--muted)]">🎵 Music</div>
         <button onClick={onDelete} className="text-[10px] text-red-400 hover:underline">Hapus</button>
       </div>
-      <audio src={proxify(clip.src_url)} controls className="w-full" />
-      <div className="text-[9px] text-[var(--muted)] truncate">{clip.src_name}</div>
-      <Field label={`Mulai di: ${clip.start.toFixed(2)}s`}><LiveRange min={0} max={duration} step={0.1} value={clip.start} onCommit={(v) => onUpdate({ start: v })} /></Field>
+      <audio src={proxify(clip.src_url)} controls className="w-full"
+        onLoadedMetadata={(e) => { const d = e.currentTarget.duration; if (d && isFinite(d)) setSrcDur(d) }} />
+      <div className="text-[9px] text-[var(--muted)] truncate">{clip.src_name} · sumber {srcDur.toFixed(1)}s</div>
+      <Field label={`Mulai di video (delay): ${clip.start.toFixed(2)}s`}>
+        <LiveRange min={0} max={duration} step={0.1} value={clip.start} onCommit={(v) => onUpdate({ start: v })} />
+      </Field>
+      <Field label={`Skip awal lagu: ${srcStart.toFixed(2)}s`}>
+        <LiveRange min={0} max={Math.max(0, srcDur - 0.5)} step={0.1} value={srcStart} onCommit={(v) => onUpdate({ src_start: v })} />
+        <div className="text-[9px] text-[var(--muted2)] mt-0.5">Crop awal — buang intro lagu sebelum kicks in.</div>
+      </Field>
+      <Field label={srcEnd != null ? `Potong akhir di: ${srcEnd.toFixed(2)}s` : 'Potong akhir: (tidak ada — main sampai habis)'}>
+        <div className="flex items-center gap-2">
+          <LiveRange min={Math.min(srcStart + 0.5, srcDur)} max={srcDur} step={0.1}
+            value={srcEnd != null ? srcEnd : srcDur}
+            onCommit={(v) => onUpdate({ src_end: v >= srcDur - 0.05 ? null : v })} />
+          {srcEnd != null && (
+            <button onClick={() => onUpdate({ src_end: null })} type="button"
+              className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] hover:bg-[var(--border)] whitespace-nowrap">↺ reset</button>
+          )}
+        </div>
+      </Field>
       <Field label={`Volume: ${Math.round(clip.volume * 100)}%`}><LiveRange min={0} max={1.5} step={0.05} value={clip.volume} onCommit={(v) => onUpdate({ volume: v })} /></Field>
       <Field label={`BGM duck saat 🎙 voice main: ${Math.round((clip.bgm_duck ?? 0.25) * 100)}%`}>
         <LiveRange min={0} max={1} step={0.05} value={clip.bgm_duck ?? 0.25} onCommit={(v) => onUpdate({ bgm_duck: v })} />

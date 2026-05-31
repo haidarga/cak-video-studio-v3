@@ -435,27 +435,36 @@ function buildFilterGraph(project, canvasDims, musicInputIdx, clonedAudioInputSt
 
   // 6b) Cloned voice tracks — one per clip with use_cloned_voice. Each is
   // delayed to the clip's in_track. They replace the silenced native audio.
+  // clip.volume scales the cloned voice too — setting it to 0 fully mutes
+  // the AI voiceover (matches the canvas-export and preview behavior).
   voiced.forEach((c, i) => {
     const idx = clonedAudioInput.get(c.id)
     const startMs = Math.round((c.in_track || 0) * 1000)
     const dur = clipDuration(c)
+    const vol = c.volume ?? 1
+    const volFilter = Math.abs(vol - 1) > 0.001 ? `,volume=${vol.toFixed(3)}` : ''
     // Trim cloned audio to clip duration so a longer source doesn't bleed past
     // the clip's slot (rare but possible if the convert returned padded output).
-    lines.push(`[${idx}:a]atrim=0:${dur.toFixed(3)},asetpts=PTS-STARTPTS,adelay=${startMs}|${startMs}[cv${i}]`)
+    lines.push(`[${idx}:a]atrim=0:${dur.toFixed(3)},asetpts=PTS-STARTPTS${volFilter},adelay=${startMs}|${startMs}[cv${i}]`)
     const out = `[acv${i}]`
     lines.push(`${audioAcc}[cv${i}]amix=inputs=2:duration=first:dropout_transition=0${out}`)
     audioAcc = out
   })
 
   // 7) Optional music underlay — BGM with auto-duck when any cloned voice plays.
-  // Build a multiplicative duck expression: vol * Π duck_factor_during_voice_range.
+  // atrim crops the SOURCE (skip intro / trim tail), adelay shifts on the
+  // TIMELINE. Without atrim, a.src_start was silently ignored in export.
   if (musicInputIdx !== null && (project.audio_clips || []).length > 0) {
     const a = project.audio_clips[0]
     const startMs = Math.round((a.start || 0) * 1000)
     const baseVol = (a.volume ?? 0.3)
     const duckLevel = a.bgm_duck ?? 0.25  // 25% of base when ducked
+    const srcStart = a.src_start || 0
+    const srcEnd = (typeof a.src_end === 'number' && a.src_end > srcStart) ? a.src_end : null
+    const atrimArg = srcEnd != null
+      ? `atrim=start=${srcStart.toFixed(3)}:end=${srcEnd.toFixed(3)}`
+      : (srcStart > 0 ? `atrim=start=${srcStart.toFixed(3)}` : null)
     // Build duck expression: 1*(if(between(t,s1,e1),duck/1,1))*(...)*...
-    // Multiply each ducking factor; default 1 (no duck) outside ranges.
     let duckExpr = '1'
     if (voiced.length > 0) {
       const factors = voiced.map((c) => {
@@ -465,8 +474,11 @@ function buildFilterGraph(project, canvasDims, musicInputIdx, clonedAudioInputSt
       })
       duckExpr = factors.join('*')
     }
-    // Compose: volume = baseVol * duckExpr
-    lines.push(`[${musicInputIdx}:a]adelay=${startMs}|${startMs},volume=${baseVol.toFixed(2)}*(${duckExpr}):eval=frame[am]`)
+    const filters = []
+    if (atrimArg) filters.push(atrimArg, 'asetpts=PTS-STARTPTS')
+    filters.push(`adelay=${startMs}|${startMs}`)
+    filters.push(`volume=${baseVol.toFixed(2)}*(${duckExpr}):eval=frame`)
+    lines.push(`[${musicInputIdx}:a]${filters.join(',')}[am]`)
     lines.push(`${audioAcc}[am]amix=inputs=2:duration=first:dropout_transition=0[aout]`)
   } else {
     lines.push(`${audioAcc}anull[aout]`)
@@ -789,7 +801,16 @@ export async function renderWithCanvas(project, onProgress) {
   // Cloned audio elements: rewind to 0
   baseMedia.forEach((m) => { if (m.cloned) m.cloned.currentTime = 0 })
   overlayMedia.forEach((m) => { if (m.cloned) m.cloned.currentTime = 0 })
-  if (musicEl) musicEl.currentTime = 0
+  // Music: seek to src_start; don't play yet — RAF loop kicks it off when
+  // elapsed reaches a.start (timeline delay). Without this gate the music
+  // would start at t=0 ignoring the delay setting.
+  const musicDelay = firstAudio?.start || 0
+  const musicSrcStart = firstAudio?.src_start || 0
+  const musicSrcEnd = (typeof firstAudio?.src_end === 'number' && firstAudio.src_end > musicSrcStart) ? firstAudio.src_end : null
+  const musicTimelineEnd = musicSrcEnd != null ? musicDelay + (musicSrcEnd - musicSrcStart) : null
+  if (musicEl) musicEl.currentTime = musicSrcStart
+  let musicStarted = false
+  let musicStopped = false
 
   const total = totalDuration(allClips)
   const startTs = performance.now()
@@ -797,7 +818,6 @@ export async function renderWithCanvas(project, onProgress) {
   let activeBaseIdx = -1
 
   recorder.start()
-  if (musicEl) musicEl.play().catch(() => {})
 
   function applyFilters(c) {
     const f = c?.filters
@@ -1016,6 +1036,20 @@ export async function renderWithCanvas(project, onProgress) {
     const pct = Math.min(100, Math.round((elapsed / total) * 100))
     onProgress?.(`Recording ${pct}% (base ${activeBaseIdx + 1}/${base.length}, +${overlays.length} overlay)`)
 
+    // BGM gating: start when elapsed crosses musicDelay, stop when it crosses
+    // musicTimelineEnd. Without this gate the audio plays the whole source
+    // ignoring src_start / src_end / start (timeline delay).
+    if (musicEl && !musicStopped) {
+      if (!musicStarted && elapsed >= musicDelay) {
+        musicEl.currentTime = musicSrcStart
+        musicEl.play().catch(() => {})
+        musicStarted = true
+      }
+      if (musicStarted && musicTimelineEnd != null && elapsed >= musicTimelineEnd) {
+        musicEl.pause()
+        musicStopped = true
+      }
+    }
     // BGM auto-duck: drop gain when any cloned voice is active.
     if (bgmGainNode) {
       const ducking = anyClonedVoiceActiveAt(elapsed)
