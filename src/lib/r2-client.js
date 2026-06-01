@@ -13,6 +13,7 @@
 // Server-only — uses S3 client credentials. Never import from a Client Component.
 
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 
 const accountId = process.env.R2_ACCOUNT_ID
 const accessKeyId = process.env.R2_ACCESS_KEY_ID
@@ -57,6 +58,26 @@ export function r2PublicUrl(key) {
 
 export async function deleteFromR2(key) {
   await client().send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
+}
+
+// Generate a presigned PUT URL — caller can upload bytes directly to R2 from
+// the browser without going through our Vercel function. Bypasses Vercel's
+// 4.5MB serverless request body cap, which is the blocker for video uploads
+// (editor exports 5-15MB, external uploads up to 200MB).
+//
+// expiresIn: seconds the URL stays valid (default 5 min — enough for the
+// browser to PUT a multi-hundred-MB file on a slow connection, short enough
+// that a leaked URL is mostly harmless).
+export async function presignPutR2(key, contentType, expiresIn = 300) {
+  if (!publicBase) throw new Error('R2_PUBLIC_URL not set in env')
+  const cmd = new PutObjectCommand({
+    Bucket: bucket,
+    Key: key,
+    ContentType: contentType || 'application/octet-stream',
+    CacheControl: 'public, max-age=31536000, immutable',
+  })
+  const signedUrl = await getSignedUrl(client(), cmd, { expiresIn })
+  return { uploadUrl: signedUrl, publicUrl: r2PublicUrl(key), key }
 }
 
 // Heuristic: is this URL ours (R2 bucket)?
