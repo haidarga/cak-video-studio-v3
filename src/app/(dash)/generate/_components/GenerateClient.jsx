@@ -657,6 +657,21 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
   async function genVideoForShot(idx) {
     const shot = state.shots[idx]
     if (!shot) return
+    // Validate motion field — empty/blank motion = model generates from text
+    // prompt that's literally nothing or just the system role-id. User reported
+    // a real $0.70 burn from the Continue button creating a shot with the
+    // motion field still showing placeholder text (which the user mistook for
+    // pre-filled content). Block gen with a clear message instead.
+    const motionText = String(shot.raw.video_motion || '').trim()
+    const isPlaceholder = !motionText
+      || motionText.startsWith('Beat-by-beat')
+      || motionText.startsWith('Dialog karakter di sini')
+      || motionText.startsWith('[TULIS NASKAH')
+      || motionText.length < 10
+    if (isPlaceholder) {
+      onErr(`${persona.name} ${shot.raw.shot_label || ''}: motion kosong / masih placeholder. Tulis naskah action di field "Video Motion" dulu (hapus hint "[TULIS NASKAH BAGIAN 2 DI SINI]" dan ganti dengan cerita lanjutan), atau klik "Parse with Gemini" supaya LLM auto-fill dari naskah.`)
+      return
+    }
     // Direct mode skips image gen entirely — refs are the visual anchor, motion
     // is the only text signal. Other modes require an approved image first.
     const isDirect = globalConfig.mode === 'direct'
@@ -893,6 +908,14 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
         chars_in_shot: prev.raw.chars_in_shot || [],
         shot_label: 'Continuation',
       }
+      // Pre-fill motion field with a starter hint so the user knows they must
+      // edit it before gen. Previous version left it empty (textarea showed
+      // placeholder text from JSX, which users mistook for content). The
+      // empty-motion gate in genVideoForShot now blocks this anyway, but a
+      // visible hint helps users know what to do next.
+      const motionHint = isPrevStoryboard
+        ? '[TULIS NASKAH BAGIAN 2 DI SINI] Lanjutan dari storyboard sebelumnya — describe what happens next, beat-by-beat. Refs lock character/style; motion drives the new action sequence.'
+        : '[TULIS NASKAH BAGIAN 2 DI SINI] Lanjutan dari shot sebelumnya — describe what happens next, beat-by-beat. The last frame is included as a reference so the model can visually continue from where the previous video ended.'
       const newShot = {
         id: `${persona.id}-cont-${Date.now()}`,
         raw: isPrevStoryboard
@@ -900,12 +923,12 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
               ...baseRaw,
               panels: [],
               concept: '',
-              video_motion: '',
+              video_motion: motionHint,
               duration: 10,
             }
           : {
               ...baseRaw,
-              video_motion: '',
+              video_motion: motionHint,
               dialogue: '',
               duration: prev.raw.duration || 5,
             },
