@@ -661,13 +661,23 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
     // is the only text signal. Other modes require an approved image first.
     const isDirect = globalConfig.mode === 'direct'
     if (!isDirect && !shot.image?.url) return
-    // Direct mode is incompatible with image-to-video models (they need a
-    // source frame to animate, which we don't have). Force ref-to-video at
-    // gen time, regardless of dropdown — if user manually picked an i2v
-    // model, this rescues them with a clean fallback instead of a fal error.
-    const vidModel = (isDirect && !globalConfig.vidModel.includes('ref-to-video') && !globalConfig.vidModel.includes('reference-to-video'))
-      ? 'xai/grok-imagine-video/reference-to-video'
-      : globalConfig.vidModel
+    // Determine if this shot is a storyboard grid (panel layout) — important
+    // because the 3x3 grid given to an image-to-video model causes the
+    // "9 panels rocking around" glitch (model animates the grid frame, not
+    // the implied sequence). Storyboard requires ref-to-video.
+    const isGridShot = !!shot.raw.panels
+    // Force ref-to-video at gen time if:
+    //   - direct mode: refs are the only visual anchor, no source image
+    //   - storyboard mode: grid must be treated as sequence map, not source
+    // If user manually picked an i2v model in these modes, override silently
+    // instead of letting fal.ai 422 us or producing glitched output.
+    let vidModel = globalConfig.vidModel
+    const isRefModel = vidModel.includes('ref-to-video') || vidModel.includes('reference-to-video')
+    if (isDirect && !isRefModel) {
+      vidModel = 'xai/grok-imagine-video/reference-to-video'
+    } else if (isGridShot && !isRefModel) {
+      vidModel = 'bytedance/seedance-2.0/fast/reference-to-video'
+    }
     patchShot(idx, { video: { status: 'generating' } })
     try {
       // Per-shot ref override — user can deselect specific refs for THIS shot
@@ -689,7 +699,7 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
       // as image gen. Replaces the regex-mutilated motion string (jsx:470)
       // and per-mode hardcoded fallbacks. Sanitizer drops 'multi-scene / 9
       // panels' language when continuousShot=true (declarative, no regex).
-      const isGrid = !!shot.raw.panels
+      const isGrid = isGridShot
       const dialogs = globalConfig.skipDialog
         ? ''
         : (isGrid
