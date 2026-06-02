@@ -657,6 +657,13 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
     // is the only text signal. Other modes require an approved image first.
     const isDirect = globalConfig.mode === 'direct'
     if (!isDirect && !shot.image?.url) return
+    // Direct mode is incompatible with image-to-video models (they need a
+    // source frame to animate, which we don't have). Force ref-to-video at
+    // gen time, regardless of dropdown — if user manually picked an i2v
+    // model, this rescues them with a clean fallback instead of a fal error.
+    const vidModel = (isDirect && !globalConfig.vidModel.includes('ref-to-video') && !globalConfig.vidModel.includes('reference-to-video'))
+      ? 'xai/grok-imagine-video/reference-to-video'
+      : globalConfig.vidModel
     patchShot(idx, { video: { status: 'generating' } })
     try {
       // Video gen also uses combined refs (some models accept reference_urls for char consistency)
@@ -721,18 +728,18 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
       // FIRST reference. Direct mode: NO image at all — refs only. Other modes
       // (shots + image-to-video): image is the source, refs are character
       // anchors via reference_urls.
-      const isRefVid = globalConfig.vidModel.includes('reference-to-video') || globalConfig.vidModel.includes('ref-to-video')
+      const isRefVid = vidModel.includes('reference-to-video') || vidModel.includes('ref-to-video')
       const vidRefUrls = (isGrid && isRefVid && shot.image?.url)
         ? [shot.image.url, ...refUrls].filter(Boolean)
         : refUrls
-      const vidInput = buildVidInput(globalConfig.vidModel, {
+      const vidInput = buildVidInput(vidModel, {
         prompt: motion,
         image_url: isDirect ? undefined : shot.image?.url,
         reference_urls: vidRefUrls,
         duration: shot.raw.duration || 5,
         aspect_ratio: globalConfig.ar,
       })
-      const vidResult = await falRun(globalConfig.vidModel, vidInput, { onProgress: (p) => patchShot(idx, { video: { status: p } }), workspaceId, duration: shot.raw.duration || 5 })
+      const vidResult = await falRun(vidModel, vidInput, { onProgress: (p) => patchShot(idx, { video: { status: p } }), workspaceId, duration: shot.raw.duration || 5 })
       const videoUrl = vidResult.video?.url || vidResult.video
       if (!videoUrl) throw new Error('no video URL returned')
 
@@ -941,11 +948,18 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
             const estVid = state.shots.reduce((sum, s) => (s.video?.url ? sum : sum + videoCost(globalConfig.vidModel, s.raw.duration || 5)), 0)
             return (
               <button onClick={async () => {
+                if (estVid > 0.50 && !confirm(
+                  `Generate ${vidPending} video direct dengan ${globalConfig.vidModel.split('/').pop()}?\n\n` +
+                  `Estimated cost: ${fmtCost(estVid)}\n` +
+                  `Tap OK = jalanin, Cancel = batal.`
+                )) return
+                onPatch({ busy: true }); onErr('')
                 for (let i = 0; i < state.shots.length; i++) {
                   if (state.shots[i].video?.url) continue
                   // eslint-disable-next-line no-await-in-loop
                   await genVideoForShot(i)
                 }
+                onPatch({ busy: false })
               }} disabled={state.busy || vidPending === 0}
                 className="px-4 py-2 rounded bg-[var(--accent)] text-white text-sm font-semibold hover:opacity-90 disabled:opacity-50">
                 🎯 Generate Videos Direct ({vidPending})
@@ -1116,14 +1130,18 @@ function ShotEditor({ shot, idx, mode = 'shots', onChangeRaw, onGenImage, onGenV
             </div>
           </div>
 
-          <FieldRow label="📷 Image Prompt">
-            <textarea rows={2} value={shot.raw.image_prompt || ''} onChange={(e) => onChangeRaw('image_prompt', e.target.value)}
-              placeholder="English scene + lighting + camera..."
-              className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] resize-y" />
-          </FieldRow>
-          <FieldRow label="🎥 Video Motion">
-            <textarea rows={2} value={shot.raw.video_motion || ''} onChange={(e) => onChangeRaw('video_motion', e.target.value)}
-              placeholder="English motion + camera movement, max 20 kata"
+          {/* Image prompt is meaningless in direct mode (no image gen step).
+              Hide the field so user can't waste time editing it. */}
+          {!isDirect && (
+            <FieldRow label="📷 Image Prompt">
+              <textarea rows={2} value={shot.raw.image_prompt || ''} onChange={(e) => onChangeRaw('image_prompt', e.target.value)}
+                placeholder="English scene + lighting + camera..."
+                className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] resize-y" />
+            </FieldRow>
+          )}
+          <FieldRow label={isDirect ? '🎥 Video Motion (ACTION timeline — pack semua aksi di sini)' : '🎥 Video Motion'}>
+            <textarea rows={isDirect ? 4 : 2} value={shot.raw.video_motion || ''} onChange={(e) => onChangeRaw('video_motion', e.target.value)}
+              placeholder={isDirect ? 'Beat-by-beat: what happens, camera moves, mood. Refs lock visual; motion is what changes.' : 'English motion + camera movement, max 20 kata'}
               className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] resize-y" />
           </FieldRow>
           {/* Shared fields extracted by parser from naskah. Editable so user
