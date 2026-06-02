@@ -946,6 +946,7 @@ ${motion}`
       // the MP4 lacks faststart / has seek index issues.
       let frameUrl = null
       let extractFailed = false
+      let noAnchor = false
       try {
         const blob = await extractLastFrame(prev.video.url, { offsetEnd: 0.05 })
         patchShot(idx, { continuing: `Uploading ${(blob.size / 1024).toFixed(0)}KB to R2...` })
@@ -954,18 +955,24 @@ ${motion}`
         frameUrl = up.url
         console.log('[Continue] uploaded', frameUrl)
       } catch (extractErr) {
-        // Frame extract failed entirely (both ffmpeg strategies). Don't block
-        // the user — fall back to using the previous shot's approved image
-        // as the continuity anchor. Loses pose-handoff fidelity but still
-        // gives the model strong character + style continuity.
-        console.warn('[Continue] frame extract failed, falling back to prev shot image:', extractErr.message)
+        // Frame extract failed entirely (all 3 ffmpeg strategies). Two paths:
+        // - Storyboard source: fall back to prev.image.url (the grid) as
+        //   anchor. Lose pose handoff but keep style + character continuity.
+        // - Direct source: no image to fall back to. Continue WITHOUT anchor
+        //   — persona refs in selectedRefs/styleRefs still lock character +
+        //   style. Worst case = "shot in same world" continuity, no
+        //   frame-level handoff. Better than blocking the feature entirely.
+        console.warn('[Continue] frame extract failed:', extractErr.message)
         if (prev.image?.url) {
           frameUrl = prev.image.url
           extractFailed = true
           patchShot(idx, { continuing: 'Frame extract failed — using prev image as anchor...' })
-          onErr(`Continue: last-frame extract gagal (${extractErr.message?.slice(0, 80)}). Pakai gambar approved dari shot sebelumnya sebagai anchor (character + style tetep konsisten).`)
+          onErr(`Continue: last-frame extract gagal. Pakai gambar storyboard approved sebagai anchor (character + style konsisten, pose handoff lemah).`)
         } else {
-          throw extractErr
+          // Direct mode — no prev image. Continue without any anchor.
+          noAnchor = true
+          patchShot(idx, { continuing: 'Frame extract failed — continuing without anchor...' })
+          onErr(`Continue: last-frame extract gagal (${extractErr.message?.slice(0, 80)}). Direct mode tanpa fallback image — shot baru bakal pakai persona refs aja sebagai continuity. Karakter + style locked, tapi gak ada pose handoff frame-level.`)
         }
       }
       // Build the continuation shot. Storyboard source -> empty 9-panel
@@ -986,22 +993,28 @@ ${motion}`
       const motionHint = isPrevStoryboard
         ? '[TULIS NASKAH BAGIAN 2 DI SINI] Lanjutan dari storyboard sebelumnya — describe what happens next, beat-by-beat. Refs lock character/style; motion drives the new action sequence.'
         : '[TULIS NASKAH BAGIAN 2 DI SINI] Lanjutan dari shot sebelumnya — describe what happens next, beat-by-beat. The last frame is included as a reference so the model can visually continue from where the previous video ended.'
-      // Build continuity refs. Two scenarios:
+      // Build continuity refs. Three scenarios:
       //
       // 1. Frame extract SUCCEEDED (frameUrl = real extracted last frame):
       //    For storyboard source, include BOTH the previous grid (style +
       //    character look) AND the last frame (exact pose/setting). Two
       //    distinct anchors = stronger continuity.
       //
-      // 2. Frame extract FAILED (frameUrl = fallback to prev.image.url):
-      //    Don't duplicate — only include prev.image.url once. The role-id
-      //    prompt below branches on this so it doesn't misinform the model
-      //    that there's a "final frame" reference when there isn't.
-      const continuityRefs = (extractFailed)
-        ? [frameUrl]                                // fallback: just the prev image
-        : (isPrevStoryboard && prev.image?.url && prev.image.url !== frameUrl)
-          ? [prev.image.url, frameUrl]              // success: grid + last frame
-          : [frameUrl]                              // success direct mode: just last frame
+      // 2. Frame extract FAILED with fallback (frameUrl = prev.image.url):
+      //    Only include prev.image.url once. Role-id prompt below branches
+      //    on extractFailed so it doesn't misinform the model.
+      //
+      // 3. Frame extract FAILED no fallback (noAnchor, direct mode):
+      //    No additional refs at all. Persona refs in selectedRefs still
+      //    drive character + style. Continuation is "shot in same world"
+      //    rather than "continued from this frame".
+      const continuityRefs = noAnchor
+        ? []                                          // direct + extract failed: no anchor
+        : extractFailed
+          ? [frameUrl]                                // storyboard + extract failed: grid only
+          : (isPrevStoryboard && prev.image?.url && prev.image.url !== frameUrl)
+            ? [prev.image.url, frameUrl]              // success storyboard: grid + last frame
+            : [frameUrl]                              // success direct: last frame
       const newShot = {
         id: `${persona.id}-cont-${Date.now()}`,
         raw: isPrevStoryboard
