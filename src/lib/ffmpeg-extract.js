@@ -6,6 +6,63 @@
 // the 30MB wasm twice on a page that uses both editor + generate.
 
 import { getFFmpeg, fetchToUint8 } from './editor-render'
+import { proxify } from './editor-proxy'
+
+// Strategy 0 — browser-native video decoder + canvas snapshot. Bypasses
+// ffmpeg.wasm entirely. Browsers (Chrome, Firefox, Safari) support MANY
+// MORE codecs than ffmpeg.wasm does (H265/HEVC, AV1, etc), so this is
+// the most reliable extraction path for fal.ai outputs which sometimes
+// use newer codecs.
+//
+// CORS: proxify() routes fal.ai URLs through /api/proxy to make them
+// same-origin (otherwise canvas.toBlob throws a security error).
+export async function extractLastFrameViaCanvas(videoUrl) {
+  if (typeof document === 'undefined') throw new Error('canvas extract requires browser env')
+  const video = document.createElement('video')
+  video.crossOrigin = 'anonymous'
+  video.preload = 'auto'
+  video.muted = true
+  video.playsInline = true
+  video.src = proxify(videoUrl)
+
+  // Wait for metadata so duration + dimensions are known.
+  await new Promise((resolve, reject) => {
+    video.onloadedmetadata = resolve
+    video.onerror = () => reject(new Error('video element load failed'))
+    setTimeout(() => reject(new Error('video metadata timeout (10s)')), 10_000)
+  })
+
+  if (!video.duration || !isFinite(video.duration)) {
+    throw new Error('video duration unknown')
+  }
+  // Seek to very near end. Most browsers fire 'seeked' even at duration-0.01
+  // and decode that final frame. Some require a tiny offset.
+  const target = Math.max(0, video.duration - 0.05)
+  video.currentTime = target
+
+  await new Promise((resolve, reject) => {
+    video.onseeked = resolve
+    video.onerror = () => reject(new Error('video seek failed'))
+    setTimeout(() => reject(new Error('video seek timeout (10s)')), 10_000)
+  })
+
+  const w = video.videoWidth, h = video.videoHeight
+  if (!w || !h) throw new Error('video dimensions zero (decoder problem)')
+
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext('2d')
+  ctx.drawImage(video, 0, 0, w, h)
+
+  const blob = await new Promise((resolve, reject) => {
+    canvas.toBlob((b) => {
+      if (b && b.size > 100) resolve(b)
+      else reject(new Error('canvas.toBlob produced empty/tiny blob'))
+    }, 'image/jpeg', 0.9)
+  })
+  return blob
+}
 
 // Extract the last frame of a video. Returns a Blob (JPEG).
 //
@@ -22,6 +79,23 @@ import { getFFmpeg, fetchToUint8 } from './editor-render'
 // approved image as a continuity anchor (better than nothing — character +
 // style still match even without exact-frame handoff).
 export async function extractLastFrame(videoUrl, { offsetEnd = 0.1 } = {}) {
+  // Strategy 0 — browser-native video + canvas. Most reliable for fal.ai
+  // outputs (browsers handle H265/AV1/etc that ffmpeg.wasm chokes on).
+  // Try this FIRST; the ffmpeg.wasm path is now a fallback for the rare
+  // case where browser decode also fails (e.g. CORS / proxy issues).
+  try {
+    console.log('[extractLastFrame] trying browser-native canvas strategy')
+    const blob = await extractLastFrameViaCanvas(videoUrl)
+    if (blob && blob.size > 100) {
+      console.log('[extractLastFrame] canvas strategy succeeded', blob.size, 'bytes')
+      return blob
+    }
+  } catch (e) {
+    console.warn('[extractLastFrame] canvas strategy failed:', e.message || e)
+  }
+
+  // Fallback: ffmpeg.wasm path (3 sub-strategies).
+  console.log('[extractLastFrame] falling back to ffmpeg.wasm strategies')
   const ff = await getFFmpeg()
   const bytes = await fetchToUint8(videoUrl)
   const inputName = `extract-in-${Date.now()}.mp4`

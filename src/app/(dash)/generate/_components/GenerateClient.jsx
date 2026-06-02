@@ -966,13 +966,13 @@ ${motion}`
         if (prev.image?.url) {
           frameUrl = prev.image.url
           extractFailed = true
-          patchShot(idx, { continuing: 'Frame extract failed — using prev image as anchor...' })
-          onErr(`Continue: last-frame extract gagal. Pakai gambar storyboard approved sebagai anchor (character + style konsisten, pose handoff lemah).`)
+          patchShot(idx, { continuing: 'Gak bisa ambil frame terakhir — pake gambar storyboard sebagai anchor...' })
+          onErr(`✓ Shot baru dibikin di bawah. ⚠ Tapi frame terakhir video A gak bisa di-extract (codec MP4 fal.ai gak compatible). Gua pake gambar storyboard approved sebagai anchor — karakter + style tetep konsisten.`)
         } else {
           // Direct mode — no prev image. Continue without any anchor.
           noAnchor = true
-          patchShot(idx, { continuing: 'Frame extract failed — continuing without anchor...' })
-          onErr(`Continue: last-frame extract gagal (${extractErr.message?.slice(0, 80)}). Direct mode tanpa fallback image — shot baru bakal pakai persona refs aja sebagai continuity. Karakter + style locked, tapi gak ada pose handoff frame-level.`)
+          patchShot(idx, { continuing: 'Gak bisa ambil frame terakhir — continue tanpa anchor...' })
+          onErr(`✓ Shot baru dibikin di bawah. ⚠ Tapi frame terakhir video A gak bisa di-extract (codec MP4 fal.ai gak compatible). Karakter + style tetep locked dari persona refs, cuma seam-nya mungkin keliatan dikit (no exact frame handoff). Lanjut isi naskah part 2 di shot baru.`)
         }
       }
       // Build the continuation shot. Storyboard source -> empty 9-panel
