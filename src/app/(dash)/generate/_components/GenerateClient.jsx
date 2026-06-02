@@ -666,14 +666,19 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
       : globalConfig.vidModel
     patchShot(idx, { video: { status: 'generating' } })
     try {
-      // Video gen also uses combined refs (some models accept reference_urls for char consistency)
-      const characterProductUrls = selectedRefs.map((r) => r.fal_url).filter(Boolean)
-      const styleUrls = styleRefs.map((r) => r.fal_url).filter(Boolean)
+      // Per-shot ref override — user can deselect specific refs for THIS shot
+      // via the chip picker in ShotEditor. `shot.disabledRefIds` is the array
+      // of ref IDs explicitly excluded; empty = use all globally selected.
+      const disabledSet = new Set(shot.disabledRefIds || [])
+      const filteredSelected = selectedRefs.filter((r) => !disabledSet.has(r.id))
+      const filteredStyle = styleRefs.filter((r) => !disabledSet.has(r.id))
+      const characterProductUrls = filteredSelected.map((r) => r.fal_url).filter(Boolean)
+      const styleUrls = filteredStyle.map((r) => r.fal_url).filter(Boolean)
       const refUrls = [...characterProductUrls, ...styleUrls]
       // Direct mode REQUIRES refs (there's no source image to fall back on).
       // Guard early with a clear error so user knows to upload refs first.
       if (isDirect && refUrls.length === 0) {
-        throw new Error('Direct mode butuh minimal 1 reference image. Upload ref di persona dulu.')
+        throw new Error('Direct mode butuh minimal 1 reference image. Upload ref di persona dulu (atau enable di chip picker shot).')
       }
 
       // Visual Compiler for VIDEO prompt — same layered priority + sanitizer
@@ -990,6 +995,13 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
             {state.shots.map((shot, i) => (
               shot.raw.panels
                 ? <StoryboardEditor key={shot.id} shot={shot} idx={i} ar={globalConfig.ar}
+                    availableRefs={[...selectedRefs, ...styleRefs]}
+                    onToggleRef={(refId) => patchShot(i, (prev) => {
+                      const cur = new Set(prev.disabledRefIds || [])
+                      if (cur.has(refId)) cur.delete(refId); else cur.add(refId)
+                      return { disabledRefIds: Array.from(cur) }
+                    })}
+                    onResetRefs={() => patchShot(i, { disabledRefIds: [] })}
                     onChangeRaw={(key, value) => patchShotRaw(i, key, value)}
                     onChangePanel={(pi, key, value) => patchPanel(i, pi, key, value)}
                     onGenImage={() => genImageForShot(i)}
@@ -1002,6 +1014,13 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
                     onDelete={() => deleteResult(i, shot.video?.result_id)} />
                 : <ShotEditor key={shot.id} shot={shot} idx={i}
                     mode={globalConfig.mode}
+                    availableRefs={[...selectedRefs, ...styleRefs]}
+                    onToggleRef={(refId) => patchShot(i, (prev) => {
+                      const cur = new Set(prev.disabledRefIds || [])
+                      if (cur.has(refId)) cur.delete(refId); else cur.add(refId)
+                      return { disabledRefIds: Array.from(cur) }
+                    })}
+                    onResetRefs={() => patchShot(i, { disabledRefIds: [] })}
                     onChangeRaw={(key, value) => patchShotRaw(i, key, value)}
                     onGenImage={() => genImageForShot(i)}
                     onGenVideo={() => genVideoForShot(i)}
@@ -1019,12 +1038,14 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
   )
 }
 
-function ShotEditor({ shot, idx, mode = 'shots', onChangeRaw, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onDelete }) {
+function ShotEditor({ shot, idx, mode = 'shots', availableRefs = [], onToggleRef, onResetRefs, onChangeRaw, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onDelete }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(shot.label || '')
   const imgStatus = shot.image?.status || 'idle'
   const vidStatus = shot.video?.status || 'idle'
   const isDirect = mode === 'direct'
+  const disabledIds = shot.disabledRefIds || []
+  const activeRefCount = availableRefs.length - disabledIds.length
 
   return (
     <div className={`bg-[var(--surface2)] border rounded p-3 ${shot.approved ? 'border-[var(--accent)]' : 'border-[var(--border)]'}`}>
@@ -1092,6 +1113,37 @@ function ShotEditor({ shot, idx, mode = 'shots', onChangeRaw, onGenImage, onGenV
                 </button>
               )}
             </>
+          )}
+
+          {/* Per-shot ref picker — chip row. Click chip to exclude that ref
+              for THIS shot's video gen. Empty disabled list = inherit global.
+              Only shown if there are refs to pick from. */}
+          {availableRefs.length > 0 && (
+            <div className="mt-2 pt-2 border-t border-[var(--border)]">
+              <div className="flex items-center justify-between mb-1">
+                <div className="text-[9px] uppercase text-[var(--muted)] font-semibold">
+                  🎯 Refs: {activeRefCount}/{availableRefs.length}
+                </div>
+                {disabledIds.length > 0 && (
+                  <button onClick={onResetRefs} type="button" className="text-[9px] text-[var(--accent)] hover:underline">↺ all</button>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {availableRefs.map((r) => {
+                  const off = disabledIds.includes(r.id)
+                  return (
+                    <button key={r.id} type="button" onClick={() => onToggleRef?.(r.id)}
+                      title={`${r.label || 'unlabeled'}${off ? ' (excluded)' : ''} — klik toggle`}
+                      className={`relative w-7 h-7 rounded overflow-hidden border ${off ? 'border-[var(--border)] opacity-40' : 'border-[var(--accent)]'}`}>
+                      <img src={r.fal_url} alt="" className="w-full h-full object-cover" />
+                      {off && (
+                        <div className="absolute inset-0 bg-black/60 flex items-center justify-center text-white text-[11px] font-bold">✕</div>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
           )}
 
           {/* Prominent Send to QC — visible begitu ada image atau video */}
@@ -1200,7 +1252,7 @@ function VariantStrip({ variants, activeIdx, onPick, kind }) {
   )
 }
 
-function StoryboardEditor({ shot, idx, ar, onChangeRaw, onChangePanel, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onDelete }) {
+function StoryboardEditor({ shot, idx, ar, availableRefs = [], onToggleRef, onResetRefs, onChangeRaw, onChangePanel, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onDelete }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(shot.label || '')
   const [showPanels, setShowPanels] = useState(true)
@@ -1209,6 +1261,8 @@ function StoryboardEditor({ shot, idx, ar, onChangeRaw, onChangePanel, onGenImag
   const panels = shot.raw.panels || []
   const totalSec = panels.reduce((s, p) => s + (parseInt(p.seconds) || 2), 0)
   const aspectClass = ar === '16:9' ? 'aspect-video' : ar === '1:1' ? 'aspect-square' : 'aspect-[9/16]'
+  const disabledIds = shot.disabledRefIds || []
+  const activeRefCount = availableRefs.length - disabledIds.length
 
   return (
     <div className={`bg-[var(--surface2)] border rounded p-3 ${shot.approved ? 'border-[var(--accent)]' : 'border-[var(--border)]'}`}>
@@ -1283,6 +1337,35 @@ function StoryboardEditor({ shot, idx, ar, onChangeRaw, onChangePanel, onGenImag
               className="w-full mt-1 text-xs px-2 py-1.5 rounded bg-[var(--accent)] text-white font-semibold disabled:opacity-50">
               {shot.video?.url ? '🔁 Re-gen Video' : `🎬 Gen Video (${totalSec || 15}s)`}
             </button>
+          )}
+
+          {/* Per-shot ref picker — chip row. Same as ShotEditor. */}
+          {availableRefs.length > 0 && (
+            <div className="mt-2 pt-2 border-t border-[var(--border)]">
+              <div className="flex items-center justify-between mb-1">
+                <div className="text-[9px] uppercase text-[var(--muted)] font-semibold">
+                  🎯 Refs: {activeRefCount}/{availableRefs.length}
+                </div>
+                {disabledIds.length > 0 && (
+                  <button onClick={onResetRefs} type="button" className="text-[9px] text-[var(--accent)] hover:underline">↺ all</button>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {availableRefs.map((r) => {
+                  const off = disabledIds.includes(r.id)
+                  return (
+                    <button key={r.id} type="button" onClick={() => onToggleRef?.(r.id)}
+                      title={`${r.label || 'unlabeled'}${off ? ' (excluded)' : ''} — klik toggle`}
+                      className={`relative w-7 h-7 rounded overflow-hidden border ${off ? 'border-[var(--border)] opacity-40' : 'border-[var(--accent)]'}`}>
+                      <img src={r.fal_url} alt="" className="w-full h-full object-cover" />
+                      {off && (
+                        <div className="absolute inset-0 bg-black/60 flex items-center justify-center text-white text-[11px] font-bold">✕</div>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
           )}
 
           {/* Prominent Send to QC — visible begitu ada image atau video */}
