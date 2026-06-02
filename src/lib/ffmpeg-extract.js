@@ -7,35 +7,68 @@
 
 import { getFFmpeg, fetchToUint8 } from './editor-render'
 
-// Extract the last frame of a video. Returns a Blob (JPEG). Default uses
-// `-sseof -0.1` which seeks 0.1s before END, then grabs 1 frame — most
-// reliable way to land on a stable trailing frame (exact-last frame is
-// sometimes black during fade-out / motion blur). Override `offsetEnd` to
-// 0 for exact last frame.
+// Extract the last frame of a video. Returns a Blob (JPEG).
+//
+// Tries two strategies in order:
+//   1. `-sseof -<offset>` — fast (seeks directly), works when the MP4 has a
+//      valid seek index (faststart-enabled moov atom). Some fal.ai outputs
+//      don't ship faststart, so this fails with "memory access out of bounds"
+//      inside ffmpeg.wasm's seek table lookup.
+//   2. `-update 1` over full stream — decodes the whole video, overwriting
+//      the output JPEG with each sampled frame so the final file IS the last
+//      frame. Slower (~2-4s for a 15s video) but never fails on seek issues.
+//
+// If both fail, the caller should fall back to using the previous shot's
+// approved image as a continuity anchor (better than nothing — character +
+// style still match even without exact-frame handoff).
 export async function extractLastFrame(videoUrl, { offsetEnd = 0.1 } = {}) {
   const ff = await getFFmpeg()
-  // Download video bytes through our proxy (same path the editor uses; handles
-  // CORS + COEP isolation on the editor page; harmless on /generate).
   const bytes = await fetchToUint8(videoUrl)
   const inputName = `extract-in-${Date.now()}.mp4`
   const outputName = `extract-out-${Date.now()}.jpg`
   await ff.writeFile(inputName, bytes)
-  // `-sseof` seeks relative to end of file. `-vframes 1` grabs one frame.
-  // `-q:v 2` = high JPEG quality (1-31 scale, lower is better).
-  // Negative offsetEnd means "from end backwards", we pass it as negative.
-  const seekFromEnd = -Math.abs(offsetEnd || 0)
-  await ff.exec([
+
+  const tryStrategy = async (args) => {
+    try {
+      await ff.exec(args)
+      const data = await ff.readFile(outputName)
+      if (data && data.byteLength > 100) return new Blob([data], { type: 'image/jpeg' })
+      return null
+    } catch (e) {
+      console.warn('[extractLastFrame] strategy failed:', e.message || e)
+      return null
+    }
+  }
+
+  // Strategy 1 — fast seek from end.
+  const seekFromEnd = -Math.abs(offsetEnd || 0.1)
+  let blob = await tryStrategy([
     '-sseof', String(seekFromEnd),
     '-i', inputName,
     '-vframes', '1',
     '-q:v', '2',
     outputName,
   ])
-  const data = await ff.readFile(outputName)
-  // Cleanup tmp files inside the ffmpeg virtual fs.
+  if (blob) {
+    try { await ff.deleteFile(inputName) } catch {}
+    try { await ff.deleteFile(outputName) } catch {}
+    return blob
+  }
+
+  // Strategy 2 — decode full stream, keep overwriting output until last frame.
+  // -fps_mode passthrough avoids ffmpeg complaining about variable fps inputs.
+  console.log('[extractLastFrame] strategy 1 failed, trying full-decode fallback')
+  blob = await tryStrategy([
+    '-i', inputName,
+    '-vf', 'fps=2',
+    '-update', '1',
+    '-q:v', '2',
+    outputName,
+  ])
   try { await ff.deleteFile(inputName) } catch {}
   try { await ff.deleteFile(outputName) } catch {}
-  return new Blob([data], { type: 'image/jpeg' })
+  if (blob) return blob
+  throw new Error('Last frame extract failed (both -sseof and -update strategies). Video may be malformed.')
 }
 
 // Convenience wrapper — extract + upload to R2 + return public URL.

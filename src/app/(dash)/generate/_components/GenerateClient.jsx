@@ -909,11 +909,31 @@ ${motion}`
       // 100% duration — exact-last-frame requested. ffmpeg's -sseof needs a
       // small negative offset (0 = end-of-stream marker), so 0.05s is the
       // safe approximation that still hits the visually-final frame.
-      const blob = await extractLastFrame(prev.video.url, { offsetEnd: 0.05 })
-      patchShot(idx, { continuing: `Uploading ${(blob.size / 1024).toFixed(0)}KB to R2...` })
-      console.log('[Continue] frame extracted', blob.size, 'bytes — uploading')
-      const { url: frameUrl } = await uploadBlob(blob, `lastframe-${prev.id}.jpg`, 'continuation')
-      console.log('[Continue] uploaded', frameUrl)
+      // extractLastFrame internally falls back from -sseof to -update 1 if
+      // the MP4 lacks faststart / has seek index issues.
+      let frameUrl = null
+      try {
+        const blob = await extractLastFrame(prev.video.url, { offsetEnd: 0.05 })
+        patchShot(idx, { continuing: `Uploading ${(blob.size / 1024).toFixed(0)}KB to R2...` })
+        console.log('[Continue] frame extracted', blob.size, 'bytes — uploading')
+        const up = await uploadBlob(blob, `lastframe-${prev.id}.jpg`, 'continuation')
+        frameUrl = up.url
+        console.log('[Continue] uploaded', frameUrl)
+      } catch (extractErr) {
+        // Frame extract failed entirely (both ffmpeg strategies). Don't block
+        // the user — fall back to using the previous shot's approved image
+        // as the continuity anchor. Loses pose-handoff fidelity but still
+        // gives the model strong character + style continuity (which is the
+        // dominant component of consistency anyway).
+        console.warn('[Continue] frame extract failed, falling back to prev shot image:', extractErr.message)
+        if (prev.image?.url) {
+          frameUrl = prev.image.url
+          patchShot(idx, { continuing: 'Frame extract failed — using prev image as anchor...' })
+          onErr(`Continue: last-frame extract gagal (${extractErr.message?.slice(0, 80)}). Pakai gambar approved dari shot sebelumnya sebagai anchor (character + style tetep konsisten).`)
+        } else {
+          throw extractErr
+        }
+      }
       // Build the continuation shot. Storyboard source -> empty 9-panel
       // shot (user fills via Parse). Direct source -> direct shot with
       // motion-only schema. Either way, additional_ref_urls carries the
