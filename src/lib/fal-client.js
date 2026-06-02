@@ -300,7 +300,13 @@ export function buildStoryboardGridPrompt(panels = [], ar = '9:16', concept = ''
   // just 9 raw photos in 3x3 with small corner numbers, no text below — that's
   // what users actually want.
   const header = `Single composite image, ${ar} canvas, 3x3 grid layout (3 rows × 3 columns) of 9 sequential photographic stills. Tiny scene number (1-9) in top-left corner of each cell. NO text labels, NO captions, NO time stamps under the photos — clean raw photos only.`
-  return `${header}\n${conceptLine}\n${productRule}\n\nThe 9 stills, in order (left-to-right, top-to-bottom):\n${cells}`
+  // Cross-panel consistency directive — the #1 storyboard failure mode is the
+  // character morphing across the 9 panels (Tandy with different face/body
+  // proportions in panel 1 vs panel 5). Diffusion models render each cell as
+  // a semi-independent image unless told otherwise. This sentence forces the
+  // model to treat the character as a locked entity across all 9 cells.
+  const consistency = `CRITICAL CONSISTENCY: every character must look IDENTICAL across all 9 panels — same face shape, same proportions, same outfit, same color palette, same art style. This is one continuous scene shown in 9 keyframes, NOT 9 different versions of the character.`
+  return `${header}\n${consistency}\n${conceptLine}\n${productRule}\n\nThe 9 stills, in order (left-to-right, top-to-bottom):\n${cells}`
 }
 
 export function productDirective(notes) {

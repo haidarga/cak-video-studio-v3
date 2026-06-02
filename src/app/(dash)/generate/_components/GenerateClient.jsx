@@ -771,20 +771,36 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
       const vidRefUrls = (isGrid && isRefVid && shot.image?.url)
         ? [shot.image.url, ...refUrls, ...continuationRefs].filter(Boolean)
         : [...refUrls, ...continuationRefs].filter(Boolean)
-      // Role-identification prompt for storyboard ref-to-video. Without this
-      // hint, the model often misreads the 3x3 grid as a single frame to
-      // animate, producing the "9 panels rocking around" glitch. With the
-      // hint, the model treats the grid as a SEQUENCE MAP and the trailing
-      // refs as the subjects to animate through that sequence — much cleaner.
+      // Role-identification prompt for storyboard ref-to-video. The model has
+      // a strong default behavior of "animate the input image" — when handed
+      // a 3x3 grid, it tends to animate the GRID composition itself (panels
+      // visibly rocking around), which is the user-reported "glitch" mode.
+      // This prompt redirects: the grid is a SEQUENCE MAP, not a frame.
+      // Subjects from refs[2..] are what gets animated, panel by panel, in
+      // a single seamless take with NO grid lines or panel borders visible.
+      //
       // If continuationRefs are present (from a prior storyboard's last
-      // frame), the prompt also tells the model to START from that frame's
-      // pose/setting for smooth visual handoff.
+      // frame), tell the model the LAST ref is the final frame of the
+      // previous segment and the new sequence should start where it ended.
       let finalMotion = motion
       if (isGrid && isRefVid && shot.image?.url) {
-        const cont = continuationRefs.length
-          ? ` The LAST image (after the subjects) is the final frame of the previous storyboard segment — START the new sequence from a pose/setting that smoothly continues from it.`
-          : ''
-        finalMotion = `Image 1 is a 3x3 storyboard grid (9 panels read left-to-right, top-to-bottom). It depicts the scene SEQUENCE — use it as a visual ROADMAP only, do NOT animate the grid itself or show panel borders. Image 2 onwards are the subjects/characters to render.${cont} Animate the subjects performing each panel's action in order, smoothly transitioning scene-to-scene.\n\n${motion}`
+        let cont = ''
+        if (continuationRefs.length === 1) {
+          cont = `\n- The LAST reference image is the final frame of the PREVIOUS segment. START the new sequence from a pose/setting/lighting that smoothly continues from it. The first second of output should look like a natural continuation of that frame.`
+        } else if (continuationRefs.length >= 2) {
+          cont = `\n- The SECOND-TO-LAST reference image is the previous segment's storyboard grid — match its art style and character look exactly. The LAST reference image is the final frame of the previous segment — START the new sequence from that pose/setting. The first second of output should look like a natural continuation of that frame.`
+        }
+        finalMotion = `IMAGE ROLES:
+- Image 1 = a 3x3 storyboard GRID showing 9 sequential keyframes (panels) read left-to-right, top-to-bottom. It is a SEQUENCE MAP, NOT a frame to animate.
+- Images 2 onwards = subject/character/style references to render.${cont}
+
+INSTRUCTIONS:
+- Animate the SUBJECTS (not the grid) performing the actions shown in each panel of Image 1, panel-by-panel, smoothly transitioning scene-to-scene as one continuous take.
+- ABSOLUTELY DO NOT show grid lines, panel borders, panel numbers, or 3x3 layout in the output video. The output is a normal full-frame video of the subjects.
+- Maintain the SAME character identity, outfit, and art style from the reference images across the entire video. No mid-video morphing.
+
+MOTION DETAILS:
+${motion}`
       }
       const vidInput = buildVidInput(vidModel, {
         prompt: finalMotion,
@@ -916,6 +932,14 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
       const motionHint = isPrevStoryboard
         ? '[TULIS NASKAH BAGIAN 2 DI SINI] Lanjutan dari storyboard sebelumnya — describe what happens next, beat-by-beat. Refs lock character/style; motion drives the new action sequence.'
         : '[TULIS NASKAH BAGIAN 2 DI SINI] Lanjutan dari shot sebelumnya — describe what happens next, beat-by-beat. The last frame is included as a reference so the model can visually continue from where the previous video ended.'
+      // For storyboard continuation, include BOTH the previous grid image AND
+      // the last frame as continuity anchors. The grid gives the model the
+      // "this is the style + character look we established", the last frame
+      // gives "this is the exact pose/setting to continue from". Two anchors
+      // = stronger continuity than just last frame alone.
+      const continuityRefs = isPrevStoryboard && prev.image?.url
+        ? [prev.image.url, frameUrl]
+        : [frameUrl]
       const newShot = {
         id: `${persona.id}-cont-${Date.now()}`,
         raw: isPrevStoryboard
@@ -936,7 +960,7 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
         image: { status: 'idle' },
         video: { status: 'idle' },
         approved: false,
-        additional_ref_urls: [frameUrl],
+        additional_ref_urls: continuityRefs,
         continued_from: prev.id,
       }
       onPatch({ shots: [...state.shots, newShot] })
