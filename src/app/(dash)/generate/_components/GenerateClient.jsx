@@ -175,22 +175,26 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
           {showConfigDetails && (
             <div className="mt-2 grid grid-cols-2 md:grid-cols-3 gap-3">
               <Sel label="Mode" value={globalConfig.mode} onChange={(v) => {
-                // Auto-switch video model on mode change. Storyboard works best
-                // with reference-to-video (no morphing from grid image); shots
-                // mode wants image-to-video (animates the still). Skip the
-                // override if user has manually picked an explicit ref/i2v
-                // model already.
+                // Auto-switch vidModel on mode change. Storyboard + direct both
+                // want reference-to-video (no morphing); shots wants image-to-
+                // video (animates the still). Skip override if user already
+                // picked an explicit model.
                 const next = { ...globalConfig, mode: v }
                 const curr = globalConfig.vidModel || ''
-                if (v === 'storyboard' && !curr.includes('ref-to-video') && !curr.includes('reference-to-video')) {
+                const wantsRef = v === 'storyboard' || v === 'direct'
+                if (wantsRef && !curr.includes('ref-to-video') && !curr.includes('reference-to-video')) {
                   next.vidModel = 'xai/grok-imagine-video/reference-to-video'
                 } else if (v === 'shots' && (curr.includes('ref-to-video') || curr.includes('reference-to-video'))) {
                   next.vidModel = 'xai/grok-imagine-video/image-to-video'
                 }
                 setGlobalConfig(next)
               }}
-                options={[['shots', '🎬 Per-Shot (auto count from naskah)'], ['storyboard', '🗂 Storyboard 3×3 (~15s)']]} />
-              {globalConfig.mode === 'shots' && (
+                options={[
+                  ['shots', '🎬 Per-Shot (image → video)'],
+                  ['storyboard', '🗂 Storyboard 3×3 (~15s)'],
+                  ['direct', '🎯 Direct Video (skip image, refs only)'],
+                ]} />
+              {(globalConfig.mode === 'shots' || globalConfig.mode === 'direct') && (
                 <div>
                   <label className="block text-[9px] uppercase text-[var(--muted)] font-semibold mb-1">Shot Count</label>
                   <select value={globalConfig.shotCount ?? ''} onChange={(e) => setGlobalConfig({ ...globalConfig, shotCount: e.target.value ? parseInt(e.target.value) : null })}
@@ -648,13 +652,22 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
 
   async function genVideoForShot(idx) {
     const shot = state.shots[idx]
-    if (!shot || !shot.image?.url) return
+    if (!shot) return
+    // Direct mode skips image gen entirely — refs are the visual anchor, motion
+    // is the only text signal. Other modes require an approved image first.
+    const isDirect = globalConfig.mode === 'direct'
+    if (!isDirect && !shot.image?.url) return
     patchShot(idx, { video: { status: 'generating' } })
     try {
       // Video gen also uses combined refs (some models accept reference_urls for char consistency)
       const characterProductUrls = selectedRefs.map((r) => r.fal_url).filter(Boolean)
       const styleUrls = styleRefs.map((r) => r.fal_url).filter(Boolean)
       const refUrls = [...characterProductUrls, ...styleUrls]
+      // Direct mode REQUIRES refs (there's no source image to fall back on).
+      // Guard early with a clear error so user knows to upload refs first.
+      if (isDirect && refUrls.length === 0) {
+        throw new Error('Direct mode butuh minimal 1 reference image. Upload ref di persona dulu.')
+      }
 
       // Visual Compiler for VIDEO prompt — same layered priority + sanitizer
       // as image gen. Replaces the regex-mutilated motion string (jsx:470)
@@ -704,18 +717,20 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
         refsCount: refUrls.length,
         userPresets: userCameraPresets,
       })
-      // For storyboard + reference-to-video: include the approved 3x3 grid
-      // image as the FIRST reference. Model sees the panel layout intent +
-      // character identity (from refs) — no morphing of the grid like
-      // image-to-video would do. Without prepending the grid the model would
-      // hallucinate a fresh layout instead of following the storyboard.
+      // Storyboard + reference-to-video: prepend the approved 3x3 grid as the
+      // FIRST reference. Direct mode: NO image at all — refs only. Other modes
+      // (shots + image-to-video): image is the source, refs are character
+      // anchors via reference_urls.
       const isRefVid = globalConfig.vidModel.includes('reference-to-video') || globalConfig.vidModel.includes('ref-to-video')
-      const vidRefUrls = (isGrid && isRefVid)
+      const vidRefUrls = (isGrid && isRefVid && shot.image?.url)
         ? [shot.image.url, ...refUrls].filter(Boolean)
         : refUrls
       const vidInput = buildVidInput(globalConfig.vidModel, {
-        prompt: motion, image_url: shot.image.url, reference_urls: vidRefUrls,
-        duration: shot.raw.duration || 5, aspect_ratio: globalConfig.ar,
+        prompt: motion,
+        image_url: isDirect ? undefined : shot.image?.url,
+        reference_urls: vidRefUrls,
+        duration: shot.raw.duration || 5,
+        aspect_ratio: globalConfig.ar,
       })
       const vidResult = await falRun(globalConfig.vidModel, vidInput, { onProgress: (p) => patchShot(idx, { video: { status: p } }), workspaceId, duration: shot.raw.duration || 5 })
       const videoUrl = vidResult.video?.url || vidResult.video
@@ -724,7 +739,7 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
       const { data: row, error } = await supabase.from('results').insert({
         workspace_id: workspaceId, persona_id: persona.id, type: 'video', url: videoUrl, label: shot.label, ar: globalConfig.ar,
         group_label: persona.name,
-        meta: { image_url: shot.image.url, raw: shot.raw, source: 'generate' },
+        meta: { image_url: shot.image?.url || null, raw: shot.raw, source: 'generate', direct: isDirect || undefined },
         created_by: userId,
       }).select('id').single()
       if (error) throw error
@@ -909,7 +924,7 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
             className="px-4 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] text-sm font-semibold hover:bg-[var(--border)] disabled:opacity-50">
             🤖 Parse with Gemini
           </button>
-          {state.shots.length > 0 && (() => {
+          {state.shots.length > 0 && globalConfig.mode !== 'direct' && (() => {
             const imgPending = state.shots.filter((s) => !s.image?.url).length
             const estImg = imgPending * imageCost(globalConfig.imgModel)
             return (
@@ -920,7 +935,25 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
               </button>
             )
           })()}
-          {imageDoneCount > 0 && (() => {
+          {/* Direct mode: jump straight to batch video — no image gate. */}
+          {state.shots.length > 0 && globalConfig.mode === 'direct' && (() => {
+            const vidPending = state.shots.filter((s) => !s.video?.url).length
+            const estVid = state.shots.reduce((sum, s) => (s.video?.url ? sum : sum + videoCost(globalConfig.vidModel, s.raw.duration || 5)), 0)
+            return (
+              <button onClick={async () => {
+                for (let i = 0; i < state.shots.length; i++) {
+                  if (state.shots[i].video?.url) continue
+                  // eslint-disable-next-line no-await-in-loop
+                  await genVideoForShot(i)
+                }
+              }} disabled={state.busy || vidPending === 0}
+                className="px-4 py-2 rounded bg-[var(--accent)] text-white text-sm font-semibold hover:opacity-90 disabled:opacity-50">
+                🎯 Generate Videos Direct ({vidPending})
+                {vidPending > 0 && <span className="ml-1.5 text-[10px] opacity-80">≈ {fmtCost(estVid)}</span>}
+              </button>
+            )
+          })()}
+          {imageDoneCount > 0 && globalConfig.mode !== 'direct' && (() => {
             const approvedShots = state.shots.filter((s) => s.approved && s.image?.url && s.video?.status !== 'done')
             const estVid = approvedShots.reduce((sum, s) => sum + videoCost(globalConfig.vidModel, s.raw.duration || 5), 0)
             return (
@@ -936,7 +969,9 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
         {state.shots.length > 0 && (
           <div className="pt-3 border-t border-[var(--border)] space-y-3">
             <div className="text-[10px] uppercase font-semibold text-[var(--muted)]">
-              📝 {globalConfig.mode === 'storyboard' ? 'Storyboard — edit 9 panel, gen grid, approve, gen video' : 'Shots — edit text, gen image, approve, gen video'}
+              📝 {globalConfig.mode === 'storyboard' ? 'Storyboard — edit 9 panel, gen grid, approve, gen video'
+                : globalConfig.mode === 'direct' ? '🎯 Direct — edit motion + dialog, refs sebagai visual anchor, langsung gen video'
+                : 'Shots — edit text, gen image, approve, gen video'}
             </div>
             {state.shots.map((shot, i) => (
               shot.raw.panels
@@ -952,6 +987,7 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
                     onSendQC={() => sendToQC(i)}
                     onDelete={() => deleteResult(i, shot.video?.result_id)} />
                 : <ShotEditor key={shot.id} shot={shot} idx={i}
+                    mode={globalConfig.mode}
                     onChangeRaw={(key, value) => patchShotRaw(i, key, value)}
                     onGenImage={() => genImageForShot(i)}
                     onGenVideo={() => genVideoForShot(i)}
@@ -969,11 +1005,12 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
   )
 }
 
-function ShotEditor({ shot, idx, onChangeRaw, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onDelete }) {
+function ShotEditor({ shot, idx, mode = 'shots', onChangeRaw, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onDelete }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(shot.label || '')
   const imgStatus = shot.image?.status || 'idle'
   const vidStatus = shot.video?.status || 'idle'
+  const isDirect = mode === 'direct'
 
   return (
     <div className={`bg-[var(--surface2)] border rounded p-3 ${shot.approved ? 'border-[var(--accent)]' : 'border-[var(--border)]'}`}>
@@ -987,7 +1024,9 @@ function ShotEditor({ shot, idx, onChangeRaw, onGenImage, onGenVideo, onPickImag
               <img src={shot.image.url} alt="" loading="lazy" className="w-full h-full object-cover" />
             ) : (
               <div className="w-full h-full flex items-center justify-center text-[10px] text-[var(--muted)] text-center p-2">
-                {imgStatus === 'idle' ? 'no image yet' : imgStatus}
+                {isDirect
+                  ? (vidStatus === 'idle' ? '🎯 no video yet — click Gen Video Direct' : vidStatus)
+                  : (imgStatus === 'idle' ? 'no image yet' : imgStatus)}
               </div>
             )}
             {imgStatus !== 'idle' && imgStatus !== 'done' && imgStatus !== 'error' && (
@@ -1011,22 +1050,34 @@ function ShotEditor({ shot, idx, onChangeRaw, onGenImage, onGenVideo, onPickImag
             <VariantStrip variants={shot.image_variants} activeIdx={shot.image_active_idx ?? (shot.image_variants?.length || 1) - 1} onPick={onPickImage} kind="image" />
           )}
 
-          <div className="mt-2 flex gap-1">
-            <button onClick={onGenImage} disabled={imgStatus === 'generating' || vidStatus === 'generating'}
-              title={shot.image?.url ? 'Re-gen image' : 'Gen image'}
-              className="flex-1 text-[10px] px-1.5 py-1 rounded bg-blue-500/80 hover:bg-blue-500 text-white font-semibold disabled:opacity-50">
-              {shot.image?.url ? '🔁 Re-img' : '🖼 Img'}
+          {/* Direct mode: skip image entirely. Single Gen Video button uses
+              uploaded refs as visual anchor. Other modes: classic image-first
+              flow with separate Img / OK / Vid buttons. */}
+          {isDirect ? (
+            <button onClick={onGenVideo} disabled={vidStatus === 'generating'}
+              className="w-full mt-2 text-[11px] px-2 py-1.5 rounded bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white font-semibold disabled:opacity-50">
+              {shot.video?.url ? '🔁 Re-gen Video' : '🎯 Generate Video Direct'}
             </button>
-            <label className={`flex items-center gap-1 px-2 py-1 rounded cursor-pointer text-[10px] font-semibold ${shot.approved ? 'bg-green-500/30 text-green-300 border border-green-500/50' : 'bg-[var(--surface)] border border-[var(--border)] text-[var(--muted)]'}`}>
-              <input type="checkbox" checked={shot.approved} disabled={!shot.image?.url} onChange={(e) => onApprove(e.target.checked)} className="w-3 h-3" />
-              OK
-            </label>
-          </div>
-          {shot.image?.url && (
-            <button onClick={onGenVideo} disabled={vidStatus === 'generating' || imgStatus === 'generating'}
-              className="w-full mt-1 text-[10px] px-1.5 py-1 rounded bg-[var(--accent)] text-white font-semibold disabled:opacity-50">
-              {shot.video?.url ? '🔁 Re-vid' : '🎬 Vid this one'}
-            </button>
+          ) : (
+            <>
+              <div className="mt-2 flex gap-1">
+                <button onClick={onGenImage} disabled={imgStatus === 'generating' || vidStatus === 'generating'}
+                  title={shot.image?.url ? 'Re-gen image' : 'Gen image'}
+                  className="flex-1 text-[10px] px-1.5 py-1 rounded bg-blue-500/80 hover:bg-blue-500 text-white font-semibold disabled:opacity-50">
+                  {shot.image?.url ? '🔁 Re-img' : '🖼 Img'}
+                </button>
+                <label className={`flex items-center gap-1 px-2 py-1 rounded cursor-pointer text-[10px] font-semibold ${shot.approved ? 'bg-green-500/30 text-green-300 border border-green-500/50' : 'bg-[var(--surface)] border border-[var(--border)] text-[var(--muted)]'}`}>
+                  <input type="checkbox" checked={shot.approved} disabled={!shot.image?.url} onChange={(e) => onApprove(e.target.checked)} className="w-3 h-3" />
+                  OK
+                </label>
+              </div>
+              {shot.image?.url && (
+                <button onClick={onGenVideo} disabled={vidStatus === 'generating' || imgStatus === 'generating'}
+                  className="w-full mt-1 text-[10px] px-1.5 py-1 rounded bg-[var(--accent)] text-white font-semibold disabled:opacity-50">
+                  {shot.video?.url ? '🔁 Re-vid' : '🎬 Vid this one'}
+                </button>
+              )}
+            </>
           )}
 
           {/* Prominent Send to QC — visible begitu ada image atau video */}

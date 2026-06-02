@@ -34,6 +34,7 @@ export async function POST(req) {
     : ''
 
   const isStory = mode === 'storyboard'
+  const isDirect = mode === 'direct'
   const shotTypes = constraints.skipProduct
     ? 'Close Up|Medium Shot|Wide Shot'
     : 'Close Up|Medium Shot|Wide Shot|Product Shot'
@@ -43,6 +44,12 @@ export async function POST(req) {
   //   - shared `environment` field (set + lighting + time-of-day)
   //   - shared `wardrobe` field (outfit per character, extracted from naskah)
   //   - top-level `video_motion` for the whole sequence
+  // Direct-video schema: NO image_prompt because we skip the image-gen step
+  // entirely. The reference photos uploaded by the user ARE the visual anchor;
+  // the model goes straight text+refs -> video via reference-to-video. We still
+  // emit environment/wardrobe so the motion prompt has context, plus a
+  // beat-by-beat video_motion per shot (this is the only thing the video model
+  // sees).
   const schema = isStory
     ? `{
   "concept": "one-line creative concept (English)",
@@ -55,7 +62,16 @@ export async function POST(req) {
     // 9 panels total. Each panel.visual is just the action + framing — no aesthetic words, no lighting words (env handles that), no face/outfit details.
   ]
 }`
-    : `{
+    : isDirect
+      ? `{
+  "characters": ["Name1"],
+  "environment": "one-line setting + lighting + time-of-day shared across all shots",
+  "wardrobe": "outfit description per character, extracted from naskah if mentioned. Empty string if not specified.",
+  "shots": [
+    {"shot":1,"duration":5,"video_motion":"English ACTION TIMELINE: beat-by-beat description of what happens in this shot. Include camera moves, character actions, mood. Max 40 words.","dialogue":"${constraints.skipDialog ? '' : `line in ${lang}`}","chars_in_shot":["Name1"]}
+  ]
+}`
+      : `{
   "characters": ["Name1"],
   "environment": "one-line setting + lighting + time-of-day shared across all shots",
   "wardrobe": "outfit description per character, extracted from naskah if mentioned. Empty string if not specified.",
@@ -96,9 +112,13 @@ ${universalRules}
 TASK: Convert this script into ${
     isStory
       ? 'ONE 3x3 storyboard (9 panels, ~15s total)'
-      : shotCount
-        ? `EXACTLY ${shotCount} shot${shotCount > 1 ? 's' : ''} (each 3-10s based on action density)`
-        : 'as many shots as the naskah naturally demands (minimum 1, typical 3-8, each shot 3-10s). Short naskah = fewer shots, long naskah = more shots. Don\'t pad with filler shots'
+      : isDirect
+        ? (shotCount
+            ? `EXACTLY ${shotCount} DIRECT VIDEO shot${shotCount > 1 ? 's' : ''} (each 5-10s). Each shot is generated DIRECTLY from text + reference photos — no intermediate still frame. Pack action into video_motion: full beat-by-beat description, every camera move, every character action, every mood word from the naskah. video_motion IS the only signal the video model gets.`
+            : 'as many DIRECT VIDEO shots as the naskah needs (minimum 1, typical 2-5, each 5-10s). Each shot is generated DIRECTLY from text + reference photos — no intermediate still frame. Pack action into video_motion: full beat-by-beat description, every camera move, every character action, every mood word from the naskah. video_motion IS the only signal the video model gets.')
+        : shotCount
+          ? `EXACTLY ${shotCount} shot${shotCount > 1 ? 's' : ''} (each 3-10s based on action density)`
+          : 'as many shots as the naskah naturally demands (minimum 1, typical 3-8, each shot 3-10s). Short naskah = fewer shots, long naskah = more shots. Don\'t pad with filler shots'
   } for a ${ar} video.
 
 Output ONLY valid JSON, no markdown:
