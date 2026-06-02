@@ -322,8 +322,10 @@ export const VIDEO_MODELS = [
   { v: 'fal-ai/kling-video/o3/standard/image-to-video', l: 'Kling O3 — ~$0.11/dtk (audio)' },
   { v: 'fal-ai/kling-video/v2.5-turbo/pro/ref-to-video', l: '🎭 Kling 2.5 Pro Ref-to-Video — ~$0.12/dtk (NO morphing dari grid)' },
   { v: 'alibaba/happy-horse/image-to-video', l: 'Happy Horse 1.0 — ~$0.14/dtk' },
-  { v: 'fal-ai/bytedance/seedance/v1/lite/reference-to-video', l: '🎭 Seedance Ref-to-Video — ~$0.16/dtk' },
+  { v: 'alibaba/happy-horse/reference-to-video', l: '🎭 Happy Horse Ref-to-Video — ~$0.14/dtk' },
+  { v: 'fal-ai/bytedance/seedance/v1/lite/reference-to-video', l: '🎭 Seedance Lite Ref-to-Video — ~$0.16/dtk' },
   { v: 'bytedance/seedance-2.0/fast/image-to-video', l: 'Seedance 2 Fast — ~$0.24/dtk' },
+  { v: 'bytedance/seedance-2.0/fast/reference-to-video', l: '🎭 Seedance 2 Fast Ref-to-Video — ~$0.24/dtk' },
   { v: 'fal-ai/kling-video/v3/pro/image-to-video', l: 'Kling v3 Pro — ~$0.28/dtk (best quality)' },
 ]
 export const IMAGE_MODELS = [
