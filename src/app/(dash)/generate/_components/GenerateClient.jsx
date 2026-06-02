@@ -855,14 +855,15 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
     onPatch({ busy: false })
   }
 
-  // Continue Storyboard — chains a new storyboard shot onto an existing one
-  // by extracting the last frame of the source video and pre-loading it as
-  // an additional reference on a fresh empty storyboard shot. Visual + style
-  // + character refs all inherit; only the panel content + grid image are
-  // generated fresh from the next naskah segment.
+  // Continue from previous video — chains a new shot by extracting the last
+  // frame of the source video and pre-loading it as an additional reference.
+  // Works for BOTH storyboard mode (creates new empty 9-panel shot) and
+  // direct mode (creates new direct shot with just motion field). Detects
+  // source mode by presence of shot.raw.panels.
   async function continueStoryboard(idx) {
     const prev = state.shots[idx]
     if (!prev?.video?.url) { onErr('Continue: video belum jadi'); return }
+    const isPrevStoryboard = !!prev.raw.panels
     onPatch({ busy: true }); onErr('')
     try {
       const { extractLastFrame } = await import('@/lib/ffmpeg-extract')
@@ -872,20 +873,32 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
       // safe approximation that still hits the visually-final frame.
       const blob = await extractLastFrame(prev.video.url, { offsetEnd: 0.05 })
       const { url: frameUrl } = await uploadBlob(blob, `lastframe-${prev.id}.jpg`, 'continuation')
-      // Build a fresh storyboard shot. Empty panels = user fills via Parse +
-      // new naskah. additional_ref_urls auto-includes last frame.
+      // Build the continuation shot. Storyboard source -> empty 9-panel
+      // shot (user fills via Parse). Direct source -> direct shot with
+      // motion-only schema. Either way, additional_ref_urls carries the
+      // last frame as a continuity anchor.
+      const baseRaw = {
+        environment: prev.raw.environment || '',
+        wardrobe: prev.raw.wardrobe || '',
+        chars_in_shot: prev.raw.chars_in_shot || [],
+        shot_label: 'Continuation',
+      }
       const newShot = {
         id: `${persona.id}-cont-${Date.now()}`,
-        raw: {
-          panels: [],
-          concept: '',
-          environment: '',
-          wardrobe: '',
-          video_motion: '',
-          chars_in_shot: prev.raw.chars_in_shot || [],
-          duration: 10,
-          shot_label: 'Continuation',
-        },
+        raw: isPrevStoryboard
+          ? {
+              ...baseRaw,
+              panels: [],
+              concept: '',
+              video_motion: '',
+              duration: 10,
+            }
+          : {
+              ...baseRaw,
+              video_motion: '',
+              dialogue: '',
+              duration: prev.raw.duration || 5,
+            },
         label: `${prev.label} — Continuation`,
         image: { status: 'idle' },
         video: { status: 'idle' },
@@ -1107,6 +1120,7 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
                     onApprove={(v) => patchShot(i, { approved: v })}
                     onRename={(label) => { patchShot(i, { label }); renameResult(shot.video?.result_id, label) }}
                     onSendQC={() => sendToQC(i)}
+                    onContinue={() => continueStoryboard(i)}
                     onDelete={() => deleteResult(i, shot.video?.result_id)} />
             ))}
           </div>
@@ -1116,7 +1130,7 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
   )
 }
 
-function ShotEditor({ shot, idx, mode = 'shots', availableRefs = [], onToggleRef, onResetRefs, onChangeRaw, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onDelete }) {
+function ShotEditor({ shot, idx, mode = 'shots', availableRefs = [], onToggleRef, onResetRefs, onChangeRaw, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onContinue, onDelete }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(shot.label || '')
   const imgStatus = shot.image?.status || 'idle'
@@ -1236,6 +1250,16 @@ function ShotEditor({ shot, idx, mode = 'shots', availableRefs = [], onToggleRef
                 🧪 Send to QC
               </button>
             )
+          )}
+          {/* Continue — appears after video gen. Extracts last frame and
+              creates a new shot below with continuity-anchor ref. Same
+              mechanism as Storyboard's Continue, works for direct mode too. */}
+          {shot.video?.url && onContinue && (
+            <button onClick={onContinue}
+              title="Continue from this shot's last frame as a new video"
+              className="w-full mt-1 text-[10px] px-1.5 py-1 rounded bg-cyan-600 hover:bg-cyan-700 text-white font-bold">
+              ➕ Continue
+            </button>
           )}
         </div>
 
