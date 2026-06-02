@@ -175,14 +175,18 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
           {showConfigDetails && (
             <div className="mt-2 grid grid-cols-2 md:grid-cols-3 gap-3">
               <Sel label="Mode" value={globalConfig.mode} onChange={(v) => {
-                // Auto-switch vidModel on mode change. Storyboard + direct both
-                // want reference-to-video (no morphing); shots wants image-to-
-                // video (animates the still). Skip override if user already
-                // picked an explicit model.
+                // Auto-switch vidModel on mode change.
+                //   storyboard  -> seedance 2 fast ref-to-video (9 image slots
+                //                  = grid + up to 8 subject refs; the storyboard
+                //                  pipeline needs this many)
+                //   direct      -> grok ref-to-video (cheap, refs anchor visual)
+                //   shots       -> grok image-to-video (animates approved still)
+                // Skip override if user already picked an explicit model.
                 const next = { ...globalConfig, mode: v }
                 const curr = globalConfig.vidModel || ''
-                const wantsRef = v === 'storyboard' || v === 'direct'
-                if (wantsRef && !curr.includes('ref-to-video') && !curr.includes('reference-to-video')) {
+                if (v === 'storyboard' && !curr.includes('ref-to-video') && !curr.includes('reference-to-video')) {
+                  next.vidModel = 'bytedance/seedance-2.0/fast/reference-to-video'
+                } else if (v === 'direct' && !curr.includes('ref-to-video') && !curr.includes('reference-to-video')) {
                   next.vidModel = 'xai/grok-imagine-video/reference-to-video'
                 } else if (v === 'shots' && (curr.includes('ref-to-video') || curr.includes('reference-to-video'))) {
                   next.vidModel = 'xai/grok-imagine-video/image-to-video'
@@ -737,8 +741,16 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
       const vidRefUrls = (isGrid && isRefVid && shot.image?.url)
         ? [shot.image.url, ...refUrls].filter(Boolean)
         : refUrls
+      // Role-identification prompt for storyboard ref-to-video. Without this
+      // hint, the model often misreads the 3x3 grid as a single frame to
+      // animate, producing the "9 panels rocking around" glitch. With the
+      // hint, the model treats the grid as a SEQUENCE MAP and the trailing
+      // refs as the subjects to animate through that sequence — much cleaner.
+      const finalMotion = (isGrid && isRefVid && shot.image?.url)
+        ? `Image 1 is a 3x3 storyboard grid (9 panels read left-to-right, top-to-bottom). It depicts the scene SEQUENCE — use it as a visual ROADMAP only, do NOT animate the grid itself or show panel borders. Image 2 onwards are the subjects/characters to render. Animate the subjects performing each panel's action in order, smoothly transitioning scene-to-scene.\n\n${motion}`
+        : motion
       const vidInput = buildVidInput(vidModel, {
-        prompt: motion,
+        prompt: finalMotion,
         image_url: isDirect ? undefined : shot.image?.url,
         reference_urls: vidRefUrls,
         duration: shot.raw.duration || 5,
