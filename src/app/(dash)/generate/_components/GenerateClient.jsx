@@ -12,6 +12,7 @@ import { compileImagePrompt, compileVideoPrompt } from '@/lib/prompt-compiler'
 import { CAMERA_PRESETS, listAllPresets, DEFAULT_CAMERA, getCameraPreset } from '@/lib/camera-presets'
 import { buildIdentitySentence, productNotesShort } from '@/lib/identity'
 import { uploadFile } from '@/lib/upload-client'
+import { LazyVideo } from '@/lib/use-lazy-video'
 
 export default function GenerateClient({ workspaceId, userId, activeBrand, personas: initialPersonas, workspaceRefs: initialRefs }) {
   const supabase = createClient()
@@ -981,7 +982,7 @@ function ShotEditor({ shot, idx, onChangeRaw, onGenImage, onGenVideo, onPickImag
         <div className="w-32 flex-shrink-0">
           <div className="aspect-[9/16] bg-black rounded overflow-hidden border border-[var(--border)] relative">
             {shot.video?.url ? (
-              <video src={shot.video.url} controls muted loop playsInline preload="none" className="w-full h-full object-cover" />
+              <LazyVideo src={shot.video.url} controls muted loop playsInline className="w-full h-full object-cover" />
             ) : shot.image?.url ? (
               <img src={shot.image.url} alt="" loading="lazy" className="w-full h-full object-cover" />
             ) : (
@@ -1168,7 +1169,7 @@ function StoryboardEditor({ shot, idx, ar, onChangeRaw, onChangePanel, onGenImag
         <div>
           <div className={`${aspectClass} bg-black rounded overflow-hidden border border-[var(--border)] relative`}>
             {shot.video?.url ? (
-              <video src={shot.video.url} controls muted loop playsInline preload="none" className="w-full h-full object-cover" />
+              <LazyVideo src={shot.video.url} controls muted loop playsInline className="w-full h-full object-cover" />
             ) : shot.image?.url ? (
               <img src={shot.image.url} alt="" loading="lazy" className="w-full h-full object-cover" />
             ) : (

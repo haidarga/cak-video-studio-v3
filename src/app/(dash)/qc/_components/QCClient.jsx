@@ -2,6 +2,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { uploadFile, uploadBlob } from '@/lib/upload-client'
+import { LazyVideo } from '@/lib/use-lazy-video'
 import { convertVideoToMp4 } from '@/lib/video-convert'
 import { stripAudioFromVideo } from '@/lib/strip-audio'
 
@@ -412,7 +413,7 @@ const QCCard = memo(function QCCard({ result: r, onSetStatus, onRemove, onOpenNo
     <div className={`bg-[var(--surface2)] border rounded overflow-hidden ${selected ? 'border-[var(--accent)] ring-2 ring-[var(--accent)]/50' : 'border-[var(--border)]'}`}>
       <div className="relative aspect-[9/16] bg-black">
         {r.type === 'video'
-          ? <video src={r.url} muted loop playsInline preload="none" className="w-full h-full object-cover"
+          ? <LazyVideo src={r.url} muted loop playsInline className="w-full h-full object-cover"
               onMouseEnter={(e) => { e.target.preload = 'auto'; e.target.play().catch(()=>{}) }}
               onMouseLeave={(e) => e.target.pause()} />
           : <img src={r.url} alt={r.label} loading="lazy" className="w-full h-full object-cover" />}

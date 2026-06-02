@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { LazyVideo } from '@/lib/use-lazy-video'
 
 function platformIcon(p) {
   const x = (p || '').toLowerCase()
@@ -226,7 +227,7 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
                   <button onClick={() => setPicking(r)} className="w-full text-left">
                     <div className="aspect-[9/16] bg-black">
                       {r.type === 'video'
-                        ? <video src={r.url} muted loop preload="none" className="w-full h-full object-cover" />
+                        ? <LazyVideo src={r.url} muted loop className="w-full h-full object-cover" />
                         : <img src={r.url} alt="" loading="lazy" className="w-full h-full object-cover" />}
                     </div>
                     <div className="p-1.5">
@@ -835,7 +836,7 @@ function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubm
               {results.map((r) => (
                 <div key={r.id} className="flex-shrink-0 w-16 aspect-[9/16] rounded overflow-hidden bg-black border border-[var(--border)]">
                   {r.type === 'video'
-                    ? <video src={r.url} muted preload="none" className="w-full h-full object-cover" />
+                    ? <LazyVideo src={r.url} muted className="w-full h-full object-cover" />
                     : <img src={r.url} alt="" loading="lazy" className="w-full h-full object-cover" />}
                 </div>
               ))}
@@ -897,7 +898,7 @@ function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubm
                   <div key={r.id} className="flex items-center gap-2 text-xs">
                     <div className="w-8 aspect-[9/16] rounded overflow-hidden bg-black flex-shrink-0">
                       {r.type === 'video'
-                        ? <video src={r.url} muted preload="none" className="w-full h-full object-cover" />
+                        ? <LazyVideo src={r.url} muted className="w-full h-full object-cover" />
                         : <img src={r.url} alt="" loading="lazy" className="w-full h-full object-cover" />}
                     </div>
                     <div className="flex-1 min-w-0">
