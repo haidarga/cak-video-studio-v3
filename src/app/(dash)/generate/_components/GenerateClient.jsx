@@ -5,6 +5,7 @@ import {
   falRun, buildImgInput, buildVidInput,
   buildStoryboardGridPrompt,
   VIDEO_MODELS, IMAGE_MODELS,
+  getVideoMaxDuration,
 } from '@/lib/fal-client'
 import { imageCost, videoCost, fmtCost } from '@/lib/cost-table'
 import { STYLE_PRESETS } from '@/lib/style-presets'
@@ -214,7 +215,32 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
                 options={[['Indonesian', 'Indonesian'], ['English', 'English'], ['Javanese', 'Javanese'], ['Sundanese', 'Sundanese'], ['Balinese', 'Balinese']]} />
               <Sel label="Image Model" value={globalConfig.imgModel} onChange={(v) => setGlobalConfig({ ...globalConfig, imgModel: v })}
                 options={IMAGE_MODELS.map((m) => [m.v, m.l])} />
-              <Sel label="Video Model" value={globalConfig.vidModel} onChange={(v) => setGlobalConfig({ ...globalConfig, vidModel: v })}
+              <Sel label="Video Model" value={globalConfig.vidModel}
+                onChange={(v) => {
+                  // When user changes video model, the new model's max
+                  // duration may be lower than what's stored on existing
+                  // shots. Without this clamp, those shots would silently
+                  // get truncated output (user typed 15, got 10). Walk all
+                  // personas + their shots and trim where needed.
+                  const newMax = getVideoMaxDuration(v)
+                  setStateByPersona((prev) => {
+                    const next = { ...prev }
+                    for (const pid of Object.keys(next)) {
+                      const shots = next[pid]?.shots
+                      if (!Array.isArray(shots)) continue
+                      next[pid] = {
+                        ...next[pid],
+                        shots: shots.map((s) => {
+                          const d = parseInt(s.raw?.duration) || 5
+                          if (d > newMax) return { ...s, raw: { ...s.raw, duration: newMax } }
+                          return s
+                        }),
+                      }
+                    }
+                    return next
+                  })
+                  setGlobalConfig({ ...globalConfig, vidModel: v })
+                }}
                 options={VIDEO_MODELS.map((m) => [m.v, m.l])} />
             </div>
           )}
@@ -1209,6 +1235,8 @@ ${motion}`
                     onDelete={() => deleteResult(i, shot.video?.result_id)} />
                 : <ShotEditor key={shot.id} shot={shot} idx={i}
                     mode={globalConfig.mode}
+                    maxDuration={getVideoMaxDuration(globalConfig.vidModel)}
+                    vidModelLabel={(VIDEO_MODELS.find((m) => m.v === globalConfig.vidModel)?.l || globalConfig.vidModel).split('—')[0].trim()}
                     availableRefs={[...selectedRefs, ...styleRefs]}
                     onToggleRef={(refId) => patchShot(i, (prev) => {
                       const cur = new Set(prev.disabledRefIds || [])
@@ -1234,7 +1262,7 @@ ${motion}`
   )
 }
 
-function ShotEditor({ shot, idx, mode = 'shots', availableRefs = [], onToggleRef, onResetRefs, onChangeRaw, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onContinue, onDelete }) {
+function ShotEditor({ shot, idx, mode = 'shots', maxDuration = 15, vidModelLabel = '', availableRefs = [], onToggleRef, onResetRefs, onChangeRaw, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onContinue, onDelete }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(shot.label || '')
   const imgStatus = shot.image?.status || 'idle'
@@ -1423,9 +1451,19 @@ function ShotEditor({ shot, idx, mode = 'shots', availableRefs = [], onToggleRef
                 placeholder='"Dialog karakter di sini..."'
                 className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] resize-y" />
             </FieldRow>
-            <FieldRow label="⏱ Detik">
-              <input type="number" min={1} max={15} value={shot.raw.duration || 5} onChange={(e) => onChangeRaw('duration', parseInt(e.target.value) || 5)}
+            <FieldRow label={`⏱ Detik (max ${maxDuration}s — ${vidModelLabel})`}>
+              <input type="number" min={1} max={maxDuration} value={shot.raw.duration || 5}
+                onChange={(e) => {
+                  // Clamp to model max. fal.ai silently truncates output if
+                  // we send larger duration than the model supports, which
+                  // looks like a bug to the user (typed 15, got 10).
+                  const v = parseInt(e.target.value) || 5
+                  onChangeRaw('duration', Math.min(v, maxDuration))
+                }}
                 className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)]" />
+              {(shot.raw.duration || 5) > maxDuration && (
+                <div className="text-[9px] text-amber-400 mt-0.5">⚠ {shot.raw.duration}s exceeds {vidModelLabel} cap ({maxDuration}s) — akan di-cap saat gen</div>
+              )}
             </FieldRow>
           </div>
         </div>

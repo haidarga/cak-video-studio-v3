@@ -325,6 +325,25 @@ export const IMG_QUALITY = ''
 // @deprecated — same story; compileVideoPrompt handles stability per preset.
 export const VID_STABILITY = ''
 
+// Per-model max duration cap, in seconds. Aligned with the caps enforced
+// inside buildVidInput so the UI can warn users BEFORE they hit the silent
+// truncation. Ref-to-video variants generally tighter than image-to-video.
+export function getVideoMaxDuration(vidModel) {
+  if (!vidModel) return 10
+  const m = vidModel
+  const isRef = m.includes('reference-to-video') || m.includes('ref-to-video')
+  if (m.includes('grok-imagine')) return isRef ? 10 : 15
+  if (m.includes('seedance-2.0/fast')) return isRef ? 12 : 15
+  if (m.includes('seedance')) return 15
+  if (m.includes('happy-horse')) return 15
+  if (m.includes('kling-video/v3/pro')) return 15
+  if (m.includes('kling-video/v3')) return 10
+  if (m.includes('kling-video/o3')) return 10
+  if (m.includes('kling-video/v2.5')) return 15
+  if (m.includes('veo3')) return 8        // conservative; some variants longer, verify per-call
+  return 10
+}
+
 export const VIDEO_MODELS = [
   { v: 'xai/grok-imagine-video/image-to-video', l: 'Grok Imagine — ~$0.07/dtk 720p (audio) 💰' },
   { v: 'xai/grok-imagine-video/reference-to-video', l: '🎭 Grok Imagine Ref-to-Video — ~$0.07/dtk (multi-ref, NO grid morph) 💰' },
