@@ -68,7 +68,7 @@ export async function POST(req) {
   "environment": "one-line setting + lighting + time-of-day shared across all shots",
   "wardrobe": "outfit description per character, extracted from naskah if mentioned. Empty string if not specified.",
   "shots": [
-    {"shot":1,"duration":5,"video_motion":"English BEAT-STRUCTURED TIMELINE with timestamped sub-shots. Format: '[0-Xs] <action + camera angle>. [X-Ys] <action shift + camera move>. [Y-Zs] <final beat>.' Each beat ~2-3s. Map every naskah element (subtext, caption, dialog, mood shift, prop reveal) to a specific time range. Include camera moves between beats (push-in / pull-back / cut / pan). This is the ONLY signal the video model gets — pack the entire narrative arc in here.","dialogue":"${constraints.skipDialog ? '' : `line in ${lang}`}","chars_in_shot":["Name1"]}
+    {"shot":1,"duration":5,"video_motion":"English BEAT-STRUCTURED TIMELINE with timestamped sub-shots. Format: '[0-Xs] <action + camera angle>. [X-Ys] <action shift + camera move>. [Y-Zs] <final beat>.' Each beat ~2-3s. Map naskah narrative elements (action, camera moves, mood shifts, character reactions, prop reveals) to specific time ranges. Include camera transitions between beats (push-in / pull-back / cut / pan). DO NOT include caption text or subtext overlays in the timeline — those are added separately in the editor. Focus on what HAPPENS visually + how camera moves.","dialogue":"${constraints.skipDialog ? '' : `line in ${lang}`}","chars_in_shot":["Name1"]}
   ]
 }`
       : `{
@@ -116,18 +116,18 @@ TASK: Convert this script into ${
         ? (shotCount
             ? `EXACTLY ${shotCount} DIRECT VIDEO shot${shotCount > 1 ? 's' : ''} (each 5-10s). Each shot is generated DIRECTLY from text + reference photos — no intermediate still frame.
 
-CRITICAL: video_motion for EACH shot must be a TIMESTAMPED BEAT TIMELINE that maps the naskah faithfully. Format example for a 6s shot:
+CRITICAL: video_motion for EACH shot must be a TIMESTAMPED BEAT TIMELINE that maps the naskah's visual narrative. Format example for a 6s shot:
 
-  "[0-2s] Wide shot: Emma raises phone up, child in arms, looking at mirror. Handheld iPhone UGC style. [2-4s] Push-in to medium: Emma smiles, child reacts, caption 'subtext 1 here' fades in. [4-6s] Cut to close-up child face, child squeals happy, caption 'subtext 2 here' appears."
+  "[0-2s] Wide shot: Emma raises phone up, child in arms, looking at mirror. Handheld iPhone UGC style. [2-4s] Push-in to medium: Emma smiles softly, child reaches up. Mood lifts. [4-6s] Cut to close-up child's face, eyes widen with curiosity, gentle laugh."
 
-Every subtext, dialog cue, mood shift, prop, or camera direction in the naskah MUST land in a specific time bracket. The video model only sees this timeline — if it's not in here, it won't appear on screen.`
+Map every ACTION, CAMERA MOVE, MOOD SHIFT, and CHARACTER REACTION in the naskah to a specific time bracket. DO NOT render caption/subtext/text overlays in the timeline — those are added in the editor post-gen. Focus exclusively on what happens VISUALLY + camera direction.`
             : `as many DIRECT VIDEO shots as the naskah needs (minimum 1, typical 2-5, each 5-10s). Each shot is generated DIRECTLY from text + reference photos — no intermediate still frame.
 
-CRITICAL: video_motion for EACH shot must be a TIMESTAMPED BEAT TIMELINE that maps the naskah faithfully. Format example for a 6s shot:
+CRITICAL: video_motion for EACH shot must be a TIMESTAMPED BEAT TIMELINE that maps the naskah's visual narrative. Format example for a 6s shot:
 
-  "[0-2s] Wide shot: Emma raises phone up, child in arms, looking at mirror. Handheld iPhone UGC style. [2-4s] Push-in to medium: Emma smiles, child reacts, caption 'subtext 1 here' fades in. [4-6s] Cut to close-up child face, child squeals happy, caption 'subtext 2 here' appears."
+  "[0-2s] Wide shot: Emma raises phone up, child in arms, looking at mirror. Handheld iPhone UGC style. [2-4s] Push-in to medium: Emma smiles softly, child reaches up. Mood lifts. [4-6s] Cut to close-up child's face, eyes widen with curiosity, gentle laugh."
 
-Every subtext, dialog cue, mood shift, prop, or camera direction in the naskah MUST land in a specific time bracket. The video model only sees this timeline — if it's not in here, it won't appear on screen.`)
+Map every ACTION, CAMERA MOVE, MOOD SHIFT, and CHARACTER REACTION in the naskah to a specific time bracket. DO NOT render caption/subtext/text overlays in the timeline — those are added in the editor post-gen. Focus exclusively on what happens VISUALLY + camera direction.`)
         : shotCount
           ? `EXACTLY ${shotCount} shot${shotCount > 1 ? 's' : ''} (each 3-10s based on action density)`
           : 'as many shots as the naskah naturally demands (minimum 1, typical 3-8, each shot 3-10s). Short naskah = fewer shots, long naskah = more shots. Don\'t pad with filler shots'
