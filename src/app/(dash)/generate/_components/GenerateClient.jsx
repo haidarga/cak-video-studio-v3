@@ -748,17 +748,29 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
       // (shots + image-to-video): image is the source, refs are character
       // anchors via reference_urls.
       const isRefVid = vidModel.includes('reference-to-video') || vidModel.includes('ref-to-video')
+      // shot.additional_ref_urls — populated by "Continue Storyboard" button.
+      // These are last-frame anchors from previous storyboard segments; they
+      // ride along at the END of reference_image_urls so the model sees them
+      // as recent context (most-recent ref = strongest continuity hint).
+      const continuationRefs = Array.isArray(shot.additional_ref_urls) ? shot.additional_ref_urls : []
       const vidRefUrls = (isGrid && isRefVid && shot.image?.url)
-        ? [shot.image.url, ...refUrls].filter(Boolean)
-        : refUrls
+        ? [shot.image.url, ...refUrls, ...continuationRefs].filter(Boolean)
+        : [...refUrls, ...continuationRefs].filter(Boolean)
       // Role-identification prompt for storyboard ref-to-video. Without this
       // hint, the model often misreads the 3x3 grid as a single frame to
       // animate, producing the "9 panels rocking around" glitch. With the
       // hint, the model treats the grid as a SEQUENCE MAP and the trailing
       // refs as the subjects to animate through that sequence — much cleaner.
-      const finalMotion = (isGrid && isRefVid && shot.image?.url)
-        ? `Image 1 is a 3x3 storyboard grid (9 panels read left-to-right, top-to-bottom). It depicts the scene SEQUENCE — use it as a visual ROADMAP only, do NOT animate the grid itself or show panel borders. Image 2 onwards are the subjects/characters to render. Animate the subjects performing each panel's action in order, smoothly transitioning scene-to-scene.\n\n${motion}`
-        : motion
+      // If continuationRefs are present (from a prior storyboard's last
+      // frame), the prompt also tells the model to START from that frame's
+      // pose/setting for smooth visual handoff.
+      let finalMotion = motion
+      if (isGrid && isRefVid && shot.image?.url) {
+        const cont = continuationRefs.length
+          ? ` The LAST image (after the subjects) is the final frame of the previous storyboard segment — START the new sequence from a pose/setting that smoothly continues from it.`
+          : ''
+        finalMotion = `Image 1 is a 3x3 storyboard grid (9 panels read left-to-right, top-to-bottom). It depicts the scene SEQUENCE — use it as a visual ROADMAP only, do NOT animate the grid itself or show panel borders. Image 2 onwards are the subjects/characters to render.${cont} Animate the subjects performing each panel's action in order, smoothly transitioning scene-to-scene.\n\n${motion}`
+      }
       const vidInput = buildVidInput(vidModel, {
         prompt: finalMotion,
         image_url: isDirect ? undefined : shot.image?.url,
@@ -840,6 +852,49 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
       if (state.shots[i].image?.url) continue
       await genImageForShot(i)
     }
+    onPatch({ busy: false })
+  }
+
+  // Continue Storyboard — chains a new storyboard shot onto an existing one
+  // by extracting the last frame of the source video and pre-loading it as
+  // an additional reference on a fresh empty storyboard shot. Visual + style
+  // + character refs all inherit; only the panel content + grid image are
+  // generated fresh from the next naskah segment.
+  async function continueStoryboard(idx) {
+    const prev = state.shots[idx]
+    if (!prev?.video?.url) { onErr('Continue: video belum jadi'); return }
+    onPatch({ busy: true }); onErr('')
+    try {
+      const { extractLastFrame } = await import('@/lib/ffmpeg-extract')
+      const { uploadBlob } = await import('@/lib/upload-client')
+      // 100% duration — exact-last-frame requested. ffmpeg's -sseof needs a
+      // small negative offset (0 = end-of-stream marker), so 0.05s is the
+      // safe approximation that still hits the visually-final frame.
+      const blob = await extractLastFrame(prev.video.url, { offsetEnd: 0.05 })
+      const { url: frameUrl } = await uploadBlob(blob, `lastframe-${prev.id}.jpg`, 'continuation')
+      // Build a fresh storyboard shot. Empty panels = user fills via Parse +
+      // new naskah. additional_ref_urls auto-includes last frame.
+      const newShot = {
+        id: `${persona.id}-cont-${Date.now()}`,
+        raw: {
+          panels: [],
+          concept: '',
+          environment: '',
+          wardrobe: '',
+          video_motion: '',
+          chars_in_shot: prev.raw.chars_in_shot || [],
+          duration: 10,
+          shot_label: 'Continuation',
+        },
+        label: `${prev.label} — Continuation`,
+        image: { status: 'idle' },
+        video: { status: 'idle' },
+        approved: false,
+        additional_ref_urls: [frameUrl],
+        continued_from: prev.id,
+      }
+      onPatch({ shots: [...state.shots, newShot] })
+    } catch (e) { onErr(`Continue: ${e.message}`) }
     onPatch({ busy: false })
   }
 
@@ -1033,6 +1088,7 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
                     onApprove={(v) => patchShot(i, { approved: v })}
                     onRename={(label) => { patchShot(i, { label }); renameResult(shot.video?.result_id, label) }}
                     onSendQC={() => sendToQC(i)}
+                    onContinue={() => continueStoryboard(i)}
                     onDelete={() => deleteResult(i, shot.video?.result_id)} />
                 : <ShotEditor key={shot.id} shot={shot} idx={i}
                     mode={globalConfig.mode}
@@ -1274,7 +1330,7 @@ function VariantStrip({ variants, activeIdx, onPick, kind }) {
   )
 }
 
-function StoryboardEditor({ shot, idx, ar, availableRefs = [], onToggleRef, onResetRefs, onChangeRaw, onChangePanel, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onDelete }) {
+function StoryboardEditor({ shot, idx, ar, availableRefs = [], onToggleRef, onResetRefs, onChangeRaw, onChangePanel, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onContinue, onDelete }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(shot.label || '')
   const [showPanels, setShowPanels] = useState(true)
@@ -1402,6 +1458,18 @@ function StoryboardEditor({ shot, idx, ar, availableRefs = [], onToggleRef, onRe
                 🧪 Send to QC {shot.video?.url ? '(video)' : '(image)'}
               </button>
             )
+          )}
+          {/* Continue Storyboard — appears once a video has been generated.
+              Extracts the last frame and pre-loads it as a continuity anchor
+              on a fresh empty storyboard shot below. User writes naskah for
+              part 2, the new storyboard's video gen will include the last
+              frame so visual handoff is smooth. */}
+          {shot.video?.url && onContinue && (
+            <button onClick={onContinue}
+              title="Generate a new storyboard that visually continues from this one's last frame"
+              className="w-full mt-1 text-xs px-2 py-1.5 rounded bg-cyan-600 hover:bg-cyan-700 text-white font-bold">
+              ➕ Continue Storyboard
+            </button>
           )}
         </div>
 
