@@ -785,7 +785,14 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
       let finalMotion = motion
       if (isGrid && isRefVid && shot.image?.url) {
         let cont = ''
-        if (continuationRefs.length === 1) {
+        // Branch on continuity_fallback flag (set by continueStoryboard when
+        // the last-frame extract failed and we fell back to the prev shot's
+        // approved image). Misinforming the model that there's a "final frame"
+        // when the ref is actually a storyboard grid hurts more than helps.
+        const fallback = !!shot.continuity_fallback
+        if (continuationRefs.length === 1 && fallback) {
+          cont = `\n- The LAST reference image is the previous segment's storyboard grid (frame-level handoff unavailable). Match its art style and character look exactly. Treat this as a strong style anchor.`
+        } else if (continuationRefs.length === 1) {
           cont = `\n- The LAST reference image is the final frame of the PREVIOUS segment. START the new sequence from a pose/setting/lighting that smoothly continues from it. The first second of output should look like a natural continuation of that frame.`
         } else if (continuationRefs.length >= 2) {
           cont = `\n- The SECOND-TO-LAST reference image is the previous segment's storyboard grid — match its art style and character look exactly. The LAST reference image is the final frame of the previous segment — START the new sequence from that pose/setting. The first second of output should look like a natural continuation of that frame.`
@@ -912,6 +919,7 @@ ${motion}`
       // extractLastFrame internally falls back from -sseof to -update 1 if
       // the MP4 lacks faststart / has seek index issues.
       let frameUrl = null
+      let extractFailed = false
       try {
         const blob = await extractLastFrame(prev.video.url, { offsetEnd: 0.05 })
         patchShot(idx, { continuing: `Uploading ${(blob.size / 1024).toFixed(0)}KB to R2...` })
@@ -923,11 +931,11 @@ ${motion}`
         // Frame extract failed entirely (both ffmpeg strategies). Don't block
         // the user — fall back to using the previous shot's approved image
         // as the continuity anchor. Loses pose-handoff fidelity but still
-        // gives the model strong character + style continuity (which is the
-        // dominant component of consistency anyway).
+        // gives the model strong character + style continuity.
         console.warn('[Continue] frame extract failed, falling back to prev shot image:', extractErr.message)
         if (prev.image?.url) {
           frameUrl = prev.image.url
+          extractFailed = true
           patchShot(idx, { continuing: 'Frame extract failed — using prev image as anchor...' })
           onErr(`Continue: last-frame extract gagal (${extractErr.message?.slice(0, 80)}). Pakai gambar approved dari shot sebelumnya sebagai anchor (character + style tetep konsisten).`)
         } else {
@@ -952,14 +960,22 @@ ${motion}`
       const motionHint = isPrevStoryboard
         ? '[TULIS NASKAH BAGIAN 2 DI SINI] Lanjutan dari storyboard sebelumnya — describe what happens next, beat-by-beat. Refs lock character/style; motion drives the new action sequence.'
         : '[TULIS NASKAH BAGIAN 2 DI SINI] Lanjutan dari shot sebelumnya — describe what happens next, beat-by-beat. The last frame is included as a reference so the model can visually continue from where the previous video ended.'
-      // For storyboard continuation, include BOTH the previous grid image AND
-      // the last frame as continuity anchors. The grid gives the model the
-      // "this is the style + character look we established", the last frame
-      // gives "this is the exact pose/setting to continue from". Two anchors
-      // = stronger continuity than just last frame alone.
-      const continuityRefs = isPrevStoryboard && prev.image?.url
-        ? [prev.image.url, frameUrl]
-        : [frameUrl]
+      // Build continuity refs. Two scenarios:
+      //
+      // 1. Frame extract SUCCEEDED (frameUrl = real extracted last frame):
+      //    For storyboard source, include BOTH the previous grid (style +
+      //    character look) AND the last frame (exact pose/setting). Two
+      //    distinct anchors = stronger continuity.
+      //
+      // 2. Frame extract FAILED (frameUrl = fallback to prev.image.url):
+      //    Don't duplicate — only include prev.image.url once. The role-id
+      //    prompt below branches on this so it doesn't misinform the model
+      //    that there's a "final frame" reference when there isn't.
+      const continuityRefs = (extractFailed)
+        ? [frameUrl]                                // fallback: just the prev image
+        : (isPrevStoryboard && prev.image?.url && prev.image.url !== frameUrl)
+          ? [prev.image.url, frameUrl]              // success: grid + last frame
+          : [frameUrl]                              // success direct mode: just last frame
       const newShot = {
         id: `${persona.id}-cont-${Date.now()}`,
         raw: isPrevStoryboard
@@ -981,6 +997,11 @@ ${motion}`
         video: { status: 'idle' },
         approved: false,
         additional_ref_urls: continuityRefs,
+        // Flag: did extract-last-frame succeed, or did we fall back to prev
+        // image as anchor? genVideoForShot uses this to phrase the role-id
+        // prompt correctly (saying "last frame" when there is no last frame
+        // would misinform the model).
+        continuity_fallback: extractFailed,
         continued_from: prev.id,
       }
       onPatch({ shots: [...state.shots, newShot] })
