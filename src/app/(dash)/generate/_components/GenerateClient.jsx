@@ -864,15 +864,25 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
     const prev = state.shots[idx]
     if (!prev?.video?.url) { onErr('Continue: video belum jadi'); return }
     const isPrevStoryboard = !!prev.raw.panels
+    // Mark the shot as in-progress so the button can disable itself + show
+    // the current stage. First-click can stall ~10s while ffmpeg.wasm loads;
+    // without visible feedback the user assumes the button is broken.
+    patchShot(idx, { continuing: 'Loading ffmpeg...' })
     onPatch({ busy: true }); onErr('')
     try {
+      console.log('[Continue] loading ffmpeg-extract module...')
       const { extractLastFrame } = await import('@/lib/ffmpeg-extract')
       const { uploadBlob } = await import('@/lib/upload-client')
+      patchShot(idx, { continuing: 'Extracting last frame...' })
+      console.log('[Continue] extracting last frame from', prev.video.url)
       // 100% duration — exact-last-frame requested. ffmpeg's -sseof needs a
       // small negative offset (0 = end-of-stream marker), so 0.05s is the
       // safe approximation that still hits the visually-final frame.
       const blob = await extractLastFrame(prev.video.url, { offsetEnd: 0.05 })
+      patchShot(idx, { continuing: `Uploading ${(blob.size / 1024).toFixed(0)}KB to R2...` })
+      console.log('[Continue] frame extracted', blob.size, 'bytes — uploading')
       const { url: frameUrl } = await uploadBlob(blob, `lastframe-${prev.id}.jpg`, 'continuation')
+      console.log('[Continue] uploaded', frameUrl)
       // Build the continuation shot. Storyboard source -> empty 9-panel
       // shot (user fills via Parse). Direct source -> direct shot with
       // motion-only schema. Either way, additional_ref_urls carries the
@@ -907,7 +917,13 @@ function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch
         continued_from: prev.id,
       }
       onPatch({ shots: [...state.shots, newShot] })
-    } catch (e) { onErr(`Continue: ${e.message}`) }
+      patchShot(idx, { continuing: null })
+      console.log('[Continue] new shot appended:', newShot.id)
+    } catch (e) {
+      console.error('[Continue] failed:', e)
+      onErr(`Continue: ${e.message || e}`)
+      patchShot(idx, { continuing: null })
+    }
     onPatch({ busy: false })
   }
 
@@ -1253,12 +1269,14 @@ function ShotEditor({ shot, idx, mode = 'shots', availableRefs = [], onToggleRef
           )}
           {/* Continue — appears after video gen. Extracts last frame and
               creates a new shot below with continuity-anchor ref. Same
-              mechanism as Storyboard's Continue, works for direct mode too. */}
+              mechanism as Storyboard's Continue, works for direct mode too.
+              shot.continuing carries the live stage label so the user knows
+              the click registered. */}
           {shot.video?.url && onContinue && (
-            <button onClick={onContinue}
+            <button onClick={onContinue} disabled={!!shot.continuing}
               title="Continue from this shot's last frame as a new video"
-              className="w-full mt-1 text-[10px] px-1.5 py-1 rounded bg-cyan-600 hover:bg-cyan-700 text-white font-bold">
-              ➕ Continue
+              className="w-full mt-1 text-[10px] px-1.5 py-1 rounded bg-cyan-600 hover:bg-cyan-700 text-white font-bold disabled:opacity-60 disabled:cursor-wait">
+              {shot.continuing ? `⏳ ${shot.continuing}` : '➕ Continue'}
             </button>
           )}
         </div>
@@ -1487,12 +1505,14 @@ function StoryboardEditor({ shot, idx, ar, availableRefs = [], onToggleRef, onRe
               Extracts the last frame and pre-loads it as a continuity anchor
               on a fresh empty storyboard shot below. User writes naskah for
               part 2, the new storyboard's video gen will include the last
-              frame so visual handoff is smooth. */}
+              frame so visual handoff is smooth.
+              First click can stall ~10s while ffmpeg.wasm loads — shot.continuing
+              carries the live stage label so the button shows progress. */}
           {shot.video?.url && onContinue && (
-            <button onClick={onContinue}
+            <button onClick={onContinue} disabled={!!shot.continuing}
               title="Generate a new storyboard that visually continues from this one's last frame"
-              className="w-full mt-1 text-xs px-2 py-1.5 rounded bg-cyan-600 hover:bg-cyan-700 text-white font-bold">
-              ➕ Continue Storyboard
+              className="w-full mt-1 text-xs px-2 py-1.5 rounded bg-cyan-600 hover:bg-cyan-700 text-white font-bold disabled:opacity-60 disabled:cursor-wait">
+              {shot.continuing ? `⏳ ${shot.continuing}` : '➕ Continue Storyboard'}
             </button>
           )}
         </div>
