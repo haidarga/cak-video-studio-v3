@@ -384,6 +384,16 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
           key={persona.id}
           persona={persona}
           workspaceRefs={workspaceRefs}
+          // Lift newly-uploaded refs into workspaceRefs state so the
+          // selectedRefs useMemo inside PersonaSection can resolve their id
+          // through the personaOwnRefs+workspaceRefs lookup. Without this,
+          // a freshly uploaded ref's id sat in state.refIds but the lookup
+          // map didn't contain it -> selectedRefs filter returned undefined
+          // for that id and the shot card showed "REFS: 1/1" instead of 2.
+          onWorkspaceRefAdded={(newRef) => setWorkspaceRefs((prev) => {
+            if (prev.some((r) => r.id === newRef.id)) return prev
+            return [newRef, ...prev]
+          })}
           state={stateByPersona[persona.id] || { naskah: '', refIds: new Set(), showWorkspaceRefs: false, parsed: null, busy: false, shots: [] }}
           onPatch={(patch) => patchPersona(persona.id, patch)}
           globalConfig={globalConfig}
@@ -444,7 +454,7 @@ function friendlyFalError(raw) {
   return s
 }
 
-function PersonaSection({ persona, workspaceRefs, styleRefs = [], state, onPatch, globalConfig, userCameraPresets = [], activeBrand, workspaceId, userId, onErr, supabase }) {
+function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs = [], state, onPatch, globalConfig, userCameraPresets = [], activeBrand, workspaceId, userId, onErr, supabase }) {
   const personaOwnRefs = (persona.persona_refs || []).map((pr) => pr.refs).filter(Boolean)
 
   // Default: only this persona's own refs are SELECTED. Workspace pool stays
@@ -1159,6 +1169,13 @@ ${motion}`
           supabase={supabase}
           onErr={onErr}
           onAdded={(newRef) => {
+            // 1. Lift the new ref into the parent's workspaceRefs state so
+            //    the selectedRefs lookup (personaOwnRefs+workspaceRefs by id)
+            //    can resolve it. Without this, the id sits in state.refIds
+            //    but the lookup returns undefined -> shot picker shows fewer
+            //    refs than the user selected at persona level.
+            // 2. Mark the new ref as selected for this persona.
+            if (onWorkspaceRefAdded) onWorkspaceRefAdded(newRef)
             const next = new Set(state.refIds); next.add(newRef.id)
             onPatch({ refIds: next })
           }}
