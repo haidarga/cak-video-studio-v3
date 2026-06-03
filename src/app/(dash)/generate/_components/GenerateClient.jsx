@@ -683,6 +683,12 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
           image: { status: 'done', url: imageUrl },
           image_variants: variants,
           image_active_idx: variants.length - 1,
+          // Switch the media slot to image view so the user sees the new
+          // re-gen. Without this, if a video was already generated from
+          // an older image, the media slot kept showing that stale video
+          // and the new image silently piled up in variants the user
+          // never saw.
+          mediaView: 'image',
         }
       })
     } catch (e) {
@@ -871,6 +877,9 @@ ${motion}`
           video: { status: 'done', url: videoUrl, result_id: row.id },
           video_variants: variants,
           video_active_idx: variants.length - 1,
+          // Switch the media slot to video view so the user sees the new
+          // gen. Pairs with the mediaView='image' set in genImageForShot.
+          mediaView: 'video',
         }
       })
 
@@ -1253,6 +1262,7 @@ ${motion}`
                     })}
                     onResetRefs={() => patchShot(i, { disabledRefIds: [] })}
                     onChangeRaw={(key, value) => patchShotRaw(i, key, value)}
+                    onSetMediaView={(v) => patchShot(i, { mediaView: v })}
                     onChangePanel={(pi, key, value) => patchPanel(i, pi, key, value)}
                     onGenImage={() => genImageForShot(i)}
                     onGenVideo={() => genVideoForShot(i)}
@@ -1275,6 +1285,7 @@ ${motion}`
                     })}
                     onResetRefs={() => patchShot(i, { disabledRefIds: [] })}
                     onChangeRaw={(key, value) => patchShotRaw(i, key, value)}
+                    onSetMediaView={(v) => patchShot(i, { mediaView: v })}
                     onGenImage={() => genImageForShot(i)}
                     onGenVideo={() => genVideoForShot(i)}
                     onPickImage={(vi) => pickImageVariant(i, vi)}
@@ -1292,7 +1303,7 @@ ${motion}`
   )
 }
 
-function ShotEditor({ shot, idx, mode = 'shots', maxDuration = 15, vidModelLabel = '', availableRefs = [], onToggleRef, onResetRefs, onChangeRaw, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onContinue, onDelete }) {
+function ShotEditor({ shot, idx, mode = 'shots', maxDuration = 15, vidModelLabel = '', availableRefs = [], onToggleRef, onResetRefs, onChangeRaw, onSetMediaView, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onContinue, onDelete }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(shot.label || '')
   const imgStatus = shot.image?.status || 'idle'
@@ -1307,16 +1318,25 @@ function ShotEditor({ shot, idx, mode = 'shots', maxDuration = 15, vidModelLabel
         {/* Image preview (left) */}
         <div className="w-32 flex-shrink-0">
           <div className="aspect-[9/16] bg-black rounded overflow-hidden border border-[var(--border)] relative">
-            {shot.video?.url ? (
-              <LazyVideo src={shot.video.url} controls muted loop playsInline className="w-full h-full object-cover" />
-            ) : shot.image?.url ? (
-              <img src={shot.image.url} alt="" loading="lazy" className="w-full h-full object-cover" />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center text-[10px] text-[var(--muted)] text-center p-2">
-                {isDirect
-                  ? (vidStatus === 'idle' ? '🎯 no video yet — click Gen Video Direct' : vidStatus)
-                  : (imgStatus === 'idle' ? 'no image yet' : imgStatus)}
-              </div>
+            {(() => {
+              const showVideo = shot.mediaView ? shot.mediaView === 'video' : !!shot.video?.url
+              if (showVideo && shot.video?.url) return <LazyVideo src={shot.video.url} controls muted loop playsInline className="w-full h-full object-cover" />
+              if (shot.image?.url) return <img src={shot.image.url} alt="" loading="lazy" className="w-full h-full object-cover" />
+              return (
+                <div className="w-full h-full flex items-center justify-center text-[10px] text-[var(--muted)] text-center p-2">
+                  {isDirect
+                    ? (vidStatus === 'idle' ? '🎯 no video yet — click Gen Video Direct' : vidStatus)
+                    : (imgStatus === 'idle' ? 'no image yet' : imgStatus)}
+                </div>
+              )
+            })()}
+            {shot.image?.url && shot.video?.url && onSetMediaView && (
+              <button
+                onClick={() => onSetMediaView((shot.mediaView === 'image') ? 'video' : 'image')}
+                className="absolute top-1 right-1 text-[9px] px-1 py-0.5 rounded bg-black/70 text-white border border-white/20 hover:bg-black/90"
+                title="Toggle image / video view">
+                {(shot.mediaView === 'image' ? '🎬' : '🖼')}
+              </button>
             )}
             {imgStatus !== 'idle' && imgStatus !== 'done' && imgStatus !== 'error' && (
               <div className="absolute bottom-1 left-1 right-1 text-[9px] bg-black/80 text-white px-1.5 py-0.5 rounded truncate">⏳ {imgStatus}</div>
@@ -1528,7 +1548,7 @@ function VariantStrip({ variants, activeIdx, onPick, kind }) {
   )
 }
 
-function StoryboardEditor({ shot, idx, ar, availableRefs = [], onToggleRef, onResetRefs, onChangeRaw, onChangePanel, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onContinue, onDelete }) {
+function StoryboardEditor({ shot, idx, ar, availableRefs = [], onToggleRef, onResetRefs, onChangeRaw, onSetMediaView, onChangePanel, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onContinue, onDelete }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(shot.label || '')
   const [showPanels, setShowPanels] = useState(true)
@@ -1567,14 +1587,30 @@ function StoryboardEditor({ shot, idx, ar, availableRefs = [], onToggleRef, onRe
         {/* Left: grid image preview + actions */}
         <div>
           <div className={`${aspectClass} bg-black rounded overflow-hidden border border-[var(--border)] relative`}>
-            {shot.video?.url ? (
-              <LazyVideo src={shot.video.url} controls muted loop playsInline className="w-full h-full object-cover" />
-            ) : shot.image?.url ? (
-              <img src={shot.image.url} alt="" loading="lazy" className="w-full h-full object-cover" />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center text-[10px] text-[var(--muted)] text-center p-2">
-                {imgStatus === 'idle' ? 'no grid yet — klik 🖼 Gen Grid' : imgStatus}
-              </div>
+            {(() => {
+              // Pick which media to show. Explicit shot.mediaView wins; if
+              // unset, prefer video (post-gen default). Re-img sets
+              // mediaView='image' so the new image is visible instead of
+              // the stale video.
+              const showVideo = shot.mediaView ? shot.mediaView === 'video' : !!shot.video?.url
+              if (showVideo && shot.video?.url) return <LazyVideo src={shot.video.url} controls muted loop playsInline className="w-full h-full object-cover" />
+              if (shot.image?.url) return <img src={shot.image.url} alt="" loading="lazy" className="w-full h-full object-cover" />
+              return (
+                <div className="w-full h-full flex items-center justify-center text-[10px] text-[var(--muted)] text-center p-2">
+                  {imgStatus === 'idle' ? 'no grid yet — klik 🖼 Gen Grid' : imgStatus}
+                </div>
+              )
+            })()}
+            {/* View toggle — only shown when BOTH image and video exist.
+                Lets the user flip between grid (image) and video without
+                re-genning either. */}
+            {shot.image?.url && shot.video?.url && onSetMediaView && (
+              <button
+                onClick={() => onSetMediaView((shot.mediaView === 'image') ? 'video' : 'image')}
+                className="absolute top-1 right-1 text-[10px] px-1.5 py-0.5 rounded bg-black/70 text-white border border-white/20 hover:bg-black/90"
+                title="Toggle image / video view">
+                {(shot.mediaView === 'image' ? '🎬 vid' : '🗂 img')}
+              </button>
             )}
             {imgStatus !== 'idle' && imgStatus !== 'done' && imgStatus !== 'error' && (
               <div className="absolute bottom-1 left-1 right-1 text-[10px] bg-black/80 text-white px-1.5 py-0.5 rounded truncate">⏳ img: {imgStatus}</div>
