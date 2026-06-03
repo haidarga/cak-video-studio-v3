@@ -333,7 +333,7 @@ export function getVideoMaxDuration(vidModel) {
   const m = vidModel
   const isRef = m.includes('reference-to-video') || m.includes('ref-to-video')
   if (m.includes('grok-imagine')) return isRef ? 10 : 15
-  if (m.includes('seedance-2.0/fast')) return isRef ? 12 : 15
+  if (m.includes('seedance-2.0/fast')) return 15        // both ref + i2v accept 4-15s per fal.ai dashboard
   if (m.includes('seedance')) return 15
   if (m.includes('happy-horse')) return 15
   if (m.includes('kling-video/v3/pro')) return 15
