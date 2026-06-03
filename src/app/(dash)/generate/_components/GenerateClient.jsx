@@ -1353,11 +1353,7 @@ function ShotEditor({ shot, idx, mode = 'shots', maxDuration = 15, vidModelLabel
           </div>
 
           {/* Variants strip — video preferred over image when both exist. */}
-          {shot.video?.url && shot.video_variants?.length > 1 ? (
-            <VariantStrip variants={shot.video_variants} activeIdx={shot.video_active_idx ?? shot.video_variants.length - 1} onPick={onPickVideo} kind="video" />
-          ) : (
-            <VariantStrip variants={shot.image_variants} activeIdx={shot.image_active_idx ?? (shot.image_variants?.length || 1) - 1} onPick={onPickImage} kind="image" />
-          )}
+          <MediaGallery shot={shot} onPickImage={onPickImage} onPickVideo={onPickVideo} onSetMediaView={onSetMediaView} />
 
           {/* Direct mode: skip image entirely. Single Gen Video button uses
               uploaded refs as visual anchor. Other modes: classic image-first
@@ -1548,6 +1544,73 @@ function VariantStrip({ variants, activeIdx, onPick, kind }) {
   )
 }
 
+// MediaGallery — shows BOTH image and video variants in separate labeled
+// sections. User feedback: the old single-strip VariantStrip was confusing
+// because it only showed one type at a time (video if any video existed,
+// else image), making it look like the image variants disappeared after
+// the first video gen. New layout makes it obvious that BOTH histories
+// are preserved and clickable.
+//
+// Each row: type icon + count + horizontal scrollable thumbnails. Clicking
+// a thumbnail sets it as active AND switches the media slot to that type
+// (via onSetMediaView). Rows that have <2 items collapse to nothing — no
+// point showing a "gallery" with one item.
+function MediaGallery({ shot, onPickImage, onPickVideo, onSetMediaView }) {
+  const imgVariants = shot.image_variants || []
+  const vidVariants = shot.video_variants || []
+  // Hide the whole block until something to pick from exists. Keeps the
+  // shot card tight while user is still in setup.
+  if (imgVariants.length < 2 && vidVariants.length < 2) return null
+  const imgActive = shot.image_active_idx ?? (imgVariants.length - 1)
+  const vidActive = shot.video_active_idx ?? (vidVariants.length - 1)
+  return (
+    <div className="mt-2 space-y-1.5">
+      {imgVariants.length >= 2 && (
+        <div>
+          <div className="text-[9px] uppercase font-semibold text-[var(--muted)] mb-0.5">
+            🖼 Images <span className="text-[var(--muted2)] font-normal normal-case">({imgVariants.length})</span>
+          </div>
+          <div className="flex gap-1 overflow-x-auto pb-1">
+            {imgVariants.map((v, i) => {
+              const isActive = i === imgActive
+              return (
+                <button key={i}
+                  onClick={() => { onPickImage(i); if (onSetMediaView) onSetMediaView('image') }}
+                  className={`relative flex-shrink-0 w-14 h-14 rounded overflow-hidden border-2 transition-all ${isActive && shot.mediaView !== 'video' ? 'border-[var(--accent)] ring-1 ring-[var(--accent)]' : 'border-[var(--border)] opacity-60 hover:opacity-100'}`}
+                  title={`Image ${i + 1}${isActive ? ' (active)' : ''}`}>
+                  <img src={v.url} alt="" loading="lazy" className="w-full h-full object-cover" />
+                  <span className="absolute top-0 left-0 text-[8px] bg-black/70 text-white px-1 rounded-br font-bold">{i + 1}</span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+      {vidVariants.length >= 2 && (
+        <div>
+          <div className="text-[9px] uppercase font-semibold text-[var(--muted)] mb-0.5">
+            🎬 Videos <span className="text-[var(--muted2)] font-normal normal-case">({vidVariants.length})</span>
+          </div>
+          <div className="flex gap-1 overflow-x-auto pb-1">
+            {vidVariants.map((v, i) => {
+              const isActive = i === vidActive
+              return (
+                <button key={i}
+                  onClick={() => { onPickVideo(i); if (onSetMediaView) onSetMediaView('video') }}
+                  className={`relative flex-shrink-0 w-14 h-14 rounded overflow-hidden border-2 transition-all ${isActive && shot.mediaView !== 'image' ? 'border-[var(--accent)] ring-1 ring-[var(--accent)]' : 'border-[var(--border)] opacity-60 hover:opacity-100'}`}
+                  title={`Video ${i + 1}${isActive ? ' (active)' : ''}`}>
+                  <video src={v.url} muted preload="metadata" className="w-full h-full object-cover pointer-events-none" />
+                  <span className="absolute top-0 left-0 text-[8px] bg-black/70 text-white px-1 rounded-br font-bold">{i + 1}</span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function StoryboardEditor({ shot, idx, ar, availableRefs = [], onToggleRef, onResetRefs, onChangeRaw, onSetMediaView, onChangePanel, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onContinue, onDelete }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(shot.label || '')
@@ -1626,13 +1689,10 @@ function StoryboardEditor({ shot, idx, ar, availableRefs = [], onToggleRef, onRe
             )}
           </div>
 
-          {/* Variants strips — show whichever applies (video takes priority over image
-              since once video exists, that's what's "live" in the preview slot). */}
-          {shot.video?.url && shot.video_variants?.length > 1 ? (
-            <VariantStrip variants={shot.video_variants} activeIdx={shot.video_active_idx ?? shot.video_variants.length - 1} onPick={onPickVideo} kind="video" />
-          ) : (
-            <VariantStrip variants={shot.image_variants} activeIdx={shot.image_active_idx ?? (shot.image_variants?.length || 1) - 1} onPick={onPickImage} kind="image" />
-          )}
+          {/* Media gallery — image variants + video variants both visible
+              separately. Click thumbnail to switch active variant + media
+              slot view. Collapses when nothing to pick from. */}
+          <MediaGallery shot={shot} onPickImage={onPickImage} onPickVideo={onPickVideo} onSetMediaView={onSetMediaView} />
 
           <div className="mt-2 flex gap-1">
             <button onClick={onGenImage} disabled={imgStatus === 'generating' || vidStatus === 'generating'}
