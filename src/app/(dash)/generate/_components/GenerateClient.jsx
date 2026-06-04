@@ -2021,8 +2021,8 @@ function RefsPicker({ personaOwnRefs, workspaceRefs, showWorkspace, onToggleShow
                 </label>
                 <textarea rows={5} value={pKnowledge} onChange={(e) => setPKnowledge(e.target.value)}
                   placeholder={pKind === 'product'
-                    ? 'TEKS KEMASAN: "AceKid", "Activegro", "3+ Years"\nWARNA: kaleng biru-kuning, tutup biru\nATURAN: kaleng tegak, logo hadap kamera\nVARIAN: 130g / 400g'
-                    : 'Catatan karakter: ekspresi, pose default, dll.'}
+                    ? 'TEKS KEMASAN: "AceKid", "Activegro", "3+ Years"\nWARNA: kaleng biru-kuning, tutup biru\nATURAN: kaleng tegak, logo hadap kamera\nVARIAN: 130g / 400g\nDIMENSI: tinggi 16cm × diameter 12cm (400g)\nSKALA: fit 2 tangan dewasa'
+                    : 'ROLE: baby / adult / elder (family role)\nPROPORSI: chibi (kepala ≈ ⅓ tinggi total)\nUKURAN RELATIVE: ⅓ tinggi Ayah / sebatas pinggang adult\nOUTFIT: blue bandana "Ace" + yellow ear tag\nCIRI KHAS: cow spots, pink cheeks\nPERSONALITY: cheerful, baby talk "muchu muchu"'}
                   className="w-full text-sm px-3 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)]" />
                 <div className="text-[10px] text-[var(--muted2)] mt-1">
                   Auto-inject ke prompt image gen pas ref ini ke-link ke shot.

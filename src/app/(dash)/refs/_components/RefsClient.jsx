@@ -166,17 +166,24 @@ function RefEditor({ refData, onClose, onSave }) {
               </div>
             </div>
           </div>
-          {kind === 'product' && (
-            <div>
-              <label className="block text-[10px] uppercase text-[var(--muted)] font-semibold mb-1">📋 Product Knowledge</label>
-              <textarea rows={8} value={knowledge} onChange={(e) => setKnowledge(e.target.value)}
-                placeholder={'Khusus produk — biar konsisten:\n• TEKS KEMASAN (persis): "AceKid", "Activegro", "3+ Years"\n• WARNA & CIRI: kaleng biru-kuning, tutup biru\n• ATURAN: kaleng tegak, logo hadap kamera, jangan distorsi\n• VARIAN: 130g / 400g'}
-                className="w-full text-sm px-3 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)]" />
-              <div className="text-[10px] text-[var(--muted2)] mt-1">
-                Auto-inject ke prompt image gen pas ref ini ke-link ke shot.
-              </div>
+          {/* Knowledge field for BOTH kinds — character refs need identity
+              sheet (proportions, family role, distinguishing features),
+              product refs need packaging text + dimensions + rules. Was
+              previously gated to product-only, leaving no place for the
+              user to document "Tandy = chibi, ⅓ tinggi Ayah, baby role". */}
+          <div>
+            <label className="block text-[10px] uppercase text-[var(--muted)] font-semibold mb-1">
+              {kind === 'product' ? '📋 Product Knowledge' : '📋 Character Identity Sheet'}
+            </label>
+            <textarea rows={8} value={knowledge} onChange={(e) => setKnowledge(e.target.value)}
+              placeholder={kind === 'product'
+                ? 'Khusus produk — biar konsisten:\n• TEKS KEMASAN (persis): "AceKid", "Activegro", "3+ Years"\n• WARNA & CIRI: kaleng biru-kuning, tutup biru\n• ATURAN: kaleng tegak, logo hadap kamera, jangan distorsi\n• VARIAN: 130g / 400g\n• DIMENSI: tinggi 16cm × diameter 12cm (400g)\n• SKALA: fit 2 tangan dewasa, kayak kaleng susu formula'
+                : 'Identity sheet karakter — biar konsisten lintas shot:\n• ROLE: baby / adult / elder (family role)\n• PROPORSI: chibi (kepala = ⅓ tinggi total)\n• UKURAN RELATIVE: ⅓ tinggi Ayah Tandy / sebatas pinggang adult\n• OUTFIT: blue bandana "Ace" + yellow ear tag "47°N"\n• CIRI KHAS: black & white cow spots, pink cheeks\n• PERSONALITY: cheerful, baby talk "muchu muchu"'}
+              className="w-full text-sm px-3 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)]" />
+            <div className="text-[10px] text-[var(--muted2)] mt-1">
+              Auto-inject ke prompt image gen pas ref ini ke-link ke shot.
             </div>
-          )}
+          </div>
         </div>
         <div className="px-6 py-4 border-t border-[var(--border)] flex items-center justify-end gap-3">
           <button onClick={onClose} className="px-4 py-2 rounded text-sm">Batal</button>
