@@ -19,24 +19,35 @@ export default async function PersonasPage() {
   const ws = memberships?.[0]?.workspaces
   if (!ws) return <div className="p-4 text-sm text-[var(--muted)]">No workspace</div>
 
-  // Same brand filter as /generate page — personas with matching brand_id
-  // OR null (universal/untagged) when an active brand is set.
+  // Same STRICT filter as /generate — brand active = only matching
+  // brand_id. Untagged personas are HIDDEN unless user switches to
+  // "Tanpa brand" mode (where they show up alongside everything else
+  // for management).
   const personasQuery = supabase
     .from('personas')
     .select('*, persona_refs(ref_id, refs(id, fal_url, label))')
     .eq('workspace_id', ws.id)
   if (ws.active_brand_id) {
-    personasQuery.or(`brand_id.is.null,brand_id.eq.${ws.active_brand_id}`)
+    personasQuery.eq('brand_id', ws.active_brand_id)
   }
+  // ALSO load the untagged count so the page can surface a migration
+  // banner ("X untagged personas — assign all to ACEKID?"). Cheap query
+  // (count only, no row data).
+  const untaggedCountP = supabase
+    .from('personas')
+    .select('id', { count: 'exact', head: true })
+    .eq('workspace_id', ws.id)
+    .is('brand_id', null)
   // Brands list for the per-persona Assign Brand dropdown — lets the user
   // re-tag existing untagged personas (created before brand tagging) to a
   // specific brand without going through Supabase SQL.
-  const [{ data: personas }, { data: brand }, { data: brands }] = await Promise.all([
+  const [{ data: personas }, { data: brand }, { data: brands }, untaggedRes] = await Promise.all([
     personasQuery.order('created_at', { ascending: false }),
     ws.active_brand_id
       ? supabase.from('brands').select('id, name').eq('id', ws.active_brand_id).single()
       : Promise.resolve({ data: null }),
     supabase.from('brands').select('id, name').eq('workspace_id', ws.id).order('name'),
+    untaggedCountP,
   ])
 
   return (
@@ -46,6 +57,7 @@ export default async function PersonasPage() {
       activeBrandId={ws.active_brand_id || null}
       activeBrandName={brand?.name || ''}
       brands={brands || []}
+      untaggedCount={untaggedRes?.count || 0}
       initialPersonas={personas || []}
     />
   )

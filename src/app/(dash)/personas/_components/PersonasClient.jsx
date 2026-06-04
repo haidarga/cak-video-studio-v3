@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { uploadFile } from '@/lib/upload-client'
 import { Modal, Field, Input, Textarea } from '../../brands/_components/BrandsClient'
@@ -7,9 +8,11 @@ import { PERSONA_TEMPLATES } from '@/lib/persona-templates'
 
 const EMOTIONAL_ANGLES = ['Happy', 'Concerned', 'Curious', 'Skeptical', 'Excited', 'Confident', 'Empathetic', 'Aspirational']
 
-export default function PersonasClient({ workspaceId, userId, activeBrandId, activeBrandName, brands = [], initialPersonas }) {
+export default function PersonasClient({ workspaceId, userId, activeBrandId, activeBrandName, brands = [], untaggedCount = 0, initialPersonas }) {
   const supabase = createClient()
+  const router = useRouter()
   const [personas, setPersonas] = useState(initialPersonas)
+  const [migrating, setMigrating] = useState(false)
   const [editing, setEditing] = useState(null)
   const [selected, setSelected] = useState(new Set())
   const [err, setErr] = useState('')
@@ -201,6 +204,35 @@ export default function PersonasClient({ workspaceId, userId, activeBrandId, act
       )}
 
       {err && <div className="mt-3 text-xs text-red-400">⚠ {err}</div>}
+
+      {/* Migration banner — shown when there are untagged personas (brand_id
+          null) AND user has an active brand. One-click bulk assign all
+          untagged personas to the current active brand. Solves the "I
+          created brand but old personas still leak through" pain. */}
+      {activeBrandId && untaggedCount > 0 && (
+        <div className="mt-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-3">
+          <div className="text-xs text-amber-200">
+            <strong>{untaggedCount} persona belum di-tag ke brand apapun.</strong>{' '}
+            Mereka gak muncul di view brand-specific. Mau assign semua ke <strong>{activeBrandName}</strong>?
+          </div>
+          <button
+            onClick={async () => {
+              setMigrating(true); setErr('')
+              const { error } = await supabase
+                .from('personas')
+                .update({ brand_id: activeBrandId })
+                .eq('workspace_id', workspaceId)
+                .is('brand_id', null)
+              setMigrating(false)
+              if (error) { setErr(error.message); return }
+              router.refresh()
+            }}
+            disabled={migrating}
+            className="flex-shrink-0 px-3 py-1.5 text-xs rounded bg-amber-500 text-black font-bold hover:bg-amber-400 disabled:opacity-50">
+            {migrating ? '⏳ Assigning...' : `✓ Assign ${untaggedCount} ke ${activeBrandName}`}
+          </button>
+        </div>
+      )}
 
       {personas.length > 0 && (
         <label className="flex items-center gap-2 my-5 text-sm cursor-pointer">
