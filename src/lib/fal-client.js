@@ -217,13 +217,13 @@ export function buildVidInput(vidModel, { prompt, image_url, reference_urls, dur
     const okAR = ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16']
     const d = parseInt(duration)
     const srcField = isRef ? { image_urls: (reference_urls || []).filter(Boolean).slice(0, 9) } : { image_url }
-    // Seedance 2.0 fast ref-to-video appears to cap at 12s; ref-to-video
-    // variants generally tighter than image-to-video. Cap at 12 for ref to
-    // avoid 422; image-to-video keeps the existing 15.
-    const maxDur = isRef ? 12 : 15
+    // Both ref + i2v variants accept 4-15s per fal.ai dashboard. Earlier
+    // commit capped ref at 12 based on an outdated assumption; user
+    // confirmed 15 works (showed dashboard dropdown going to 15). Match
+    // getVideoMaxDuration so the UI cap and the gen-time cap agree.
     return {
       prompt, ...srcField,
-      duration: d ? String(Math.max(4, Math.min(maxDur, d))) : 'auto',
+      duration: d ? String(Math.max(4, Math.min(15, d))) : 'auto',
       resolution: '720p',
       aspect_ratio: okAR.includes(aspect_ratio) ? aspect_ratio : 'auto',
     }
