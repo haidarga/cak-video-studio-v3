@@ -1073,6 +1073,76 @@ ${motion}`
     onPatch({ busy: false })
   }
 
+  // linkFrameToNextShot — DIFFERS from continueStoryboard:
+  //   continueStoryboard creates a NEW shot with extracted last frame.
+  //   linkFrameToNextShot MERGES the last frame into the EXISTING next
+  //   shot's additional_ref_urls. Use case: user parsed naskah into N
+  //   sequential shots already; gen Shot 1; then "link" its last frame
+  //   into Shot 2's refs BEFORE genning Shot 2 → visual handoff without
+  //   destroying the LLM-parsed motion text in Shot 2.
+  async function linkFrameToNextShot(idx) {
+    const prev = state.shots[idx]
+    const next = state.shots[idx + 1]
+    if (!prev?.video?.url) { onErr('Link: video Shot ini belum jadi'); return }
+    if (!next) { onErr('Link: gak ada shot berikutnya di list'); return }
+    patchShot(idx, { continuing: 'Loading ffmpeg...' })
+    onPatch({ busy: true }); onErr('')
+
+    // Same 4-tier extract chain as Continue (canvas -> sseof -> update ->
+    // seq-dump). Plus fallback paths if all 4 fail:
+    //   - Storyboard source: use prev.image.url (grid) as anchor
+    //   - Direct source: skip anchor, just log a warning (Shot N+1 will
+    //     still gen with its base refs — character + style still locked)
+    let frameUrl = null
+    let extractFailed = false
+    try {
+      const { extractLastFrame } = await import('@/lib/ffmpeg-extract')
+      const { uploadBlob } = await import('@/lib/upload-client')
+      patchShot(idx, { continuing: 'Extracting last frame (canvas/ffmpeg fallback)...' })
+      console.log('[Link] extracting from', prev.video.url)
+      const blob = await extractLastFrame(prev.video.url, { offsetEnd: 0.05 })
+      patchShot(idx, { continuing: `Uploading ${(blob.size / 1024).toFixed(0)}KB to R2...` })
+      const up = await uploadBlob(blob, `link-${prev.id}-to-${next.id}.jpg`, 'continuation')
+      frameUrl = up.url
+      console.log('[Link] uploaded', frameUrl)
+    } catch (extractErr) {
+      console.warn('[Link] extract failed (all 4 strategies):', extractErr.message)
+      if (prev.image?.url) {
+        // Storyboard source — fall back to the grid image as anchor.
+        frameUrl = prev.image.url
+        extractFailed = true
+        patchShot(idx, { continuing: 'Frame extract failed — using prev image...' })
+      } else {
+        // Direct source + extract failed = no anchor available. Don't
+        // throw — just tell the user the link couldn't be made but Shot
+        // N+1 will still gen with its base refs.
+        patchShot(idx, { continuing: null })
+        onErr(`Link gagal: ${extractErr.message?.slice(0, 80)}. Shot ${idx + 2} tetep bisa di-gen tapi tanpa visual handoff dari Shot ${idx + 1}. Karakter + style tetep locked dari persona refs.`)
+        onPatch({ busy: false })
+        return
+      }
+    }
+
+    // Merge into next shot's additional_ref_urls. Dedupe so repeated
+    // clicks don't pile up the same URL.
+    const nextIdx = idx + 1
+    patchShot(nextIdx, (prevNextState) => {
+      const existing = prevNextState.additional_ref_urls || []
+      if (existing.includes(frameUrl)) return prevNextState
+      return {
+        additional_ref_urls: [...existing, frameUrl],
+        linked_from_shot: prev.label || `Shot ${idx + 1}`,
+        // Phrases the genVideoForShot role-id prompt correctly:
+        // true  -> "this is the prev storyboard grid (style anchor)"
+        // false -> "this is the final frame (start from this pose)"
+        continuity_fallback: extractFailed,
+      }
+    })
+    patchShot(idx, { continuing: null })
+    onErr(`✓ Last frame Shot ${idx + 1} linked ke Shot ${idx + 2}. Sekarang klik "Gen Video Direct" di Shot ${idx + 2} untuk dapet visual handoff.${extractFailed ? ' (Pakai gambar fallback — pose handoff lemah, tapi character + style tetep locked.)' : ''}`)
+    onPatch({ busy: false })
+  }
+
   async function genVideosFromApproved() {
     const approvedIdx = state.shots
       .map((s, i) => (s.approved && s.image?.url && s.video?.status !== 'done' ? i : -1))
@@ -1272,6 +1342,7 @@ ${motion}`
                     onRename={(label) => { patchShot(i, { label }); renameResult(shot.video?.result_id, label) }}
                     onSendQC={() => sendToQC(i)}
                     onContinue={() => continueStoryboard(i)}
+                    onLinkNext={i + 1 < state.shots.length ? () => linkFrameToNextShot(i) : null}
                     onDelete={() => deleteResult(i, shot.video?.result_id)} />
                 : <ShotEditor key={shot.id} shot={shot} idx={i}
                     mode={globalConfig.mode}
@@ -1294,6 +1365,7 @@ ${motion}`
                     onRename={(label) => { patchShot(i, { label }); renameResult(shot.video?.result_id, label) }}
                     onSendQC={() => sendToQC(i)}
                     onContinue={() => continueStoryboard(i)}
+                    onLinkNext={i + 1 < state.shots.length ? () => linkFrameToNextShot(i) : null}
                     onDelete={() => deleteResult(i, shot.video?.result_id)} />
             ))}
           </div>
@@ -1303,7 +1375,7 @@ ${motion}`
   )
 }
 
-function ShotEditor({ shot, idx, mode = 'shots', maxDuration = 15, vidModelLabel = '', availableRefs = [], onToggleRef, onResetRefs, onChangeRaw, onSetMediaView, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onContinue, onDelete }) {
+function ShotEditor({ shot, idx, mode = 'shots', maxDuration = 15, vidModelLabel = '', availableRefs = [], onToggleRef, onResetRefs, onChangeRaw, onSetMediaView, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onContinue, onLinkNext, onDelete }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(shot.label || '')
   const imgStatus = shot.image?.status || 'idle'
@@ -1436,10 +1508,30 @@ function ShotEditor({ shot, idx, mode = 'shots', maxDuration = 15, vidModelLabel
               the click registered. */}
           {shot.video?.url && onContinue && (
             <button onClick={onContinue} disabled={!!shot.continuing}
-              title="Continue from this shot's last frame as a new video"
+              title="Continue from this shot's last frame as a NEW shot (appended at end)"
               className="w-full mt-1 text-[10px] px-1.5 py-1 rounded bg-cyan-600 hover:bg-cyan-700 text-white font-bold disabled:opacity-60 disabled:cursor-wait">
-              {shot.continuing ? `⏳ ${shot.continuing}` : '➕ Continue'}
+              {shot.continuing ? `⏳ ${shot.continuing}` : '➕ Continue (new shot)'}
             </button>
+          )}
+          {/* Link to next existing shot — merges this shot's last frame
+              into Shot N+1's additional_ref_urls. Different from Continue:
+              doesn't create a new shot, just patches the next one. Only
+              shown when video is done AND there IS a next shot. Solves:
+              user already Parsed N shots and wants visual handoff between
+              them without losing the LLM-parsed motion text in Shot N+1. */}
+          {shot.video?.url && onLinkNext && (
+            <button onClick={onLinkNext} disabled={!!shot.continuing}
+              title="Attach this shot's last frame as a continuity anchor for the NEXT shot in this persona (without creating a new shot)"
+              className="w-full mt-1 text-[10px] px-1.5 py-1 rounded bg-violet-600 hover:bg-violet-700 text-white font-bold disabled:opacity-60 disabled:cursor-wait">
+              {shot.continuing ? `⏳ ${shot.continuing}` : '🔗 Link to Next Shot'}
+            </button>
+          )}
+          {/* Inbound link indicator — shown on shots that received a frame
+              from a previous shot via the link button. */}
+          {shot.linked_from_shot && (
+            <div className="mt-1 text-[9px] text-violet-300 bg-violet-900/30 border border-violet-700/40 rounded px-1.5 py-0.5 text-center">
+              🔗 from {shot.linked_from_shot}
+            </div>
           )}
         </div>
 
@@ -1611,7 +1703,7 @@ function MediaGallery({ shot, onPickImage, onPickVideo, onSetMediaView }) {
   )
 }
 
-function StoryboardEditor({ shot, idx, ar, availableRefs = [], onToggleRef, onResetRefs, onChangeRaw, onSetMediaView, onChangePanel, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onContinue, onDelete }) {
+function StoryboardEditor({ shot, idx, ar, availableRefs = [], onToggleRef, onResetRefs, onChangeRaw, onSetMediaView, onChangePanel, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onContinue, onLinkNext, onDelete }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(shot.label || '')
   const [showPanels, setShowPanels] = useState(true)
@@ -1762,10 +1854,22 @@ function StoryboardEditor({ shot, idx, ar, availableRefs = [], onToggleRef, onRe
               carries the live stage label so the button shows progress. */}
           {shot.video?.url && onContinue && (
             <button onClick={onContinue} disabled={!!shot.continuing}
-              title="Generate a new storyboard that visually continues from this one's last frame"
+              title="Continue from this storyboard's last frame as a NEW storyboard (appended at end)"
               className="w-full mt-1 text-xs px-2 py-1.5 rounded bg-cyan-600 hover:bg-cyan-700 text-white font-bold disabled:opacity-60 disabled:cursor-wait">
-              {shot.continuing ? `⏳ ${shot.continuing}` : '➕ Continue Storyboard'}
+              {shot.continuing ? `⏳ ${shot.continuing}` : '➕ Continue Storyboard (new)'}
             </button>
+          )}
+          {shot.video?.url && onLinkNext && (
+            <button onClick={onLinkNext} disabled={!!shot.continuing}
+              title="Attach this storyboard's last frame as a continuity anchor for the NEXT storyboard in this persona"
+              className="w-full mt-1 text-xs px-2 py-1.5 rounded bg-violet-600 hover:bg-violet-700 text-white font-bold disabled:opacity-60 disabled:cursor-wait">
+              {shot.continuing ? `⏳ ${shot.continuing}` : '🔗 Link to Next Storyboard'}
+            </button>
+          )}
+          {shot.linked_from_shot && (
+            <div className="mt-1 text-[10px] text-violet-300 bg-violet-900/30 border border-violet-700/40 rounded px-2 py-1 text-center">
+              🔗 anchor from {shot.linked_from_shot}
+            </div>
           )}
         </div>
 
