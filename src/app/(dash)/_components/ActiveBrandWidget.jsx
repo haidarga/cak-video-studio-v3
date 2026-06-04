@@ -1,8 +1,10 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 
 export default function ActiveBrandWidget({ workspaceId, activeBrandId, brands: initialBrands }) {
+  const router = useRouter()
   const supabase = createClient()
   const [brands, setBrands] = useState(initialBrands || [])
   const [activeId, setActiveId] = useState(activeBrandId)
@@ -31,7 +33,13 @@ export default function ActiveBrandWidget({ workspaceId, activeBrandId, brands: 
   async function pick(id) {
     setOpen(false)
     const { error } = await supabase.from('workspaces').update({ active_brand_id: id }).eq('id', workspaceId)
-    if (!error) setActiveId(id)
+    if (!error) {
+      setActiveId(id)
+      // Server-rendered pages (/generate, /personas) filter content by
+      // active_brand_id at fetch time. Without router.refresh() the user
+      // sees stale brand-A content after switching to brand B.
+      router.refresh()
+    }
   }
 
   const active = brands.find((b) => b.id === activeId)

@@ -17,11 +17,22 @@ export default async function GeneratePage() {
   const ws = memberships?.[0]?.workspaces
   if (!ws) return <div className="p-4 text-sm text-[var(--muted)]">No workspace</div>
 
+  // Personas are brand-scoped via personas.brand_id. Filter rule:
+  //   - active_brand_id set  -> show personas with matching brand_id OR null
+  //     (null = "universal" personas not tagged to any brand — backward
+  //     compat for personas created before brand tagging existed)
+  //   - no active brand      -> show all personas (workspace-wide)
+  // Refs stay workspace-wide (refs.brand_id doesn't exist in schema —
+  // refs are intentionally shared across brands).
+  const personasQuery = supabase
+    .from('personas')
+    .select('id, name, username, avatar_url, role_label, postiz_channel_id, voice_id, voice_name, brand_id, persona_refs(refs(id, fal_url, label, knowledge, kind))')
+    .eq('workspace_id', ws.id)
+  if (ws.active_brand_id) {
+    personasQuery.or(`brand_id.is.null,brand_id.eq.${ws.active_brand_id}`)
+  }
   const [{ data: personas }, { data: refs }, brandRes] = await Promise.all([
-    supabase
-      .from('personas')
-      .select('id, name, username, avatar_url, role_label, postiz_channel_id, voice_id, voice_name, persona_refs(refs(id, fal_url, label, knowledge, kind))')
-      .eq('workspace_id', ws.id).order('created_at', { ascending: false }),
+    personasQuery.order('created_at', { ascending: false }),
     supabase.from('refs').select('id, fal_url, label, knowledge, kind').eq('workspace_id', ws.id).order('created_at', { ascending: false }),
     ws.active_brand_id
       ? supabase.from('brands').select('id, name, notes, config').eq('id', ws.active_brand_id).single()

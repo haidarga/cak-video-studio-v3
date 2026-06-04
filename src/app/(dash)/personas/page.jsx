@@ -14,12 +14,17 @@ export default async function PersonasPage() {
   const ws = memberships?.[0]?.workspaces
   if (!ws) return <div className="p-4 text-sm text-[var(--muted)]">No workspace</div>
 
+  // Same brand filter as /generate page — personas with matching brand_id
+  // OR null (universal/untagged) when an active brand is set.
+  const personasQuery = supabase
+    .from('personas')
+    .select('*, persona_refs(ref_id, refs(id, fal_url, label))')
+    .eq('workspace_id', ws.id)
+  if (ws.active_brand_id) {
+    personasQuery.or(`brand_id.is.null,brand_id.eq.${ws.active_brand_id}`)
+  }
   const [{ data: personas }, { data: brand }] = await Promise.all([
-    supabase
-      .from('personas')
-      .select('*, persona_refs(ref_id, refs(id, fal_url, label))')
-      .eq('workspace_id', ws.id)
-      .order('created_at', { ascending: false }),
+    personasQuery.order('created_at', { ascending: false }),
     ws.active_brand_id
       ? supabase.from('brands').select('id, name').eq('id', ws.active_brand_id).single()
       : Promise.resolve({ data: null }),
@@ -29,6 +34,7 @@ export default async function PersonasPage() {
     <PersonasClient
       workspaceId={ws.id}
       userId={user.id}
+      activeBrandId={ws.active_brand_id || null}
       activeBrandName={brand?.name || ''}
       initialPersonas={personas || []}
     />

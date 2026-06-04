@@ -7,7 +7,7 @@ import { PERSONA_TEMPLATES } from '@/lib/persona-templates'
 
 const EMOTIONAL_ANGLES = ['Happy', 'Concerned', 'Curious', 'Skeptical', 'Excited', 'Confident', 'Empathetic', 'Aspirational']
 
-export default function PersonasClient({ workspaceId, userId, activeBrandName, initialPersonas }) {
+export default function PersonasClient({ workspaceId, userId, activeBrandId, activeBrandName, initialPersonas }) {
   const supabase = createClient()
   const [personas, setPersonas] = useState(initialPersonas)
   const [editing, setEditing] = useState(null)
@@ -17,8 +17,13 @@ export default function PersonasClient({ workspaceId, userId, activeBrandName, i
 
   async function importFromTemplate(tpl) {
     setErr('')
+    // Tag new persona with active brand so it auto-scopes when user
+    // switches brands. Without this, every new persona has brand_id=null
+    // and shows up in every brand view (the bug user hit: "switch ke
+    // GOLDEN RAMA tapi Tandy ACEKID masih nongol").
     const { error } = await supabase.from('personas').insert({
       workspace_id: workspaceId,
+      brand_id: activeBrandId || null,
       name: tpl.name,
       role_label: tpl.role_label,
       character_prompt: tpl.character_prompt,
@@ -108,7 +113,7 @@ export default function PersonasClient({ workspaceId, userId, activeBrandName, i
     try {
       const { headers, rows } = csvPreview
       const toInsert = rows.map((cells) => {
-        const obj = { workspace_id: workspaceId, created_by: userId }
+        const obj = { workspace_id: workspaceId, brand_id: activeBrandId || null, created_by: userId }
         headers.forEach((h, i) => {
           const v = cells[i]
           if (!v) return
