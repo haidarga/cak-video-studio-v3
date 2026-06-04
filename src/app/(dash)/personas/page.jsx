@@ -23,11 +23,15 @@ export default async function PersonasPage() {
   if (ws.active_brand_id) {
     personasQuery.or(`brand_id.is.null,brand_id.eq.${ws.active_brand_id}`)
   }
-  const [{ data: personas }, { data: brand }] = await Promise.all([
+  // Brands list for the per-persona Assign Brand dropdown — lets the user
+  // re-tag existing untagged personas (created before brand tagging) to a
+  // specific brand without going through Supabase SQL.
+  const [{ data: personas }, { data: brand }, { data: brands }] = await Promise.all([
     personasQuery.order('created_at', { ascending: false }),
     ws.active_brand_id
       ? supabase.from('brands').select('id, name').eq('id', ws.active_brand_id).single()
       : Promise.resolve({ data: null }),
+    supabase.from('brands').select('id, name').eq('workspace_id', ws.id).order('name'),
   ])
 
   return (
@@ -36,6 +40,7 @@ export default async function PersonasPage() {
       userId={user.id}
       activeBrandId={ws.active_brand_id || null}
       activeBrandName={brand?.name || ''}
+      brands={brands || []}
       initialPersonas={personas || []}
     />
   )

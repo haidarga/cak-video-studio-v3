@@ -7,7 +7,7 @@ import { PERSONA_TEMPLATES } from '@/lib/persona-templates'
 
 const EMOTIONAL_ANGLES = ['Happy', 'Concerned', 'Curious', 'Skeptical', 'Excited', 'Confident', 'Empathetic', 'Aspirational']
 
-export default function PersonasClient({ workspaceId, userId, activeBrandId, activeBrandName, initialPersonas }) {
+export default function PersonasClient({ workspaceId, userId, activeBrandId, activeBrandName, brands = [], initialPersonas }) {
   const supabase = createClient()
   const [personas, setPersonas] = useState(initialPersonas)
   const [editing, setEditing] = useState(null)
@@ -218,7 +218,22 @@ export default function PersonasClient({ workspaceId, userId, activeBrandId, act
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {personas.map((p) => (
             <PersonaCard key={p.id} persona={p} selected={selected.has(p.id)}
-              onSelect={() => toggleSel(p.id)} onEdit={() => setEditing(p)} onDelete={() => remove(p.id, p.name)} />
+              brands={brands}
+              onSelect={() => toggleSel(p.id)} onEdit={() => setEditing(p)} onDelete={() => remove(p.id, p.name)}
+              onAssignBrand={async (brandId) => {
+                // Persist immediately + optimistic local update.
+                const { error } = await supabase.from('personas').update({ brand_id: brandId }).eq('id', p.id)
+                if (error) { setErr(error.message); return }
+                // If user assigns this persona to a DIFFERENT brand than
+                // the current view, it should disappear from the list
+                // (matches the same filter the server query applies).
+                // null brand_id = universal = stays visible everywhere.
+                if (activeBrandId && brandId && brandId !== activeBrandId) {
+                  setPersonas((prev) => prev.filter((x) => x.id !== p.id))
+                } else {
+                  setPersonas((prev) => prev.map((x) => x.id === p.id ? { ...x, brand_id: brandId } : x))
+                }
+              }} />
           ))}
         </div>
       )}
@@ -254,8 +269,9 @@ export default function PersonasClient({ workspaceId, userId, activeBrandId, act
   )
 }
 
-function PersonaCard({ persona, selected, onSelect, onEdit, onDelete }) {
+function PersonaCard({ persona, selected, brands = [], onSelect, onEdit, onDelete, onAssignBrand }) {
   const refsCount = (persona.persona_refs || []).length
+  const assignedBrand = brands.find((b) => b.id === persona.brand_id)
   return (
     <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4 relative">
       <div className="flex items-start gap-3">
@@ -276,6 +292,26 @@ function PersonaCard({ persona, selected, onSelect, onEdit, onDelete }) {
           </div>
         </div>
       </div>
+      {/* Brand assignment row — shows current brand (or "Tanpa brand" =
+          universal) and lets user re-tag without going to Supabase. Only
+          rendered if workspace has at least one brand. */}
+      {brands.length > 0 && onAssignBrand && (
+        <div className="mt-3 flex items-center gap-2 text-xs">
+          <span className="text-[10px] uppercase text-[var(--muted)] font-semibold">Brand:</span>
+          <select
+            value={persona.brand_id || ''}
+            onChange={(e) => onAssignBrand(e.target.value || null)}
+            className={`flex-1 text-xs px-2 py-1 rounded bg-[var(--surface2)] border focus:outline-none focus:border-[var(--accent)] ${
+              assignedBrand ? 'border-[var(--accent)]/40 text-[var(--accent)]' : 'border-[var(--border)] text-[var(--muted)]'
+            }`}
+            title={assignedBrand ? `Persona ini cuma muncul saat ${assignedBrand.name} aktif` : 'Universal — muncul di semua brand'}>
+            <option value="">⊘ Tanpa brand (universal)</option>
+            {brands.map((b) => (
+              <option key={b.id} value={b.id}>🏷 {b.name}</option>
+            ))}
+          </select>
+        </div>
+      )}
       <div className="flex items-center justify-between mt-4 pt-3 border-t border-[var(--border)]">
         <div className="flex gap-3 text-xs">
           <button onClick={onEdit} className="text-[var(--muted)] hover:text-white">✏️ Edit</button>
