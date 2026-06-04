@@ -1,10 +1,13 @@
 import { createClient } from '@/lib/supabase/server'
 import GenerateClient from './_components/GenerateClient'
 
-// Revalidate the server-rendered persona/refs/brand list every 30s so the page
-// loads fast on subsequent visits while staying reasonably fresh. Client-side
-// realtime still picks up live changes during a session.
-export const revalidate = 30
+// Force dynamic rendering on every request. Was `revalidate = 30` ISR
+// before, which cached the persona/refs/brand list for 30s after each
+// fetch. When the user switched brands via ActiveBrandWidget, the
+// router.refresh() call hit the cached HTML and served stale data until
+// the 30s window expired — user reported "musti direfresh dulu baru
+// bisa". For brand-scoped content the ISR cache costs more than it saves.
+export const dynamic = 'force-dynamic'
 
 export default async function GeneratePage() {
   const supabase = await createClient()

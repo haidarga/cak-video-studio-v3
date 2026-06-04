@@ -1,6 +1,11 @@
 import { createClient } from '@/lib/supabase/server'
 import PersonasClient from './_components/PersonasClient'
 
+// Same reasoning as /generate — brand-scoped persona list must be fresh
+// on every navigation. Without this, router.refresh() after a brand
+// switch can hit cached HTML and serve stale data.
+export const dynamic = 'force-dynamic'
+
 export default async function PersonasPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
