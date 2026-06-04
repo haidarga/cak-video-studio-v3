@@ -9,15 +9,37 @@ export default async function DashboardPage() {
 
   const { data: ms } = await supabase
     .from('workspace_members')
-    .select('workspace_id, workspaces(id, name)')
+    .select('workspace_id, workspaces(id, name, active_brand_id)')
     .eq('user_id', user.id)
     .order('added_at', { ascending: true })
     .limit(1)
-  const wsId = ms?.[0]?.workspace_id
+  const ws = ms?.[0]?.workspaces
+  const wsId = ws?.id
+  const activeBrandId = ws?.active_brand_id || null
+
+  // Resolve allowed persona ids for brand-scoped counts (personas, results,
+  // scheduled). Cost/activity/errors stay workspace-wide because those are
+  // billing/system metrics, not brand content.
+  let allowedPersonaIds = null
+  if (wsId && activeBrandId) {
+    const { data: bp } = await supabase.from('personas').select('id').eq('workspace_id', wsId).eq('brand_id', activeBrandId)
+    allowedPersonaIds = (bp || []).map((p) => p.id)
+  }
+  const hasAnyAllowed = allowedPersonaIds === null || allowedPersonaIds.length > 0
 
   const now = new Date()
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
   const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
+
+  // Build brand-scoped count queries.
+  const personasCountQ = supabase.from('personas').select('*', { count: 'exact', head: true }).eq('workspace_id', wsId)
+  if (activeBrandId) personasCountQ.eq('brand_id', activeBrandId)
+  const resultsCountQ = supabase.from('results').select('*', { count: 'exact', head: true }).eq('workspace_id', wsId)
+  if (allowedPersonaIds) resultsCountQ.in('persona_id', allowedPersonaIds)
+  const approvedCountQ = supabase.from('results').select('*', { count: 'exact', head: true }).eq('workspace_id', wsId).eq('qc_status', 'approved')
+  if (allowedPersonaIds) approvedCountQ.in('persona_id', allowedPersonaIds)
+  const scheduledCountQ = supabase.from('scheduled_posts').select('*', { count: 'exact', head: true }).eq('workspace_id', wsId).eq('status', 'scheduled')
+  if (allowedPersonaIds) scheduledCountQ.in('persona_id', allowedPersonaIds)
 
   const [
     { count: nPersonas },
@@ -30,11 +52,11 @@ export default async function DashboardPage() {
     { data: errors },
     { data: budgetRow },
   ] = await Promise.all([
-    supabase.from('personas').select('*', { count: 'exact', head: true }),
-    supabase.from('refs').select('*', { count: 'exact', head: true }),
-    supabase.from('results').select('*', { count: 'exact', head: true }),
-    supabase.from('results').select('*', { count: 'exact', head: true }).eq('qc_status', 'approved'),
-    supabase.from('scheduled_posts').select('*', { count: 'exact', head: true }).eq('status', 'scheduled'),
+    hasAnyAllowed ? personasCountQ : Promise.resolve({ count: 0 }),
+    supabase.from('refs').select('*', { count: 'exact', head: true }).eq('workspace_id', wsId),
+    hasAnyAllowed ? resultsCountQ : Promise.resolve({ count: 0 }),
+    hasAnyAllowed ? approvedCountQ : Promise.resolve({ count: 0 }),
+    hasAnyAllowed ? scheduledCountQ : Promise.resolve({ count: 0 }),
     wsId ? supabase.from('usage_log').select('kind, cost_usd, created_at').eq('workspace_id', wsId).gte('created_at', monthStart).limit(2000) : Promise.resolve({ data: [] }),
     wsId ? supabase.from('activity_log').select('*').eq('workspace_id', wsId).order('created_at', { ascending: false }).limit(15) : Promise.resolve({ data: [] }),
     wsId ? supabase.from('error_log').select('*').or(`workspace_id.eq.${wsId},workspace_id.is.null`).order('created_at', { ascending: false }).limit(10) : Promise.resolve({ data: [] }),
