@@ -23,7 +23,6 @@ const DEFAULT_CONFIG = {
   fallback: [
     { provider: 'google', model: 'gemini-2.5-pro' },
     { provider: 'google', model: 'gemini-2.5-flash-lite' },
-    { provider: 'google', model: 'gemini-1.5-flash' },
   ],
 }
 
@@ -36,8 +35,25 @@ function isTransientError(err) {
   return msg.includes('high demand') || msg.includes('unavailable') || msg.includes('overload') || msg.includes('rate limit') || msg.includes('quota') || msg.includes('exhausted') || msg.includes('overloaded')
 }
 
+// Deprecated Gemini models -> auto-substitute to a still-available equivalent.
+// Google removed several legacy models from v1beta access for new API keys
+// (gemini-1.5-flash, gemini-1.0-pro, etc) — a workspace's saved llm_config
+// can still point to one. Substitute at call time so existing configs keep
+// working without forcing every workspace to manually pick a new default.
+const DEPRECATED_GEMINI_SUBSTITUTES = {
+  'gemini-1.5-flash': 'gemini-2.5-flash',
+  'gemini-1.5-pro': 'gemini-2.5-pro',
+  'gemini-1.0-pro': 'gemini-2.5-pro',
+  'gemini-pro': 'gemini-2.5-pro',
+}
+
 // ── Google (Gemini) adapter ──────────────────────────────────────────
 async function callGoogle({ model, apiKey, contents, generationConfig }) {
+  const sub = DEPRECATED_GEMINI_SUBSTITUTES[model]
+  if (sub) {
+    console.warn(`[llm] ${model} is deprecated, substituting with ${sub}`)
+    model = sub
+  }
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`
   const res = await fetch(url, {
     method: 'POST',
@@ -238,7 +254,6 @@ export const PROVIDER_CATALOG = {
       { id: 'gemini-2.5-flash',      label: 'Gemini 2.5 Flash',      cost: '$0.075/1M in · cheap, fast' },
       { id: 'gemini-2.5-pro',        label: 'Gemini 2.5 Pro',        cost: '$1.25/1M in · smartest, low traffic' },
       { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite', cost: '$0.04/1M in · cheapest' },
-      { id: 'gemini-1.5-flash',      label: 'Gemini 1.5 Flash',      cost: '$0.075/1M in · legacy, very stable' },
     ],
   },
   openai: {
