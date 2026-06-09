@@ -17,6 +17,7 @@
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { IMAGE_MODELS, VIDEO_MODELS } from '@/lib/fal-client'
+import { uploadFile } from '@/lib/upload-client'
 
 const WELCOME_MESSAGE = {
   role: 'assistant',
@@ -146,16 +147,18 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
     setUploadBusy(true)
     setErr('')
     try {
+      // Use presigned-PUT-direct-to-R2 via uploadFile helper. The previous
+      // POST-to-/api/upload route hit Vercel's 4.5MB body cap on videos
+      // (returned an HTML 413 page that broke JSON parse with "Request
+      // En..." token error). Presigned PUT bypasses Vercel entirely so
+      // any size up to R2's 5GB ceiling works.
       for (const file of Array.from(files).slice(0, 5)) { // cap at 5 per send
-        const form = new FormData()
-        form.append('file', file)
-        form.append('folder', 'god-mode-attachments')
-        const res = await fetch('/api/upload', { method: 'POST', body: form })
-        const j = await res.json()
-        if (!j.ok) throw new Error(j.error || 'upload failed')
+        const { url } = await uploadFile(file, 'god-mode-attachments')
+        const isImage = file.type.startsWith('image/')
+        const isVideo = file.type.startsWith('video/')
         setPendingAttachments((prev) => [...prev, {
-          type: file.type.startsWith('image/') ? 'image' : 'file',
-          url: j.url,
+          type: isImage ? 'image' : isVideo ? 'video' : 'file',
+          url,
           name: file.name,
           mime: file.type,
           size: file.size,
@@ -517,7 +520,7 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
           ref={fileInputRef}
           type="file"
           multiple
-          accept="image/*,video/*,application/pdf,.txt,.csv,.json"
+          accept="image/*,video/*,.mp4,.mov,.webm,.mkv,.avi,.jpg,.jpeg,.png,.webp,.gif,.heic,application/pdf,.txt,.csv,.json"
           onChange={(e) => { handleFiles(e.target.files); e.target.value = '' }}
           className="hidden"
         />
