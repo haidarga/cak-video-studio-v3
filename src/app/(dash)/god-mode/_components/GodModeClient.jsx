@@ -410,13 +410,30 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
           className="px-3 py-3 rounded-lg bg-[var(--surface)] border border-[var(--border)] hover:border-[var(--accent)]/40 disabled:opacity-40">
           📎
         </button>
-        <input
-          type="text"
+        <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Tulis instruksi… misal: bikin preset push-in dramatic untuk wajah Tandy"
+          onKeyDown={(e) => {
+            // Enter = submit, Shift+Enter = newline (default textarea behavior).
+            // Without this, plain Enter would just add a newline since textarea
+            // doesn't auto-submit forms like <input> does.
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault()
+              send()
+            }
+          }}
+          rows={1}
+          placeholder="Tulis instruksi… (Shift+Enter buat baris baru) — misal: bikin preset push-in dramatic untuk wajah Tandy"
           disabled={busy}
-          className="flex-1 text-sm px-4 py-3 rounded-lg bg-[var(--surface)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] disabled:opacity-50"
+          className="flex-1 text-sm px-4 py-3 rounded-lg bg-[var(--surface)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] disabled:opacity-50 resize-none min-h-[48px] max-h-[200px]"
+          style={{ height: 'auto' }}
+          ref={(el) => {
+            // Auto-grow textarea up to max-height as user types.
+            if (el) {
+              el.style.height = 'auto'
+              el.style.height = Math.min(el.scrollHeight, 200) + 'px'
+            }
+          }}
         />
         <button
           type="submit"
