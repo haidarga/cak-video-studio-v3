@@ -42,31 +42,39 @@ export async function GET(req) {
   const falKey = await getFalKey(supabase, wsId)
   if (!falKey) return NextResponse.json({ ok: false, error: 'no fal key' }, { status: 500 })
 
-  // Try the status endpoint first. fal returns { status: "IN_QUEUE" |
-  // "IN_PROGRESS" | "COMPLETED" | "FAILED" }. If status check returns
-  // anything weird (e.g. fal aliased the endpoint and routed status to a
-  // different path), we fall back to fetching the result directly as a
-  // probe — if it returns a video URL, the gen IS done regardless of what
-  // /status said.
-  const statusRes = await fetch(`https://queue.fal.run/${model}/requests/${requestId}/status`, {
-    headers: { 'Authorization': `Key ${falKey}` },
-    cache: 'no-store',
-  })
-  const statusData = await statusRes.json().catch(() => ({}))
-  const falStatus = statusData?.status
-
   const ar = url.searchParams.get('ar') || 'auto'
   const duration = parseInt(url.searchParams.get('duration')) || 5
   const motion = url.searchParams.get('motion') || ''
   const personaId = url.searchParams.get('persona_id') || null
 
-  async function fetchResultAndPersist() {
-    const fullRes = await fetch(`https://queue.fal.run/${model}/requests/${requestId}`, {
+  // Build candidate model paths — fal accepts aliases at submit time but
+  // queue status/result endpoints are anchored at the CANONICAL path. If
+  // our catalog uses `bytedance/seedance-2.0/...` while fal's canonical is
+  // `fal-ai/seedance-2/...`, status calls return empty and we loop forever
+  // on "unknown". Try every plausible alias before giving up.
+  const candidates = [model]
+  const aliasMap = {
+    'bytedance/seedance-2.0/fast/reference-to-video': 'fal-ai/seedance-2/fast/reference-to-video',
+    'bytedance/seedance-2.0/fast/image-to-video': 'fal-ai/seedance-2/fast/image-to-video',
+    'bytedance/seedance-2.0/fast/text-to-video': 'fal-ai/seedance-2/fast/text-to-video',
+    'xai/grok-imagine-video/reference-to-video': 'fal-ai/xai/reference-to-video',
+    'xai/grok-imagine-video/image-to-video': 'fal-ai/xai/image-to-video',
+    'fal-ai/kling-video/v3/image-to-video': 'fal-ai/kling-video/v3/standard/image-to-video',
+  }
+  if (aliasMap[model]) candidates.push(aliasMap[model])
+  // Also flip: if model is canonical, try the alias too (some submits may
+  // have used the alias path).
+  for (const [alias, canonical] of Object.entries(aliasMap)) {
+    if (model === canonical && !candidates.includes(alias)) candidates.push(alias)
+  }
+
+  async function tryResultFetch(m) {
+    const fullRes = await fetch(`https://queue.fal.run/${m}/requests/${requestId}`, {
       headers: { 'Authorization': `Key ${falKey}` },
       cache: 'no-store',
     })
+    if (!fullRes.ok) return null
     const fullData = await fullRes.json().catch(() => ({}))
-    // Try every common shape fal uses across video models.
     const videoUrl =
       fullData?.video?.url ||
       fullData?.video_url ||
@@ -75,49 +83,63 @@ export async function GET(req) {
       fullData?.url ||
       (Array.isArray(fullData?.videos) && fullData.videos[0]?.url) ||
       null
-    if (!videoUrl) return null
+    return videoUrl ? { videoUrl, raw: fullData, matchedModel: m } : null
+  }
 
+  async function tryStatusFetch(m) {
+    const r = await fetch(`https://queue.fal.run/${m}/requests/${requestId}/status`, {
+      headers: { 'Authorization': `Key ${falKey}` },
+      cache: 'no-store',
+    })
+    const data = await r.json().catch(() => ({}))
+    return { status: data?.status, queue_position: data?.queue_position, hint: data?.detail || data?.error || null, matchedModel: m }
+  }
+
+  async function persistAndRespond(videoUrl, matchedModel) {
     const { data: row } = await supabase.from('results').insert({
       workspace_id: wsId,
       persona_id: personaId,
       type: 'video', url: videoUrl,
       label: 'God Mode — video',
       ar,
-      meta: { source: 'god-mode', motion, model, request_id: requestId },
+      meta: { source: 'god-mode', motion, model: matchedModel || model, request_id: requestId },
       created_by: user.id,
     }).select('id').single()
-
     return NextResponse.json({
-      ok: true,
-      status: 'done',
-      url: videoUrl, model, ar, duration, result_id: row?.id, motion,
+      ok: true, status: 'done',
+      url: videoUrl, model: matchedModel || model, ar, duration, result_id: row?.id, motion,
     })
   }
 
-  if (falStatus === 'COMPLETED') {
-    const r = await fetchResultAndPersist()
-    if (r) return r
-    return NextResponse.json({ ok: false, error: 'completed but no video url in fal response' }, { status: 500 })
+  // PASS 1 — try fetching the result directly across all candidate paths.
+  // If any returns a video URL, we're done. This is the most reliable
+  // signal because it sidesteps the /status flakiness entirely.
+  for (const m of candidates) {
+    const r = await tryResultFetch(m)
+    if (r) return persistAndRespond(r.videoUrl, r.matchedModel)
   }
 
-  if (falStatus === 'FAILED' || falStatus === 'CANCELLED') {
-    return NextResponse.json({ ok: true, status: 'failed', error: statusData?.error || statusData?.detail || 'gen failed' })
-  }
-
-  // If status was unreadable (no status field, HTTP error response, weird shape),
-  // probe the result endpoint anyway — fal sometimes serves results even when
-  // /status returns 404 or alias mismatch.
-  if (!falStatus || falStatus === 'unknown') {
-    const r = await fetchResultAndPersist()
-    if (r) return r
+  // PASS 2 — try the status endpoint across candidates. Surface
+  // COMPLETED/FAILED states; remember the best status info we got.
+  let bestStatus = null
+  for (const m of candidates) {
+    const s = await tryStatusFetch(m)
+    if (s.status === 'COMPLETED') {
+      const r = await tryResultFetch(m)
+      if (r) return persistAndRespond(r.videoUrl, r.matchedModel)
+    }
+    if (s.status === 'FAILED' || s.status === 'CANCELLED') {
+      return NextResponse.json({ ok: true, status: 'failed', error: s.hint || 'gen failed' })
+    }
+    if (s.status && !bestStatus) bestStatus = s
   }
 
   return NextResponse.json({
     ok: true,
     status: 'queued',
-    fal_status: falStatus || 'unknown',
-    queue_position: statusData?.queue_position,
-    // surface a hint if fal returned an error-shape response from /status
-    fal_hint: statusData?.detail || statusData?.error || null,
+    fal_status: bestStatus?.status || 'unknown',
+    queue_position: bestStatus?.queue_position,
+    fal_hint: bestStatus?.hint || null,
+    tried_paths: candidates,
   })
 }
