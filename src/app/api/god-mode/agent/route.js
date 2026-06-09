@@ -808,7 +808,7 @@ Return JSON only with these fields:
           workspaceId: ctx.workspaceId,
           contents: [{ role: 'user', parts: [{ text: analyzePrompt }] }],
           temperature: 0.4,
-          maxOutputTokens: 1500,
+          maxOutputTokens: 3000,
         })
         return { type: 'video_analysis', ...(result.parsed || {}) }
       } catch (e) {
@@ -852,7 +852,7 @@ Return JSON only:
           workspaceId: ctx.workspaceId,
           contents: [{ role: 'user', parts: [{ text: scorePrompt }] }],
           temperature: 0.3,
-          maxOutputTokens: 1000,
+          maxOutputTokens: 3000,
         })
         const p = result.parsed || {}
         return {
@@ -1221,7 +1221,11 @@ export async function POST(req) {
 
   let parsed
   try {
-    const res = await callLLMJSON({ workspaceId, contents, temperature: 0.4, maxOutputTokens: 1024 })
+    // 4000 tokens — gives Gemini enough headroom to emit full motion_prompt
+    // or visual prompt (often 200-500 tokens) without truncating the JSON.
+    // 1024 was too tight: long prompts caused "balik bukan JSON valid" errors
+    // because the response cut off mid-string.
+    const res = await callLLMJSON({ workspaceId, contents, temperature: 0.4, maxOutputTokens: 4000 })
     parsed = res.parsed
   } catch (e) {
     return NextResponse.json({ ok: false, error: 'llm error: ' + (e?.message || String(e)) }, { status: 500 })

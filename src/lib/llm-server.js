@@ -241,9 +241,57 @@ export async function callLLMJSON({ workspaceId, contents, temperature = 0.7, ma
   try {
     return { parsed: JSON.parse(clean), model }
   } catch (e) {
+    // Repair attempt — Gemini sometimes truncates mid-string when the
+    // response approaches maxOutputTokens. Try to recover by trimming back
+    // to the last valid balance point and synthesizing closing brackets.
+    const repaired = tryRepairTruncatedJSON(text)
+    if (repaired !== null) {
+      try { return { parsed: repaired, model } } catch {}
+    }
     const err = new Error(`${model.provider}/${model.model} balik bukan JSON valid: ${clean.slice(0, 200)}`)
     err.status = 502; throw err
   }
+}
+
+// Best-effort repair of truncated JSON from LLMs. Strips markdown fences,
+// trims partial trailing tokens (incomplete string / number / true|false),
+// then closes any open arrays and objects. Returns the parsed object or null.
+function tryRepairTruncatedJSON(raw) {
+  let s = String(raw || '').replace(/```json|```/g, '').trim()
+  const first = s.indexOf('{')
+  if (first < 0) return null
+  s = s.slice(first)
+
+  // Walk forward counting brackets, tracking whether we're inside a string.
+  let depthObj = 0, depthArr = 0, inStr = false, escape = false
+  let lastSafeIdx = -1
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]
+    if (escape) { escape = false; continue }
+    if (inStr) {
+      if (c === '\\') { escape = true; continue }
+      if (c === '"') { inStr = false; lastSafeIdx = i }
+      continue
+    }
+    if (c === '"') { inStr = true; continue }
+    if (c === '{') depthObj++
+    else if (c === '}') { depthObj--; lastSafeIdx = i }
+    else if (c === '[') depthArr++
+    else if (c === ']') { depthArr--; lastSafeIdx = i }
+    else if (c === ',' || (c >= '0' && c <= '9') || c === ' ' || c === '\n' || c === '\t' || c === ':' || c === '.' || c === '-') {
+      // safe outside-string chars; allow as anchor
+      if (c === ',') lastSafeIdx = i - 1 // trim trailing comma
+    }
+  }
+
+  if (depthObj <= 0 && depthArr <= 0) return null // already balanced, parse should have worked
+
+  // Truncate to last safe index, drop trailing comma, close brackets.
+  let body = lastSafeIdx >= 0 ? s.slice(0, lastSafeIdx + 1) : s
+  body = body.replace(/,\s*$/, '')
+  body += ']'.repeat(Math.max(0, depthArr))
+  body += '}'.repeat(Math.max(0, depthObj))
+  try { return JSON.parse(body) } catch { return null }
 }
 
 // Discover available models per provider — used by Settings UI to show options.
