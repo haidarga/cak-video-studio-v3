@@ -228,7 +228,7 @@ const TOOLS = {
 
   // ─ Generation tools ──────────────────────────────────────────────
   gen_image: {
-    description: 'Generate ONE image (NOT video) from a text prompt. Trigger phrases: "bikin foto/gambar", "buat image", "generate foto", "render gambar", "kasih foto", "potret", "hasilin gambar". Use this when user explicitly wants an IMAGE not video. Pass visual prompt. Optional: model, ar override. Auto-attaches pinned persona refs + product ref.',
+    description: 'Generate ONE image (NOT video) from a text prompt. Trigger phrases: "bikin foto/gambar", "buat image", "generate foto", "render gambar", "kasih foto", "potret", "hasilin gambar", "bikin poster", "edit gambar diatas". Use this when user explicitly wants an IMAGE not video. **CRITICAL**: if user uploaded image(s) to chat AND asks to edit/use them ("dari gambar diatas", "dari gambar yang gua upload"), those attachments AUTO-include as source refs — DO NOT tell user to pin anything. Pass visual prompt. Optional: model, ar override. Refs auto-stack: chat attachments + pinned persona refs + pinned product.',
     handler: async ({ prompt, ar, model: modelOverride }, ctx) => {
       const falKey = await getFalKey(ctx.supabase, ctx.workspaceId)
       if (!falKey) return { type: 'error', error: 'no fal.ai key configured' }
@@ -237,8 +237,15 @@ const TOOLS = {
       const cfg = ctx.activeConfig || {}
       const finalAr = ar || cfg.ar || 'auto'
 
-      // Build ref_image_urls from active context: persona refs + product ref.
+      // Build ref_image_urls stack — IMPORTANT priority order:
+      //   1. Recent chat attachments (user uploaded image to chat) — primary
+      //      source for "edit gambar yang gua upload" / "dari gambar diatas"
+      //   2. Pinned persona refs
+      //   3. Pinned product ref
       const refUrls = []
+      for (const att of ctx.recentAttachments || []) {
+        if (att.type === 'image' && att.url) refUrls.push(att.url)
+      }
       if (ctx.activePersona?.id) {
         const { data: pRefs } = await ctx.supabase
           .from('persona_refs').select('refs(fal_url)').eq('persona_id', ctx.activePersona.id)
@@ -499,9 +506,12 @@ Match the theme vibe in the naskah tone. Keep timestamps consistent with ${durat
 
   // ─ URL → Image (scrape + gen single image) ──────────────────────
   gen_image_from_url: {
-    description: 'Generate a SINGLE marketing IMAGE (not video) from a product URL. Scrapes product, then gens a styled image using the product photo as reference. Use when user pastes URL + asks for IMAGE only: "bikin foto dari URL", "buatin gambar produk dari link ini", "listing photo dari link", "image saja jangan video".',
+    description: 'Generate a SINGLE marketing IMAGE from a product URL. Scrapes product, gens styled image using the product photo as reference. Use when user pastes URL + asks for IMAGE: "bikin foto dari URL", "listing photo dari link", "image saja jangan video". URL fallback: if user references "link itu" without re-pasting, auto-resolves from recent messages. **IMPORTANT**: if user already uploaded an image to chat instead of URL, use gen_image (not this) — gen_image picks up chat attachments automatically.',
     handler: async ({ url, theme, ar, model: modelOverride }, ctx) => {
-      if (!url || !/^https?:\/\//i.test(url)) return { type: 'error', error: 'valid URL required' }
+      if (!url && Array.isArray(ctx.recentUrls) && ctx.recentUrls.length > 0) {
+        url = ctx.recentUrls[0]
+      }
+      if (!url || !/^https?:\/\//i.test(url)) return { type: 'error', error: 'valid URL required — gua gak nemu URL. Coba paste URL produknya, atau upload image langsung ke chat dan minta "bikin gambar dari foto diatas".' }
       const falKey = await getFalKey(ctx.supabase, ctx.workspaceId)
       if (!falKey) return { type: 'error', error: 'no fal.ai key configured' }
 
@@ -576,9 +586,13 @@ HTML: ${html.slice(0, 22000)}`
 
   // ─ URL → Marketing Video (scrape + gen video in one shot) ────────
   gen_marketing_video_from_url: {
-    description: 'PRIMARY TOOL when user pastes a product URL AND asks for VIDEO with specific params (duration / theme / model / etc). Scrapes URL, extracts product, composes motion_prompt with theme, gens video at requested duration with requested model. Returns the video directly. Use this when user says e.g. "bikin video X detik dari URL ini, tema Y, pake model Z".',
+    description: 'PRIMARY TOOL when user pastes a product URL AND asks for VIDEO with specific params (duration / theme / model / etc). Scrapes URL, extracts product, composes motion_prompt with theme, gens video at requested duration with requested model. Returns the video directly. Use this when user says e.g. "bikin video X detik dari URL ini, tema Y, pake model Z". If user references "link itu" / "URL diatas" / "dari link tadi" without pasting again, the URL auto-resolves from earlier messages in the conversation.',
     handler: async ({ url, duration, theme, model: modelOverride, ar }, ctx) => {
-      if (!url || !/^https?:\/\//i.test(url)) return { type: 'error', error: 'valid URL required' }
+      // Fallback: if no URL passed, use most recent URL from conversation.
+      if (!url && Array.isArray(ctx.recentUrls) && ctx.recentUrls.length > 0) {
+        url = ctx.recentUrls[0]
+      }
+      if (!url || !/^https?:\/\//i.test(url)) return { type: 'error', error: 'valid URL required — gua gak nemu URL di chat. Coba paste URL produknya.' }
       const falKey = await getFalKey(ctx.supabase, ctx.workspaceId)
       if (!falKey) return { type: 'error', error: 'no fal.ai key configured' }
 
@@ -1033,10 +1047,18 @@ Rules:
 - NEVER invent tools not in the list.
 - For gen_image/gen_video: use config defaults from above UNLESS user explicitly mentions a different model / AR / duration / audio in their message — then override via tool_input.
 - If user says e.g. "pakai Kling Pro 1:1 10 detik no audio", pass { model: 'fal-ai/kling-video/v3/pro/image-to-video', ar: '1:1', duration: 10 } to gen_video (and bake "silent" into motion_prompt).
-- URL HANDLING (CRITICAL):
-  - If user pastes URL + explicitly asks for VIDEO with params ("bikin video X detik", "tema Y", "pake model Z") -> call gen_marketing_video_from_url with extracted params (duration, theme, model override). This generates the video DIRECTLY.
-  - Detect model overrides in prompt: "pake Kling 3" -> model='fal-ai/kling-video/v3/image-to-video', "pake Kling Pro" -> '/v3/pro/image-to-video', "pake Seedance" -> 'bytedance/seedance-2.0/fast/image-to-video', "pake Veo" -> 'fal-ai/veo3', "pake Grok" -> 'xai/grok-imagine-video/image-to-video'.
-  - If user just pastes URL with NO video instruction ("check produknya dulu", "preview saja"), call scrape_url_for_marketing for preview-only.
+- SOURCE RESOLUTION (CRITICAL — read carefully):
+  - User UPLOADED an image/file to chat (look for attachments in conversation): treat that as the source. For IMAGE gen → call gen_image (handler auto-attaches recent chat attachments as refs). For VIDEO gen from uploaded image → call gen_video with image_url set to the attachment URL.
+  - User pasted a URL in current OR recent message: use the URL.
+  - User says "link itu" / "URL diatas" / "dari link tadi" without re-pasting: URL auto-resolves from recent messages (handler does this).
+  - User says "dari gambar diatas" / "edit foto yang gua upload" / "gambar barusan" → that means a CHAT ATTACHMENT not a URL. Call gen_image (handler picks up attachments). DO NOT ask user to pin anything.
+  - Never tell user to "pin product/persona dulu" if they already uploaded an image or pasted a URL — just call the right tool.
+
+- URL/VIDEO ROUTING:
+  - URL + "bikin video X detik tema Y" / "video dari link" → gen_marketing_video_from_url with extracted (duration, theme, model).
+  - URL + "bikin foto/image/poster" → gen_image_from_url.
+  - Bare URL no clear instruction → scrape_url_for_marketing (preview).
+  - Detect model overrides in prompt: "pake Kling 3" -> 'fal-ai/kling-video/v3/image-to-video', "Kling Pro" -> '/v3/pro/image-to-video', "Seedance" -> 'bytedance/seedance-2.0/fast/image-to-video', "Veo" -> 'fal-ai/veo3', "Grok" -> 'xai/grok-imagine-video/image-to-video', "GPT Image 2 Edit" -> 'openai/gpt-image-2/edit', "Nano Banana" -> 'fal-ai/nano-banana/edit'.
 - If user uploads/attaches a video and says "analyze" or "make like this", call analyze_reference_video.
 - If user uploads/attaches image/video and asks to score / predict virality, call predict_virality.
 - Always return valid JSON. No markdown, no code fences.`
@@ -1061,9 +1083,20 @@ export async function POST(req) {
   if (!ws) return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 403 })
 
   // Most-recent user message attachments — used by tools that operate on
-  // uploaded content (analyze_reference_video, predict_virality).
+  // uploaded content (analyze_reference_video, predict_virality, gen_image).
   const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user')
   const recentAttachments = lastUserMsg?.attachments || []
+
+  // Collect URLs mentioned anywhere in the recent conversation (last 6 msgs).
+  // If user says "dari link itu" without re-pasting, we can still resolve.
+  // Order: most-recent first so agent picks the latest URL.
+  const recentUrls = []
+  const urlRe = /https?:\/\/[^\s"'<>)]+/g
+  for (const m of [...messages].reverse().slice(0, 6)) {
+    const txt = String(m.content || '')
+    const found = txt.match(urlRe) || []
+    for (const u of found) if (!recentUrls.includes(u)) recentUrls.push(u)
+  }
 
   const ctx = {
     supabase,
@@ -1078,6 +1111,7 @@ export async function POST(req) {
     activePreset: activeContext?.preset || null,
     activeConfig: activeContext?.config || {},
     recentAttachments,
+    recentUrls,
     req,
   }
 
