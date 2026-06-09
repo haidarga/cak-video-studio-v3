@@ -16,6 +16,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
+import { IMAGE_MODELS, VIDEO_MODELS } from '@/lib/fal-client'
 
 const WELCOME_MESSAGE = {
   role: 'assistant',
@@ -41,6 +42,18 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
   const [activePreset, setActivePreset] = useState(null)
   const [activePersona, setActivePersona] = useState(null)
   const [activeProduct, setActiveProduct] = useState(null)
+  // Gen config — defaults user can override before each gen. Agent reads
+  // these via activeContext.config and applies them when calling gen tools.
+  // User can also override per-message via chat ("pakai Kling Pro").
+  const [genConfig, setGenConfig] = useState({
+    image_model: 'fal-ai/nano-banana/edit',
+    video_model: 'bytedance/seedance-2.0/fast/reference-to-video',
+    ar: '9:16',
+    duration: 5,
+    audio: true,
+    resolution: '720p',
+  })
+  const [showConfig, setShowConfig] = useState(false)
   const scrollRef = useRef(null)
   const fileInputRef = useRef(null)
 
@@ -158,6 +171,24 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
     setPendingAttachments((prev) => prev.filter((_, i) => i !== idx))
   }
 
+  // Action buttons on gen results trigger follow-up gens (regenerate,
+  // animate from image, score virality). Translates the click into a chat
+  // message so the existing send() pipeline handles it.
+  async function handleResultAction(action, result) {
+    if (action === 'regen_image') {
+      const p = result.regen_payload || {}
+      await send(`Regenerate ulang gambar barusan${p.prompt ? `: ${p.prompt}` : ''}`)
+    } else if (action === 'regen_video') {
+      const p = result.regen_payload || {}
+      await send(`Regenerate ulang video barusan${p.motion_prompt ? `: ${p.motion_prompt}` : ''}`)
+    } else if (action === 'animate') {
+      // Animate the image — send instruction to gen_video with image_url.
+      await send(`Animate gambar ini jadi video ${genConfig.duration}s, pakai cinematic preset yang aktif. Image URL: ${result.url}`)
+    } else if (action === 'predict_virality') {
+      await send(`Score virality dari ${result.type === 'gen_video_result' ? 'video' : 'gambar'} ini: ${result.url}`)
+    }
+  }
+
   async function send(textOverride) {
     const text = (textOverride ?? input).trim()
     if ((!text && pendingAttachments.length === 0) || busy) return
@@ -204,10 +235,26 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
               fal_url: activeProduct.fal_url,
               knowledge: activeProduct.knowledge,
             } : null,
+            // Gen config defaults from the picker bar. User can override per
+            // message via chat ("pake Kling Pro 1:1 10 detik no audio") and
+            // the agent should respect that override.
+            config: { ...genConfig },
           },
         }),
       })
-      const j = await res.json()
+      // Graceful non-JSON handling — Vercel function timeouts return an HTML
+      // error page, not JSON. Without this, the JSON.parse fails with the
+      // user-visible "Unexpected token 'A'..." error and the underlying
+      // cause (function timeout) is invisible.
+      const raw = await res.text()
+      let j
+      try { j = JSON.parse(raw) }
+      catch {
+        if (res.status === 504 || res.status === 502 || res.status === 408) {
+          throw new Error(`Agent timeout (${res.status}). Video gen kemungkinan masih jalan di fal.ai server-side — coba "cek status gen terakhir" untuk poll hasilnya, atau tunggu 2-3 menit lalu refresh.`)
+        }
+        throw new Error(`Server return non-JSON response (status ${res.status}). Kemungkinan function timeout atau crash. Body: ${raw.slice(0, 100)}`)
+      }
       if (!j.ok) throw new Error(j.error || 'agent error')
       setMessages((prev) => [
         ...prev,
@@ -317,6 +364,7 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
             onPresetUse={setActivePreset}
             onPersonaPick={setActivePersona}
             onProductPick={setActiveProduct}
+            onAction={handleResultAction}
           />
         ))}
         {busy && (
@@ -341,6 +389,77 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
             {a.label}
           </button>
         ))}
+      </div>
+
+      {/* Gen config bar — collapsible. Lets user pick image/video model,
+          aspect ratio, duration, audio toggle. Agent uses these defaults
+          when calling gen tools; user can still override per-message via
+          chat ("pake Kling Pro, 1:1, 10 detik"). */}
+      <div className="mb-3 bg-[var(--surface)] border border-[var(--border)] rounded-lg overflow-hidden">
+        <button
+          onClick={() => setShowConfig((s) => !s)}
+          className="w-full px-3 py-2 flex items-center justify-between gap-2 hover:bg-[var(--surface2)] text-left text-xs">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[10px] uppercase font-bold text-[var(--muted)]">⚙ Gen config</span>
+            <ConfigPill label="📐" value={genConfig.ar} />
+            <ConfigPill label="⏱" value={`${genConfig.duration}s`} />
+            <ConfigPill label="🎨" value={shortModelLabel(IMAGE_MODELS, genConfig.image_model)} />
+            <ConfigPill label="🎬" value={shortModelLabel(VIDEO_MODELS, genConfig.video_model)} />
+            <ConfigPill label="🔊" value={genConfig.audio ? 'on' : 'off'} />
+          </div>
+          <span className="text-[var(--muted)]">{showConfig ? '▲' : '▼'}</span>
+        </button>
+        {showConfig && (
+          <div className="px-3 py-3 border-t border-[var(--border)] space-y-2.5">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+              <ConfigSelect
+                label="🎨 Image model"
+                value={genConfig.image_model}
+                onChange={(v) => setGenConfig({ ...genConfig, image_model: v })}
+                options={IMAGE_MODELS.map((m) => [m.v, m.l])}
+              />
+              <ConfigSelect
+                label="🎬 Video model"
+                value={genConfig.video_model}
+                onChange={(v) => setGenConfig({ ...genConfig, video_model: v })}
+                options={VIDEO_MODELS.map((m) => [m.v, m.l])}
+              />
+              <ConfigSelect
+                label="📐 Aspect ratio"
+                value={genConfig.ar}
+                onChange={(v) => setGenConfig({ ...genConfig, ar: v })}
+                options={[
+                  ['9:16', '9:16 vertical (TikTok / Reels)'],
+                  ['16:9', '16:9 horizontal (YouTube)'],
+                  ['1:1', '1:1 square (Feed)'],
+                  ['4:5', '4:5 portrait (IG Post)'],
+                  ['3:4', '3:4 portrait'],
+                ]}
+              />
+              <ConfigSelect
+                label="⏱ Duration (video)"
+                value={String(genConfig.duration)}
+                onChange={(v) => setGenConfig({ ...genConfig, duration: parseInt(v) || 5 })}
+                options={[3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].map((d) => [String(d), `${d} seconds`])}
+              />
+              <ConfigSelect
+                label="🔊 Audio (video)"
+                value={genConfig.audio ? 'on' : 'off'}
+                onChange={(v) => setGenConfig({ ...genConfig, audio: v === 'on' })}
+                options={[['on', 'With audio'], ['off', 'No audio (silent)']]}
+              />
+              <ConfigSelect
+                label="📺 Resolution"
+                value={genConfig.resolution}
+                onChange={(v) => setGenConfig({ ...genConfig, resolution: v })}
+                options={[['720p', '720p (cheap, fast)'], ['1080p', '1080p (mahal, sharp)']]}
+              />
+            </div>
+            <div className="text-[10px] text-[var(--muted2)]">
+              Atau override per-prompt via chat: "pake Kling Pro, 1:1, 10 detik, no audio"
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Active context pills — locked persona / product / preset that get
@@ -446,7 +565,7 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
   )
 }
 
-function MessageBubble({ msg, personas, onPresetUse, onPersonaPick, onProductPick }) {
+function MessageBubble({ msg, personas, onPresetUse, onPersonaPick, onProductPick, onAction }) {
   if (msg.role === 'user') {
     return (
       <div className="flex justify-end mb-3">
@@ -482,6 +601,7 @@ function MessageBubble({ msg, personas, onPresetUse, onPersonaPick, onProductPic
               onPresetUse={onPresetUse}
               onPersonaPick={onPersonaPick}
               onProductPick={onProductPick}
+              onAction={onAction}
             />
           )}
         </div>
@@ -490,7 +610,7 @@ function MessageBubble({ msg, personas, onPresetUse, onPersonaPick, onProductPic
   )
 }
 
-function ToolResult({ result, personas, onPresetUse, onPersonaPick, onProductPick }) {
+function ToolResult({ result, personas, onPresetUse, onPersonaPick, onProductPick, onAction }) {
   if (!result || result.type === 'error') {
     return <div className="mt-3 text-xs text-red-400">⚠ {result?.error || 'tool failed'}</div>
   }
@@ -559,10 +679,13 @@ function ToolResult({ result, personas, onPresetUse, onPersonaPick, onProductPic
     )
   }
   if (result.type === 'gen_image_result') {
-    return <GenImageResult result={result} />
+    return <GenImageResult result={result} onAction={onAction} />
   }
   if (result.type === 'gen_video_result') {
-    return <GenVideoResult result={result} />
+    return <GenVideoResult result={result} onAction={onAction} />
+  }
+  if (result.type === 'gen_video_queued') {
+    return <GenVideoQueued result={result} />
   }
   if (result.type === 'url_marketing_proposal') {
     return <UrlMarketingProposal result={result} />
@@ -579,38 +702,111 @@ function ToolResult({ result, personas, onPresetUse, onPersonaPick, onProductPic
   return null
 }
 
-function GenImageResult({ result }) {
+function GenImageResult({ result, onAction }) {
   return (
     <div className="mt-3 bg-[var(--surface)] border border-[var(--border)] rounded-lg overflow-hidden">
       <img src={result.url} alt="generated" className="w-full max-h-[400px] object-contain bg-black" />
-      <div className="p-2 flex items-center justify-between gap-2 text-[10px]">
-        <div className="flex gap-1.5 text-[var(--muted2)]">
+      <div className="p-2 space-y-1.5">
+        <div className="flex gap-1.5 text-[10px] text-[var(--muted2)] flex-wrap">
           {result.model && <span>🎨 {result.model.split('/').pop()}</span>}
           {result.ar && <span>📐 {result.ar}</span>}
         </div>
-        <div className="flex gap-1">
-          <a href={result.url} target="_blank" rel="noreferrer" className="px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)]">⬇ Download</a>
+        <div className="flex flex-wrap gap-1">
+          <button onClick={() => onAction?.('animate', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--accent)]/20 border border-[var(--accent)]/40 text-[var(--accent)] font-semibold">🎬 Animate</button>
+          <button onClick={() => onAction?.('regen_image', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)]">↻ Regenerate</button>
+          <button onClick={() => onAction?.('predict_virality', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)]">📊 Score</button>
+          <a href={result.url} target="_blank" rel="noreferrer" className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)]">⬇ Download</a>
+          {result.result_id && <Link href={`/qc#${result.result_id}`} className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)]">🧪 QC</Link>}
         </div>
       </div>
     </div>
   )
 }
 
-function GenVideoResult({ result }) {
+function GenVideoResult({ result, onAction }) {
   return (
     <div className="mt-3 bg-[var(--surface)] border border-[var(--border)] rounded-lg overflow-hidden">
       <video src={result.url} controls className="w-full max-h-[500px] bg-black" />
-      <div className="p-2 flex items-center justify-between gap-2 text-[10px]">
-        <div className="flex gap-1.5 text-[var(--muted2)] flex-wrap">
+      <div className="p-2 space-y-1.5">
+        <div className="flex gap-1.5 text-[10px] text-[var(--muted2)] flex-wrap">
           {result.model && <span>🎬 {result.model.split('/').pop()}</span>}
           {result.ar && <span>📐 {result.ar}</span>}
           {result.duration && <span>⏱ {result.duration}s</span>}
+          {result.audio !== undefined && <span>🔊 {result.audio ? 'audio' : 'silent'}</span>}
         </div>
-        <div className="flex gap-1">
-          <a href={result.url} target="_blank" rel="noreferrer" className="px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)]">⬇</a>
-          {result.result_id && <Link href={`/qc#${result.result_id}`} className="px-2 py-1 rounded bg-[var(--accent)]/20 border border-[var(--accent)]/40 text-[var(--accent)]">🧪 QC</Link>}
+        <div className="flex flex-wrap gap-1">
+          <button onClick={() => onAction?.('regen_video', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--accent)]/20 border border-[var(--accent)]/40 text-[var(--accent)] font-semibold">↻ Regenerate</button>
+          <button onClick={() => onAction?.('predict_virality', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)]">📊 Score</button>
+          <a href={result.url} target="_blank" rel="noreferrer" className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)]">⬇ Download</a>
+          {result.result_id && <Link href={`/qc#${result.result_id}`} className="text-[10px] px-2 py-1 rounded bg-[var(--accent)]/20 border border-[var(--accent)]/40 text-[var(--accent)]">🧪 QC</Link>}
+          {result.result_id && <Link href={`/editor`} className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)]">✂ Editor</Link>}
         </div>
       </div>
+    </div>
+  )
+}
+
+// Video gen returned queued (didn't complete in 30s inline poll). Auto-poll
+// /api/god-mode/gen-status every 5s and swap to GenVideoResult when ready.
+function GenVideoQueued({ result, onResolved }) {
+  const [status, setStatus] = useState('queued')
+  const [resolved, setResolved] = useState(null)
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    let attempts = 0
+    async function poll() {
+      if (cancelled) return
+      attempts++
+      try {
+        const qs = new URLSearchParams({
+          request_id: result.request_id,
+          model: result.model,
+          ar: result.ar || '',
+          duration: String(result.duration || ''),
+          motion: result.motion || '',
+          persona_id: result.persona_id || '',
+        })
+        const r = await fetch(`/api/god-mode/gen-status?${qs}`)
+        const j = await r.json()
+        if (cancelled) return
+        if (j.ok && j.status === 'done') {
+          setStatus('done')
+          setResolved(j)
+          onResolved?.(j)
+          return
+        }
+        if (j.ok && j.status === 'failed') {
+          setStatus('failed'); setErr(j.error || 'gen failed'); return
+        }
+        // Cap polling at 60 attempts (5 min). After that user can reload page.
+        if (attempts > 60) { setStatus('timeout'); setErr('Polling timeout — refresh page to retry'); return }
+        setTimeout(poll, 5000)
+      } catch (e) {
+        if (!cancelled) { setErr(e.message); setStatus('failed') }
+      }
+    }
+    poll()
+    return () => { cancelled = true }
+  }, [result.request_id])
+
+  if (resolved) return <GenVideoResult result={resolved} />
+  return (
+    <div className="mt-3 bg-[var(--surface)] border border-[var(--border)] rounded-lg p-4">
+      <div className="flex items-center gap-2">
+        <span className="inline-block w-2 h-2 rounded-full bg-[var(--accent)] animate-pulse" />
+        <div className="text-xs font-bold">
+          {status === 'queued' ? 'Video gen di fal.ai queue...' : status === 'failed' ? 'Gen failed' : 'Gen done'}
+        </div>
+      </div>
+      <div className="text-[10px] text-[var(--muted2)] mt-1">
+        Model: {result.model?.split('/').pop()} · {result.ar} · {result.duration}s
+      </div>
+      <div className="text-[10px] text-[var(--muted)] mt-2">
+        Polling every 5s. Auto-updates di sini saat selesai. Lo bisa keep chatting.
+      </div>
+      {err && <div className="text-[10px] text-red-400 mt-1">⚠ {err}</div>}
     </div>
   )
 }
@@ -694,6 +890,37 @@ function ViralityScoreCard({ result }) {
       )}
     </div>
   )
+}
+
+function ConfigPill({ label, value }) {
+  if (!value) return null
+  return (
+    <span className="inline-flex items-center gap-1 bg-[var(--surface2)] border border-[var(--border)] rounded-full px-1.5 py-0.5 text-[10px] text-[var(--muted)]">
+      <span>{label}</span>
+      <span className="text-[var(--text)] font-mono">{value}</span>
+    </span>
+  )
+}
+
+function ConfigSelect({ label, value, onChange, options }) {
+  return (
+    <label className="block">
+      <span className="block text-[10px] uppercase font-bold text-[var(--muted)] mb-1">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)]">
+        {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+      </select>
+    </label>
+  )
+}
+
+function shortModelLabel(models, modelId) {
+  const m = models.find((x) => x.v === modelId)
+  if (!m) return modelId.split('/').pop()
+  // Strip pricing info from label like "Grok Imagine — ~$0.07/dtk 720p (audio)"
+  return m.l.split('—')[0].trim()
 }
 
 function SoulTrainingResult({ result }) {

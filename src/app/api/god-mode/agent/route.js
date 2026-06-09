@@ -15,6 +15,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { callLLMJSON, callLLM } from '@/lib/llm-server'
 import { CINEMATIC_PRESETS, CINEMATIC_CATEGORIES, getPresetById } from '@/lib/cinematic-presets'
+import { IMAGE_MODELS, VIDEO_MODELS } from '@/lib/fal-client'
 
 export const runtime = 'nodejs'
 export const maxDuration = 120
@@ -123,10 +124,14 @@ const TOOLS = {
 
   // ─ Generation tools ──────────────────────────────────────────────
   gen_image: {
-    description: 'Generate an image directly. Use when user explicitly asks to create / generate / bikin gambar / make image. Pass a clear visual prompt. If user has an active persona context, the persona refs auto-attach. If active product set, product ref auto-attaches.',
-    handler: async ({ prompt, ar }, ctx) => {
+    description: 'Generate an image directly. Use when user explicitly asks to create / generate / bikin gambar / make image. Pass a clear visual prompt. Optional: model (override config), ar (aspect ratio override). If user has active persona, persona refs auto-attach. If active product, product ref auto-attaches.',
+    handler: async ({ prompt, ar, model: modelOverride }, ctx) => {
       const falKey = await getFalKey(ctx.supabase, ctx.workspaceId)
       if (!falKey) return { type: 'error', error: 'no fal.ai key configured' }
+
+      // Resolve config defaults from active context, with per-call overrides.
+      const cfg = ctx.activeConfig || {}
+      const finalAr = ar || cfg.ar || 'auto'
 
       // Build ref_image_urls from active context: persona refs + product ref.
       const refUrls = []
@@ -137,23 +142,46 @@ const TOOLS = {
       }
       if (ctx.activeProduct?.fal_url) refUrls.push(ctx.activeProduct.fal_url)
 
-      // Pick model: if persona has Soul LoRA, use flux-lora + inject trigger
-      // word into prompt for character lock. Else use nano-banana-2 with refs.
-      let model, input, finalPrompt = String(prompt || '')
-      if (ctx.activePersona?.lora_url && ctx.activePersona?.lora_trigger_word) {
+      // Model selection priority:
+      //   1. Explicit override from agent ("pake gpt-image-2")
+      //   2. Soul LoRA if persona has one trained
+      //   3. User's picked image_model from config bar
+      let model = modelOverride || ''
+      let finalPrompt = String(prompt || '')
+
+      if (!model && ctx.activePersona?.lora_url && ctx.activePersona?.lora_trigger_word) {
         model = 'fal-ai/flux-lora'
         finalPrompt = `${ctx.activePersona.lora_trigger_word}, ${finalPrompt}`
+      }
+      if (!model) model = cfg.image_model || 'fal-ai/nano-banana/edit'
+
+      // Build input per-model. Different fal.ai models have different shapes.
+      let input
+      if (model.includes('flux-lora')) {
+        const arMap = { '9:16': 'portrait_16_9', '16:9': 'landscape_16_9', '1:1': 'square_hd', '4:5': 'portrait_4_3', '3:4': 'portrait_4_3' }
         input = {
           prompt: finalPrompt,
-          loras: [{ path: ctx.activePersona.lora_url, scale: 1.0 }],
-          image_size: ar === '9:16' ? 'portrait_16_9' : ar === '16:9' ? 'landscape_16_9' : 'square_hd',
+          loras: ctx.activePersona?.lora_url ? [{ path: ctx.activePersona.lora_url, scale: 1.0 }] : [],
+          image_size: arMap[finalAr] || 'square_hd',
         }
-      } else {
-        model = 'fal-ai/nano-banana/edit'
+      } else if (model.includes('nano-banana')) {
         input = {
           prompt: finalPrompt,
           image_urls: refUrls.slice(0, 8),
           output_format: 'jpeg',
+        }
+      } else if (model.includes('gpt-image')) {
+        input = {
+          prompt: finalPrompt,
+          input_image_urls: refUrls.slice(0, 8),
+          quality: cfg.resolution === '1080p' ? 'high' : 'medium',
+          aspect_ratio: finalAr,
+        }
+      } else {
+        // Generic fallback
+        input = {
+          prompt: finalPrompt,
+          image_urls: refUrls.slice(0, 8),
         }
       }
 
@@ -162,17 +190,21 @@ const TOOLS = {
         const url = data?.images?.[0]?.url || data?.image?.url || data?.url
         if (!url) return { type: 'error', error: 'no image url in fal response' }
 
-        // Save to results so it appears in /qc browsing.
         const { data: row } = await ctx.supabase.from('results').insert({
           workspace_id: ctx.workspaceId,
           persona_id: ctx.activePersona?.id || null,
           type: 'image', url, label: `God Mode — image`,
-          ar: ar || 'auto',
+          ar: finalAr,
           meta: { source: 'god-mode', prompt: finalPrompt, model, refs: refUrls },
           created_by: ctx.userId,
         }).select('id').single()
 
-        return { type: 'gen_image_result', url, model, ar: ar || 'auto', result_id: row?.id, prompt: finalPrompt }
+        return {
+          type: 'gen_image_result',
+          url, model, ar: finalAr, result_id: row?.id, prompt: finalPrompt,
+          // Re-gen payload — frontend uses this to fire identical re-gen call
+          regen_payload: { prompt, ar, model: modelOverride },
+        }
       } catch (e) {
         return { type: 'error', error: e.message }
       }
@@ -180,16 +212,23 @@ const TOOLS = {
   },
 
   gen_video: {
-    description: 'Generate a video. Pass motion_prompt (what happens, camera moves), duration (5-15s), and optionally image_url for image-to-video. If active persona/product present they auto-attach as refs. If active preset, its motion prompt is appended.',
-    handler: async ({ motion_prompt, duration = 5, image_url, ar = '9:16' }, ctx) => {
+    description: 'Generate a video. Pass motion_prompt (what happens, camera moves). Optional: duration (3-15s), image_url for image-to-video, ar (override), model (override config). If active persona/product, refs auto-attach. If active preset, its motion prompt appended.',
+    handler: async ({ motion_prompt, duration, image_url, ar, model: modelOverride }, ctx) => {
       const falKey = await getFalKey(ctx.supabase, ctx.workspaceId)
       if (!falKey) return { type: 'error', error: 'no fal.ai key configured' }
+
+      // Resolve config defaults with per-call overrides.
+      const cfg = ctx.activeConfig || {}
+      const finalAr = ar || cfg.ar || '9:16'
+      const dur = Math.max(3, Math.min(15, parseInt(duration) || parseInt(cfg.duration) || 5))
+      const audioOn = cfg.audio !== false
 
       // Compose final motion prompt with active preset appended.
       let finalMotion = String(motion_prompt || '')
       if (ctx.activePreset?.prompt) {
         finalMotion += `\n\n[Cinematic preset: ${ctx.activePreset.label}] ${ctx.activePreset.prompt}`
       }
+      if (!audioOn) finalMotion += '\n\nNO dialogue, NO speech, silent ambient only.'
 
       // Build refs from active context.
       const refUrls = []
@@ -200,31 +239,79 @@ const TOOLS = {
       }
       if (ctx.activeProduct?.fal_url) refUrls.push(ctx.activeProduct.fal_url)
 
-      const dur = Math.max(3, Math.min(15, parseInt(duration) || 5))
-      let model, input
+      // Model selection: explicit override > config > smart default by mode.
+      let model = modelOverride
+      if (!model) {
+        if (image_url) {
+          // Image-to-video — pick i2v variant of the configured family if possible
+          const i2vMap = {
+            'bytedance/seedance-2.0/fast/reference-to-video': 'bytedance/seedance-2.0/fast/image-to-video',
+            'fal-ai/kling-video/v3/reference-to-video': 'fal-ai/kling-video/v3/image-to-video',
+            'alibaba/happy-horse/reference-to-video': 'alibaba/happy-horse/image-to-video',
+            'xai/grok-imagine-video/reference-to-video': 'xai/grok-imagine-video/image-to-video',
+          }
+          model = i2vMap[cfg.video_model] || 'fal-ai/kling-video/v3/image-to-video'
+        } else {
+          model = cfg.video_model || 'bytedance/seedance-2.0/fast/reference-to-video'
+        }
+      }
+
+      // Build input per-model variant.
+      let input
       if (image_url) {
-        // Image-to-video path — animate from a specific frame
-        model = 'fal-ai/kling-video/v3/image-to-video'
         input = {
           prompt: finalMotion,
           image_url,
           duration: String(dur),
-          aspect_ratio: ar,
+          aspect_ratio: finalAr,
         }
-      } else {
-        // Ref-to-video path — refs as visual anchor, no source image
-        model = 'bytedance/seedance-2.0/fast/reference-to-video'
+      } else if (model.includes('seedance')) {
         input = {
           prompt: finalMotion,
           image_urls: refUrls.slice(0, 9),
           duration: String(dur),
-          aspect_ratio: ar,
-          resolution: '720p',
+          aspect_ratio: finalAr,
+          resolution: cfg.resolution || '720p',
+        }
+      } else if (model.includes('grok-imagine')) {
+        input = {
+          prompt: finalMotion,
+          reference_image_urls: refUrls.slice(0, 6),
+          duration: String(Math.min(dur, 10)), // grok ref cap 10s
+          aspect_ratio: finalAr,
+        }
+      } else if (model.includes('happy-horse')) {
+        input = {
+          prompt: finalMotion,
+          image_urls: refUrls.slice(0, 9),
+          duration: String(dur),
+          aspect_ratio: finalAr,
+        }
+      } else if (model.includes('kling-video')) {
+        input = {
+          prompt: finalMotion,
+          image_urls: refUrls.slice(0, 4),
+          duration: String(dur),
+          aspect_ratio: finalAr,
+        }
+      } else {
+        input = {
+          prompt: finalMotion,
+          image_urls: refUrls.slice(0, 6),
+          duration: String(dur),
+          aspect_ratio: finalAr,
         }
       }
 
       try {
-        // Use queue endpoint for long-running video gen, poll until done.
+        // Submit to fal.ai queue. Return request_id immediately so the agent
+        // route doesn't hold the Vercel function open past the 60s limit
+        // (Hobby tier). Frontend polls via /api/god-mode/gen-status?
+        // request_id=...&model=... when ready.
+        //
+        // Earlier version polled inline up to 100s, which killed the Vercel
+        // function and returned HTML to the frontend (user saw "Unexpected
+        // token 'A'... is not valid JSON" error). Async pattern fixes this.
         const submitRes = await fetch(`https://queue.fal.run/${model}`, {
           method: 'POST',
           headers: { 'Authorization': `Key ${falKey}`, 'Content-Type': 'application/json' },
@@ -235,13 +322,13 @@ const TOOLS = {
         const requestId = submitData?.request_id
         if (!requestId) throw new Error('no request_id from fal')
 
-        // Poll up to 100 seconds. Most 5-10s videos complete within 60-90s
-        // on these models. If we time out, the gen continues server-side; the
-        // user can re-query later via a follow-up tool (future: gen_status).
+        // Short inline poll — 30s max — to catch fast gens (some videos
+        // <5s finish quickly). If not done by then, return queued state
+        // and let frontend poll separately.
         let done = null
         const start = Date.now()
-        while (Date.now() - start < 100000) {
-          await new Promise((r) => setTimeout(r, 3000))
+        while (Date.now() - start < 30000) {
+          await new Promise((r) => setTimeout(r, 4000))
           const stRes = await fetch(`https://queue.fal.run/${model}/requests/${requestId}/status`, {
             headers: { 'Authorization': `Key ${falKey}` },
           })
@@ -253,25 +340,45 @@ const TOOLS = {
             done = await fullRes.json().catch(() => ({}))
             break
           }
-          if (st?.status === 'FAILED') throw new Error(st?.error || 'fal training failed')
+          if (st?.status === 'FAILED') throw new Error(st?.error || 'fal gen failed')
         }
-        if (!done) return { type: 'error', error: 'video gen timed out (still running on fal — try again in 1-2 min)' }
 
-        const url = done?.video?.url || done?.url
-        if (!url) return { type: 'error', error: 'no video url in fal response' }
+        if (done) {
+          const url = done?.video?.url || done?.url
+          if (!url) return { type: 'error', error: 'no video url in fal response' }
 
-        const { data: row } = await ctx.supabase.from('results').insert({
-          workspace_id: ctx.workspaceId,
-          persona_id: ctx.activePersona?.id || null,
-          type: 'video', url, label: `God Mode — video`,
-          ar,
-          meta: { source: 'god-mode', motion: finalMotion, model, image_url, refs: refUrls },
-          created_by: ctx.userId,
-        }).select('id').single()
+          const { data: row } = await ctx.supabase.from('results').insert({
+            workspace_id: ctx.workspaceId,
+            persona_id: ctx.activePersona?.id || null,
+            type: 'video', url, label: `God Mode — video`,
+            ar: finalAr,
+            meta: { source: 'god-mode', motion: finalMotion, model, image_url, refs: refUrls },
+            created_by: ctx.userId,
+          }).select('id').single()
 
+          return {
+            type: 'gen_video_result',
+            url, model, ar: finalAr, duration: dur, result_id: row?.id, motion: finalMotion,
+            audio: audioOn,
+            regen_payload: { motion_prompt, duration, image_url, ar, model: modelOverride },
+          }
+        }
+
+        // Not done within 30s — return queued state so the UI can poll the
+        // gen-status endpoint. Includes everything needed to resume on
+        // success: request_id + model + the metadata to save when result
+        // is fetched (motion, ar, image_url, refs, persona_id).
         return {
-          type: 'gen_video_result',
-          url, model, ar, duration: dur, result_id: row?.id, motion: finalMotion,
+          type: 'gen_video_queued',
+          request_id: requestId,
+          model,
+          ar: finalAr,
+          duration: dur,
+          motion: finalMotion,
+          image_url: image_url || null,
+          refs: refUrls,
+          persona_id: ctx.activePersona?.id || null,
+          regen_payload: { motion_prompt, duration, image_url, ar, model: modelOverride },
         }
       } catch (e) {
         return { type: 'error', error: e.message }
@@ -481,7 +588,23 @@ function buildSystemPrompt(ctx) {
   if (ctx.activePersona) ctxLines.push(`Pinned persona: ${ctx.activePersona.name} (id ${ctx.activePersona.id})${ctx.activePersona.lora_url ? ' — has Soul LoRA trained' : ''}`)
   if (ctx.activeProduct) ctxLines.push(`Pinned product: ${ctx.activeProduct.label}`)
   if (ctx.activePreset) ctxLines.push(`Pinned cinematic preset: ${ctx.activePreset.label}`)
-  const ctxBlock = ctxLines.length ? `\nActive context:\n${ctxLines.map((l) => `  - ${l}`).join('\n')}` : ''
+  const ctxBlock = ctxLines.length ? `\nPinned context:\n${ctxLines.map((l) => `  - ${l}`).join('\n')}` : ''
+
+  // User's current config bar defaults — gen tools use these unless the user
+  // overrides per-message. Surface to LLM so it knows the baseline.
+  const cfg = ctx.activeConfig || {}
+  const cfgBlock = `
+Current config defaults (from user's picker bar):
+  - Image model: ${cfg.image_model || 'fal-ai/nano-banana/edit'}
+  - Video model: ${cfg.video_model || 'bytedance/seedance-2.0/fast/reference-to-video'}
+  - Aspect ratio: ${cfg.ar || '9:16'}
+  - Duration: ${cfg.duration || 5}s
+  - Audio: ${cfg.audio === false ? 'off' : 'on'}
+  - Resolution: ${cfg.resolution || '720p'}`
+
+  // Model catalogs — user can ask "pakai Veo3" / "ganti ke Kling Pro" etc
+  const imgList = IMAGE_MODELS.map((m) => `  - ${m.v}: ${m.l}`).join('\n')
+  const vidList = VIDEO_MODELS.map((m) => `  - ${m.v}: ${m.l}`).join('\n')
 
   return `You are GOD MODE — AI agent inside CAK Video Studio. You speak Bahasa Indonesia (casual, like a teammate). Be direct, decisive, helpful.
 
@@ -490,6 +613,13 @@ Context:
 - Personas available: ${ctx.personaCount}
 - Product refs available: ${ctx.productCount}
 - Cinematic presets in library: ${CINEMATIC_PRESETS.length}${ctxBlock}
+${cfgBlock}
+
+Available image models (pass to gen_image as { model } if user overrides):
+${imgList}
+
+Available video models (pass to gen_video as { model } if user overrides):
+${vidList}
 
 Available tools (return ONE tool call when relevant, OR text reply if no tool fits):
 
@@ -504,12 +634,13 @@ OUTPUT FORMAT (strict JSON, no markdown):
 
 Rules:
 - If a tool fits, return tool name + inputs.
-- "text" should be a brief setup line, UI renders tool result below.
+- "text" should be brief setup line; UI renders tool result below.
 - NEVER invent tools not in the list.
-- For gen_image/gen_video, defaults to active context (persona, product, preset) — only override if user specifies different.
+- For gen_image/gen_video: use config defaults from above UNLESS user explicitly mentions a different model / AR / duration / audio in their message — then override via tool_input.
+- If user says e.g. "pakai Kling Pro 1:1 10 detik no audio", pass { model: 'fal-ai/kling-video/v3/pro/image-to-video', ar: '1:1', duration: 10 } to gen_video (and bake "silent" into motion_prompt).
 - If user pastes a URL, prefer scrape_url_for_marketing.
 - If user uploads/attaches a video and says "analyze" or "make like this", call analyze_reference_video.
-- If user uploads/attaches an image and asks to score, call predict_virality.
+- If user uploads/attaches image/video and asks to score / predict virality, call predict_virality.
 - Always return valid JSON. No markdown, no code fences.`
 }
 
@@ -547,6 +678,7 @@ export async function POST(req) {
     activePersona: activeContext?.persona || null,
     activeProduct: activeContext?.product || null,
     activePreset: activeContext?.preset || null,
+    activeConfig: activeContext?.config || {},
     recentAttachments,
     req,
   }
