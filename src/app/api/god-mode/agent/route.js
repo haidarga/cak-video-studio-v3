@@ -28,6 +28,110 @@ async function getFalKey(supabase, workspaceId) {
   return data?.fal_key || process.env.FAL_KEY || ''
 }
 
+// Build a video gen input shape per-model. Each fal.ai video model has its
+// own field names — Kling v3 standard wants `start_image_url`, Seedance
+// wants `image_urls` array, Grok wants `reference_image_urls`, etc. Failing
+// to send the right key returns a 422 "Field required" client error.
+function buildVideoInputForModel(model, { motion_prompt, image_url, image_urls, duration, aspect_ratio, resolution }) {
+  const dur = String(Math.max(3, Math.min(15, parseInt(duration) || 5)))
+  const ar = aspect_ratio || '9:16'
+
+  if (model.includes('kling-video')) {
+    const isI2V = model.includes('image-to-video')
+    if (isI2V) {
+      // v3 standard/pro + v2.5 i2v all use start_image_url for the source frame.
+      return {
+        prompt: motion_prompt,
+        start_image_url: image_url,
+        duration: dur,
+        aspect_ratio: ar,
+      }
+    }
+    // Ref-to-video variant uses elements[].frontal_image_url shape.
+    const refs = (image_urls || []).filter(Boolean).slice(0, 4)
+    const elements = refs.map((u) => ({ frontal_image_url: u }))
+    return {
+      prompt: motion_prompt,
+      ...(elements.length ? { elements } : {}),
+      duration: dur,
+      aspect_ratio: ar,
+    }
+  }
+
+  if (model.includes('seedance')) {
+    const okAR = ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16']
+    const finalAR = okAR.includes(ar) ? ar : 'auto'
+    if (image_url) {
+      return { prompt: motion_prompt, image_url, duration: dur, resolution: resolution || '720p', aspect_ratio: finalAR }
+    }
+    return { prompt: motion_prompt, image_urls: (image_urls || []).slice(0, 9), duration: dur, resolution: resolution || '720p', aspect_ratio: finalAR }
+  }
+
+  if (model.includes('happy-horse')) {
+    if (image_url) return { prompt: motion_prompt, image_url, duration: parseInt(dur), aspect_ratio: ar, resolution: '720p' }
+    return { prompt: motion_prompt, image_urls: (image_urls || []).slice(0, 9), duration: parseInt(dur), aspect_ratio: ar, resolution: '720p' }
+  }
+
+  if (model.includes('grok-imagine')) {
+    if (image_url) return { prompt: motion_prompt, image_url, duration: parseInt(dur), aspect_ratio: ar }
+    // ref-to-video variant — field name reference_image_urls (NOT image_urls)
+    return { prompt: motion_prompt, reference_image_urls: (image_urls || []).slice(0, 6), duration: parseInt(dur), aspect_ratio: ar }
+  }
+
+  if (model.includes('veo3')) {
+    return { prompt: motion_prompt, image_url, duration: parseInt(dur), aspect_ratio: ar }
+  }
+
+  // Generic fallback — send both common field names; fal.ai will ignore unknown ones.
+  return {
+    prompt: motion_prompt,
+    ...(image_url ? { image_url, start_image_url: image_url } : {}),
+    ...(image_urls?.length ? { image_urls: image_urls.slice(0, 6) } : {}),
+    duration: parseInt(dur),
+    aspect_ratio: ar,
+  }
+}
+
+// Build image gen input per-model.
+function buildImageInputForModel(model, { prompt, refs, ar, quality }) {
+  const refList = (refs || []).filter(Boolean).slice(0, 8)
+
+  if (model.includes('nano-banana')) {
+    return { prompt, image_urls: refList, output_format: 'jpeg' }
+  }
+
+  if (model.includes('gpt-image')) {
+    // Both /edit and /generation variants on fal use `image_urls` (NOT
+    // `input_image_urls`). Edit mode REQUIRES at least one ref image —
+    // fal returns 422 missing field if image_urls is empty.
+    if (model.includes('edit') && refList.length === 0) {
+      throw new Error('GPT Image 2 Edit mode butuh minimal 1 source image. Pin product/persona dulu, atau pakai "GPT Image 2 (generation mode)" untuk text-to-image murni.')
+    }
+    return {
+      prompt,
+      image_urls: refList,
+      quality: quality === '1080p' ? 'high' : 'medium',
+      aspect_ratio: ar || '1:1',
+    }
+  }
+
+  if (model.includes('grok-imagine')) {
+    return { prompt, image_urls: refList, aspect_ratio: ar || '1:1' }
+  }
+
+  if (model.includes('flux-lora')) {
+    const arMap = { '9:16': 'portrait_16_9', '16:9': 'landscape_16_9', '1:1': 'square_hd', '4:5': 'portrait_4_3', '3:4': 'portrait_4_3' }
+    return {
+      prompt,
+      loras: [], // caller must inject if available
+      image_size: arMap[ar] || 'square_hd',
+    }
+  }
+
+  // Generic fallback — refList as image_urls.
+  return { prompt, image_urls: refList }
+}
+
 // Call a fal.ai sync endpoint. Returns the result JSON.
 async function falCall(model, input, falKey) {
   // Use queue endpoint for long-running gens; this helper waits inline. For
@@ -124,7 +228,7 @@ const TOOLS = {
 
   // ─ Generation tools ──────────────────────────────────────────────
   gen_image: {
-    description: 'Generate an image directly. Use when user explicitly asks to create / generate / bikin gambar / make image. Pass a clear visual prompt. Optional: model (override config), ar (aspect ratio override). If user has active persona, persona refs auto-attach. If active product, product ref auto-attaches.',
+    description: 'Generate ONE image (NOT video) from a text prompt. Trigger phrases: "bikin foto/gambar", "buat image", "generate foto", "render gambar", "kasih foto", "potret", "hasilin gambar". Use this when user explicitly wants an IMAGE not video. Pass visual prompt. Optional: model, ar override. Auto-attaches pinned persona refs + product ref.',
     handler: async ({ prompt, ar, model: modelOverride }, ctx) => {
       const falKey = await getFalKey(ctx.supabase, ctx.workspaceId)
       if (!falKey) return { type: 'error', error: 'no fal.ai key configured' }
@@ -155,34 +259,24 @@ const TOOLS = {
       }
       if (!model) model = cfg.image_model || 'fal-ai/nano-banana/edit'
 
-      // Build input per-model. Different fal.ai models have different shapes.
+      // Build input per-model via centralized helper. Each fal.ai model
+      // has different field expectations — this fails gracefully with a
+      // user-readable error if e.g. user picks GPT Image 2 Edit mode
+      // without pinning any source images.
       let input
-      if (model.includes('flux-lora')) {
-        const arMap = { '9:16': 'portrait_16_9', '16:9': 'landscape_16_9', '1:1': 'square_hd', '4:5': 'portrait_4_3', '3:4': 'portrait_4_3' }
-        input = {
+      try {
+        input = buildImageInputForModel(model, {
           prompt: finalPrompt,
-          loras: ctx.activePersona?.lora_url ? [{ path: ctx.activePersona.lora_url, scale: 1.0 }] : [],
-          image_size: arMap[finalAr] || 'square_hd',
+          refs: refUrls,
+          ar: finalAr,
+          quality: cfg.resolution,
+        })
+        // Inject LoRA path into flux-lora model after generic build.
+        if (model.includes('flux-lora') && ctx.activePersona?.lora_url) {
+          input.loras = [{ path: ctx.activePersona.lora_url, scale: 1.0 }]
         }
-      } else if (model.includes('nano-banana')) {
-        input = {
-          prompt: finalPrompt,
-          image_urls: refUrls.slice(0, 8),
-          output_format: 'jpeg',
-        }
-      } else if (model.includes('gpt-image')) {
-        input = {
-          prompt: finalPrompt,
-          input_image_urls: refUrls.slice(0, 8),
-          quality: cfg.resolution === '1080p' ? 'high' : 'medium',
-          aspect_ratio: finalAr,
-        }
-      } else {
-        // Generic fallback
-        input = {
-          prompt: finalPrompt,
-          image_urls: refUrls.slice(0, 8),
-        }
+      } catch (e) {
+        return { type: 'error', error: e.message }
       }
 
       try {
@@ -256,52 +350,18 @@ const TOOLS = {
         }
       }
 
-      // Build input per-model variant.
-      let input
-      if (image_url) {
-        input = {
-          prompt: finalMotion,
-          image_url,
-          duration: String(dur),
-          aspect_ratio: finalAr,
-        }
-      } else if (model.includes('seedance')) {
-        input = {
-          prompt: finalMotion,
-          image_urls: refUrls.slice(0, 9),
-          duration: String(dur),
-          aspect_ratio: finalAr,
-          resolution: cfg.resolution || '720p',
-        }
-      } else if (model.includes('grok-imagine')) {
-        input = {
-          prompt: finalMotion,
-          reference_image_urls: refUrls.slice(0, 6),
-          duration: String(Math.min(dur, 10)), // grok ref cap 10s
-          aspect_ratio: finalAr,
-        }
-      } else if (model.includes('happy-horse')) {
-        input = {
-          prompt: finalMotion,
-          image_urls: refUrls.slice(0, 9),
-          duration: String(dur),
-          aspect_ratio: finalAr,
-        }
-      } else if (model.includes('kling-video')) {
-        input = {
-          prompt: finalMotion,
-          image_urls: refUrls.slice(0, 4),
-          duration: String(dur),
-          aspect_ratio: finalAr,
-        }
-      } else {
-        input = {
-          prompt: finalMotion,
-          image_urls: refUrls.slice(0, 6),
-          duration: String(dur),
-          aspect_ratio: finalAr,
-        }
-      }
+      // Build input via centralized per-model helper. Handles Kling's
+      // start_image_url, Seedance's image_urls array, Grok's
+      // reference_image_urls, etc. — all the field-name variants that
+      // caused 422 errors before.
+      const input = buildVideoInputForModel(model, {
+        motion_prompt: finalMotion,
+        image_url,
+        image_urls: refUrls,
+        duration: dur,
+        aspect_ratio: finalAr,
+        resolution: cfg.resolution,
+      })
 
       try {
         // Submit to fal.ai queue. Return request_id immediately so the agent
@@ -437,6 +497,83 @@ Match the theme vibe in the naskah tone. Keep timestamps consistent with ${durat
     },
   },
 
+  // ─ URL → Image (scrape + gen single image) ──────────────────────
+  gen_image_from_url: {
+    description: 'Generate a SINGLE marketing IMAGE (not video) from a product URL. Scrapes product, then gens a styled image using the product photo as reference. Use when user pastes URL + asks for IMAGE only: "bikin foto dari URL", "buatin gambar produk dari link ini", "listing photo dari link", "image saja jangan video".',
+    handler: async ({ url, theme, ar, model: modelOverride }, ctx) => {
+      if (!url || !/^https?:\/\//i.test(url)) return { type: 'error', error: 'valid URL required' }
+      const falKey = await getFalKey(ctx.supabase, ctx.workspaceId)
+      if (!falKey) return { type: 'error', error: 'no fal.ai key configured' }
+
+      const cfg = ctx.activeConfig || {}
+      const finalAr = ar || cfg.ar || '1:1'
+      const finalTheme = theme || 'clean studio product photography'
+
+      try {
+        const html = await fetchUrlAsHtml(url)
+        const extractPrompt = `Extract product info from this HTML for a marketing image. Return JSON only:
+{
+  "title": "product name",
+  "image_url": "best primary product image URL (absolute)",
+  "image_prompt": "detailed visual prompt in English for a marketing/listing photo of the product, matching theme '${finalTheme}'. Describe composition, lighting, mood, props. 2-3 sentences."
+}
+
+URL: ${url}
+HTML: ${html.slice(0, 22000)}`
+
+        const extracted = await callLLMJSON({
+          workspaceId: ctx.workspaceId,
+          contents: [{ role: 'user', parts: [{ text: extractPrompt }] }],
+          temperature: 0.6,
+          maxOutputTokens: 1000,
+        })
+        const p = extracted.parsed || {}
+        if (!p.image_url || !p.image_prompt) {
+          return { type: 'error', error: 'gagal extract product dari URL — pastikan URL punya product photo yang jelas' }
+        }
+
+        const imageModel = modelOverride || cfg.image_model || 'fal-ai/nano-banana/edit'
+
+        // Use centralized helper — handles field names per model family,
+        // throws readable error if model needs source image and we don't
+        // have one (shouldn't happen here since we always have p.image_url).
+        let input
+        try {
+          input = buildImageInputForModel(imageModel, {
+            prompt: p.image_prompt,
+            refs: [p.image_url],
+            ar: finalAr,
+            quality: cfg.resolution,
+          })
+        } catch (e) {
+          return { type: 'error', error: e.message }
+        }
+
+        const data = await falCall(imageModel, input, falKey)
+        const imageUrl = data?.images?.[0]?.url || data?.image?.url
+        if (!imageUrl) return { type: 'error', error: 'no image url in fal response' }
+
+        const { data: row } = await ctx.supabase.from('results').insert({
+          workspace_id: ctx.workspaceId,
+          type: 'image', url: imageUrl,
+          label: `God Mode — ${p.title || 'marketing image'}`,
+          ar: finalAr,
+          meta: { source: 'god-mode', source_url: url, prompt: p.image_prompt, model: imageModel, theme: finalTheme, product_image: p.image_url },
+          created_by: ctx.userId,
+        }).select('id').single()
+
+        return {
+          type: 'gen_image_result',
+          url: imageUrl, model: imageModel, ar: finalAr,
+          result_id: row?.id, prompt: p.image_prompt,
+          regen_payload: { url, theme: finalTheme, model: modelOverride, ar: finalAr },
+        }
+      } catch (e) {
+        return { type: 'error', error: e.message }
+      }
+    },
+  },
+
   // ─ URL → Marketing Video (scrape + gen video in one shot) ────────
   gen_marketing_video_from_url: {
     description: 'PRIMARY TOOL when user pastes a product URL AND asks for VIDEO with specific params (duration / theme / model / etc). Scrapes URL, extracts product, composes motion_prompt with theme, gens video at requested duration with requested model. Returns the video directly. Use this when user says e.g. "bikin video X detik dari URL ini, tema Y, pake model Z".',
@@ -497,16 +634,19 @@ HTML: ${html.slice(0, 22000)}`
         }
         if (cfg.audio === false) finalMotion += '\n\nNO dialogue, NO speech, silent ambient only.'
 
-        // STEP 4 — Submit to fal.ai queue (use queue pattern for video).
+        // STEP 4 — Submit to fal.ai queue. Use the per-model helper so
+        // Kling gets start_image_url, others get image_url, etc.
+        const videoInput = buildVideoInputForModel(videoModel, {
+          motion_prompt: finalMotion,
+          image_url: p.image_url,
+          duration: finalDuration,
+          aspect_ratio: finalAr,
+          resolution: cfg.resolution,
+        })
         const submitRes = await fetch(`https://queue.fal.run/${videoModel}`, {
           method: 'POST',
           headers: { 'Authorization': `Key ${falKey}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            prompt: finalMotion,
-            image_url: p.image_url,
-            duration: String(finalDuration),
-            aspect_ratio: finalAr,
-          }),
+          body: JSON.stringify(videoInput),
         })
         const submitData = await submitRes.json().catch(() => ({}))
         if (!submitRes.ok) throw new Error(submitData?.detail || submitData?.error || `fal.ai ${submitRes.status}`)
