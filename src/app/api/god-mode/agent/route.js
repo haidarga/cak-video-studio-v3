@@ -776,17 +776,20 @@ HTML: ${html.slice(0, 22000)}`
 
   // ─ Video analyzer ────────────────────────────────────────────────
   analyze_reference_video: {
-    description: 'Analyze a reference video to extract style, camera, mood, pacing, suggested replication strategy. Use when user uploads a video as attachment OR provides a URL and asks "make like this" / "analyze this video".',
+    description: 'Analyze a reference video to extract style, camera, mood, pacing, suggested replication strategy. Use when user uploads a video as attachment OR provides a URL (TikTok / IG / YouTube) and asks "make like this" / "analyze this video" / "analisis video diatas".',
     handler: async ({ video_url, attachment_index }, ctx) => {
-      // If no video_url provided, look at most recent user message attachments
-      // and use one. The agent should have determined that already, but we
-      // gracefully handle the lookup here.
+      // Resolve source — explicit tool_input.video_url first, then recent
+      // attachment, then any URL pasted earlier in the conversation
+      // (handles "analisis video diatas" / "video dari link tadi").
       let urlToAnalyze = video_url
       if (!urlToAnalyze && Array.isArray(ctx.recentAttachments)) {
         const att = ctx.recentAttachments[parseInt(attachment_index) || 0]
         if (att?.url) urlToAnalyze = att.url
       }
-      if (!urlToAnalyze) return { type: 'error', error: 'no video URL or attachment to analyze' }
+      if (!urlToAnalyze && Array.isArray(ctx.recentUrls) && ctx.recentUrls.length > 0) {
+        urlToAnalyze = ctx.recentUrls[0]
+      }
+      if (!urlToAnalyze) return { type: 'error', error: 'gak nemu URL video atau attachment buat dianalisis. Paste link video atau upload langsung.' }
 
       const analyzePrompt = `Analyze this video reference and extract its production strategy so the user can replicate similar content. Reply in Bahasa Indonesia.
 
@@ -825,7 +828,10 @@ Return JSON only with these fields:
       if (!url && Array.isArray(ctx.recentAttachments) && ctx.recentAttachments[0]?.url) {
         url = ctx.recentAttachments[0].url
       }
-      if (!url) return { type: 'error', error: 'no content URL to score' }
+      if (!url && Array.isArray(ctx.recentUrls) && ctx.recentUrls.length > 0) {
+        url = ctx.recentUrls[0]
+      }
+      if (!url) return { type: 'error', error: 'gak nemu content buat di-score. Paste URL atau upload media dulu.' }
 
       const scorePrompt = `Score the viral potential of this content for short-form social media (TikTok/Reels). Reply in Bahasa Indonesia.
 
