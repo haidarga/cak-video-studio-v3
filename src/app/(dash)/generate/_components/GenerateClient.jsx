@@ -15,7 +15,7 @@ import { buildIdentitySentence, productNotesShort } from '@/lib/identity'
 import { uploadFile } from '@/lib/upload-client'
 import { LazyVideo } from '@/lib/use-lazy-video'
 
-export default function GenerateClient({ workspaceId, userId, activeBrand, personas: initialPersonas, workspaceRefs: initialRefs }) {
+export default function GenerateClient({ workspaceId, userId, activeBrand, personas: initialPersonas, workspaceRefs: initialRefs, incomingPreset = null }) {
   const supabase = createClient()
   // Mirror server-fetched data to local state so realtime can keep it fresh.
   // Without this, mutations made elsewhere (other tab, /qc, /refs, persona
@@ -114,6 +114,10 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [showConfigDetails, setShowConfigDetails] = useState(false)
   const [showPersonaPicker, setShowPersonaPicker] = useState(true) // collapses after first selection
+  // GOD MODE handoff — cinematic preset selected via ?preset=ID query param.
+  // Held in state so the user can dismiss it, and the gen pipeline can read
+  // it when building motion prompts.
+  const [activePreset, setActivePreset] = useState(incomingPreset)
 
   function togglePersona(id) {
     setSelectedIds((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -140,6 +144,30 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
           {activeBrand && <> · Brand aktif: <strong className="text-[var(--accent)]">{activeBrand.name}</strong></>}
         </p>
       </div>
+
+      {/* Cinematic preset banner — appears when user lands here via the
+          "Use →" button in GOD MODE. Preset is auto-applied to every shot's
+          video_motion when the user clicks Parse. Dismissable. */}
+      {activePreset && (
+        <div className="mb-4 p-3 rounded-lg bg-gradient-to-r from-[var(--accent)]/15 via-[var(--accent)]/5 to-transparent border border-[var(--accent)]/40 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            <span className="text-xl flex-shrink-0">🎥</span>
+            <div className="min-w-0">
+              <div className="text-xs font-bold text-[var(--accent)]">
+                Cinematic preset aktif: {activePreset.label}
+              </div>
+              <div className="text-[10px] text-[var(--muted)] truncate">
+                {activePreset.desc} — auto-inject ke video_motion saat klik Parse
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={() => setActivePreset(null)}
+            className="text-[10px] text-[var(--muted)] hover:text-white flex-shrink-0 px-2 py-1 rounded hover:bg-[var(--surface2)]">
+            ✕ Lepas preset
+          </button>
+        </div>
+      )}
 
       {err && <div className="text-xs text-red-400 bg-red-900/20 border border-red-900/40 p-3 rounded">⚠ {err}</div>}
 
@@ -400,6 +428,7 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
           userCameraPresets={userCameraPresets}
           styleRefs={workspaceRefs.filter((r) => r.kind === 'style' && (globalConfig.styleRefIds || new Set()).has(r.id))}
           activeBrand={activeBrand}
+          activePreset={activePreset}
           workspaceId={workspaceId}
           userId={userId}
           onErr={setErr}
@@ -454,7 +483,7 @@ function friendlyFalError(raw) {
   return s
 }
 
-function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs = [], state, onPatch, globalConfig, userCameraPresets = [], activeBrand, workspaceId, userId, onErr, supabase }) {
+function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs = [], state, onPatch, globalConfig, userCameraPresets = [], activeBrand, activePreset = null, workspaceId, userId, onErr, supabase }) {
   const personaOwnRefs = (persona.persona_refs || []).map((pr) => pr.refs).filter(Boolean)
 
   // Default: only this persona's own refs are SELECTED. Workspace pool stays
@@ -595,6 +624,21 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
           image: { status: 'idle' },
           video: { status: 'idle' },
           approved: false,
+        }))
+      }
+      // Apply cinematic preset if one is active (from GOD MODE handoff via
+      // ?preset=ID). Appends preset.prompt to each shot's video_motion so
+      // the camera move / cinematic vibe is baked into the gen prompt.
+      // Storyboard mode: append to the single video_motion sequence prompt.
+      // Per-shot mode: append to every shot's individual video_motion.
+      if (activePreset?.prompt) {
+        const presetLine = `\n\n[Cinematic preset: ${activePreset.label}] ${activePreset.prompt}`
+        shotsInit = shotsInit.map((s) => ({
+          ...s,
+          raw: {
+            ...s.raw,
+            video_motion: String(s.raw.video_motion || '').trim() + presetLine,
+          },
         }))
       }
       onPatch({ parsed: data.parsed, shots: shotsInit })

@@ -166,14 +166,47 @@ export async function POST(req) {
   // Build Gemini contents — system message + conversation history. Use the
   // existing callLLMJSON helper which handles fallback chain + provider
   // routing automatically.
+  //
+  // Multimodal: user messages can carry attachments[] (uploaded via /api/upload
+  // to R2). For images, fetch the bytes and embed as inline_data so Gemini can
+  // actually see them. Non-image files only get URL + name passed as text
+  // context — Gemini won't read the file content, but the agent can route to
+  // a dedicated tool later.
   const contents = [
     { role: 'user', parts: [{ text: systemPrompt }] },
     { role: 'model', parts: [{ text: 'Siap. Gua agent GOD MODE — tinggal kasih tau apa yang lo butuh.' }] },
   ]
   for (const m of messages.slice(-12)) { // last 12 turns max — keep context budget tight
+    const parts = []
+    if (m.content) parts.push({ text: String(m.content) })
+    // Inline images so Gemini can analyze them. Cap at 3 images per message
+    // to avoid blowing context budget. Non-images get a text note.
+    const atts = Array.isArray(m.attachments) ? m.attachments.slice(0, 5) : []
+    let imgCount = 0
+    for (const a of atts) {
+      if (a.type === 'image' && imgCount < 3) {
+        try {
+          const imgRes = await fetch(a.url)
+          if (imgRes.ok) {
+            const buf = Buffer.from(await imgRes.arrayBuffer())
+            parts.push({
+              inline_data: {
+                mime_type: a.mime || 'image/jpeg',
+                data: buf.toString('base64'),
+              },
+            })
+            imgCount++
+          }
+        } catch (e) {
+          parts.push({ text: `[gagal load image: ${a.name}]` })
+        }
+      } else {
+        parts.push({ text: `[attached file: ${a.name} at ${a.url}]` })
+      }
+    }
     contents.push({
       role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: String(m.content || '') }],
+      parts: parts.length > 0 ? parts : [{ text: '' }],
     })
   }
 

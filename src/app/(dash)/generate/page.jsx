@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import GenerateClient from './_components/GenerateClient'
+import { getPresetById } from '@/lib/cinematic-presets'
 
 // Force dynamic rendering on every request. Was `revalidate = 30` ISR
 // before, which cached the persona/refs/brand list for 30s after each
@@ -9,9 +10,16 @@ import GenerateClient from './_components/GenerateClient'
 // bisa". For brand-scoped content the ISR cache costs more than it saves.
 export const dynamic = 'force-dynamic'
 
-export default async function GeneratePage() {
+export default async function GeneratePage({ searchParams }) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
+
+  // Optional ?preset=<id> handoff from God Mode. The chatroom surfaces a
+  // cinematic preset and the "Use →" button deep-links here with the preset
+  // id; we resolve it server-side so the client receives a ready-to-apply
+  // preset object (label + prompt) instead of having to import the library.
+  const sp = await searchParams
+  const incomingPreset = sp?.preset ? getPresetById(String(sp.preset)) : null
 
   const { data: memberships } = await supabase
     .from('workspace_members')
@@ -52,6 +60,7 @@ export default async function GeneratePage() {
       activeBrand={brandRes?.data || null}
       personas={personas || []}
       workspaceRefs={refs || []}
+      incomingPreset={incomingPreset}
     />
   )
 }
