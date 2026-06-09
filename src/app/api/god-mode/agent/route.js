@@ -386,17 +386,20 @@ const TOOLS = {
     },
   },
 
-  // ─ URL → Marketing proposal ──────────────────────────────────────
+  // ─ URL → Marketing proposal (preview only, no gen) ───────────────
   scrape_url_for_marketing: {
-    description: 'Given a product page URL (Shopee/Tokopedia/online shop), scrape the page and propose a marketing video naskah. Returns product info + 5-shot UGC-style naskah suggestion. Use when user pastes a URL and asks for marketing video.',
-    handler: async ({ url }, ctx) => {
+    description: 'PREVIEW ONLY mode. Given a product URL, scrape + propose naskah but DO NOT gen video yet. Use this only when user explicitly says "preview saja", "kasih ide naskah", "check produknya dulu". If user asks to BUILD/MAKE/BIKIN a video with duration/theme/model specified, use gen_marketing_video_from_url instead.',
+    handler: async ({ url, duration = 25, theme = '' }, ctx) => {
       if (!url || !/^https?:\/\//i.test(url)) return { type: 'error', error: 'valid URL required' }
       try {
         const html = await fetchUrlAsHtml(url)
-        // Ask Gemini to extract structured product info + propose naskah
-        const extractPrompt = `You are scraping a product page to bootstrap a marketing video. Extract product info from this HTML and propose a 5-shot UGC marketing naskah in Bahasa Indonesia, ~25 seconds total.
+        const shotCount = Math.max(3, Math.min(6, Math.ceil(duration / 5)))
+        const extractPrompt = `You are scraping a product page to propose a marketing video naskah. Extract product info + write naskah at the user's requested duration + theme.
 
 URL: ${url}
+Requested duration: ${duration} seconds
+Theme/vibe: ${theme || 'modern UGC, authentic, scroll-stopping'}
+Shot count: ${shotCount} shots
 
 HTML (cleaned):
 ${html.slice(0, 25000)}
@@ -407,15 +410,15 @@ Return JSON only:
   "price": "Rp ... or empty",
   "description": "1-2 sentence product summary",
   "image": "best product image URL from page or empty",
-  "naskah": "5-shot UGC naskah in Bahasa Indonesia, 25s total, format:\n[0:00-0:05] Shot 1 description + dialog\n[0:05-0:10] ..."
+  "naskah": "${shotCount}-shot naskah in Indonesian, ${duration}s total. Format:\n[0:00-0:0X] Shot 1: visual + dialog\n[0:0X-0:XX] Shot 2: ..."
 }
 
-Be concise. If you can't find info, leave field empty."`
+Match the theme vibe in the naskah tone. Keep timestamps consistent with ${duration}s total.`
 
         const result = await callLLMJSON({
           workspaceId: ctx.workspaceId,
           contents: [{ role: 'user', parts: [{ text: extractPrompt }] }],
-          temperature: 0.3,
+          temperature: 0.5,
           maxOutputTokens: 2048,
         })
         const p = result.parsed || {}
@@ -427,6 +430,132 @@ Be concise. If you can't find info, leave field empty."`
           description: p.description || '',
           image: p.image || '',
           naskah: p.naskah || '',
+        }
+      } catch (e) {
+        return { type: 'error', error: e.message }
+      }
+    },
+  },
+
+  // ─ URL → Marketing Video (scrape + gen video in one shot) ────────
+  gen_marketing_video_from_url: {
+    description: 'PRIMARY TOOL when user pastes a product URL AND asks for VIDEO with specific params (duration / theme / model / etc). Scrapes URL, extracts product, composes motion_prompt with theme, gens video at requested duration with requested model. Returns the video directly. Use this when user says e.g. "bikin video X detik dari URL ini, tema Y, pake model Z".',
+    handler: async ({ url, duration, theme, model: modelOverride, ar }, ctx) => {
+      if (!url || !/^https?:\/\//i.test(url)) return { type: 'error', error: 'valid URL required' }
+      const falKey = await getFalKey(ctx.supabase, ctx.workspaceId)
+      if (!falKey) return { type: 'error', error: 'no fal.ai key configured' }
+
+      const cfg = ctx.activeConfig || {}
+      const finalDuration = Math.max(3, Math.min(15, parseInt(duration) || parseInt(cfg.duration) || 8))
+      const finalAr = ar || cfg.ar || '9:16'
+      const finalTheme = theme || 'modern UGC, scroll-stopping'
+
+      try {
+        // STEP 1 — Scrape + extract product info via Gemini.
+        const html = await fetchUrlAsHtml(url)
+        const extractPrompt = `Extract product info from this HTML to build a marketing video. Return JSON only:
+{
+  "title": "product name",
+  "image_url": "best primary product image URL from the page (absolute URL)",
+  "key_features": ["feature 1", "feature 2", "feature 3"],
+  "motion_prompt": "${finalDuration}s video motion description in English, matching theme '${finalTheme}'. Describe what happens, camera moves, mood. Be cinematic. Bake in product showcase. Single block of text, no timestamps."
+}
+
+URL: ${url}
+HTML: ${html.slice(0, 22000)}`
+
+        const extracted = await callLLMJSON({
+          workspaceId: ctx.workspaceId,
+          contents: [{ role: 'user', parts: [{ text: extractPrompt }] }],
+          temperature: 0.6,
+          maxOutputTokens: 1500,
+        })
+        const p = extracted.parsed || {}
+
+        if (!p.image_url || !p.motion_prompt) {
+          return { type: 'error', error: 'gagal extract product image / motion dari URL — coba paste URL yang punya product photo jelas' }
+        }
+
+        // STEP 2 — Resolve video model. User can override via "pake Kling 3"
+        // in prompt, which the agent passes as modelOverride. Otherwise use
+        // the image-to-video version of cfg.video_model since we have a
+        // source image now (scraped product photo).
+        let videoModel = modelOverride
+        if (!videoModel) {
+          const i2vMap = {
+            'bytedance/seedance-2.0/fast/reference-to-video': 'bytedance/seedance-2.0/fast/image-to-video',
+            'fal-ai/kling-video/v3/reference-to-video': 'fal-ai/kling-video/v3/image-to-video',
+            'alibaba/happy-horse/reference-to-video': 'alibaba/happy-horse/image-to-video',
+          }
+          videoModel = i2vMap[cfg.video_model] || 'fal-ai/kling-video/v3/image-to-video'
+        }
+
+        // STEP 3 — Append active cinematic preset if any.
+        let finalMotion = p.motion_prompt
+        if (ctx.activePreset?.prompt) {
+          finalMotion += `\n\n[Cinematic preset: ${ctx.activePreset.label}] ${ctx.activePreset.prompt}`
+        }
+        if (cfg.audio === false) finalMotion += '\n\nNO dialogue, NO speech, silent ambient only.'
+
+        // STEP 4 — Submit to fal.ai queue (use queue pattern for video).
+        const submitRes = await fetch(`https://queue.fal.run/${videoModel}`, {
+          method: 'POST',
+          headers: { 'Authorization': `Key ${falKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt: finalMotion,
+            image_url: p.image_url,
+            duration: String(finalDuration),
+            aspect_ratio: finalAr,
+          }),
+        })
+        const submitData = await submitRes.json().catch(() => ({}))
+        if (!submitRes.ok) throw new Error(submitData?.detail || submitData?.error || `fal.ai ${submitRes.status}`)
+        const requestId = submitData?.request_id
+        if (!requestId) throw new Error('no request_id from fal')
+
+        // STEP 5 — Short inline poll, falls back to queued state for frontend.
+        let done = null
+        const start = Date.now()
+        while (Date.now() - start < 30000) {
+          await new Promise((r) => setTimeout(r, 4000))
+          const stRes = await fetch(`https://queue.fal.run/${videoModel}/requests/${requestId}/status`, {
+            headers: { 'Authorization': `Key ${falKey}` },
+          })
+          const st = await stRes.json().catch(() => ({}))
+          if (st?.status === 'COMPLETED') {
+            const fullRes = await fetch(`https://queue.fal.run/${videoModel}/requests/${requestId}`, {
+              headers: { 'Authorization': `Key ${falKey}` },
+            })
+            done = await fullRes.json().catch(() => ({}))
+            break
+          }
+          if (st?.status === 'FAILED') throw new Error(st?.error || 'fal gen failed')
+        }
+
+        if (done) {
+          const videoUrl = done?.video?.url || done?.url
+          if (!videoUrl) return { type: 'error', error: 'no video url in fal response' }
+          const { data: row } = await ctx.supabase.from('results').insert({
+            workspace_id: ctx.workspaceId,
+            type: 'video', url: videoUrl,
+            label: `God Mode — ${p.title || 'marketing video'}`,
+            ar: finalAr,
+            meta: { source: 'god-mode', source_url: url, motion: finalMotion, model: videoModel, theme: finalTheme, product_image: p.image_url },
+            created_by: ctx.userId,
+          }).select('id').single()
+          return {
+            type: 'gen_video_result',
+            url: videoUrl, model: videoModel, ar: finalAr, duration: finalDuration,
+            result_id: row?.id, motion: finalMotion,
+            regen_payload: { url, duration: finalDuration, theme: finalTheme, model: modelOverride, ar: finalAr },
+          }
+        }
+
+        return {
+          type: 'gen_video_queued',
+          request_id: requestId, model: videoModel, ar: finalAr, duration: finalDuration,
+          motion: finalMotion, image_url: p.image_url,
+          regen_payload: { url, duration: finalDuration, theme: finalTheme, model: modelOverride, ar: finalAr },
         }
       } catch (e) {
         return { type: 'error', error: e.message }
@@ -764,7 +893,10 @@ Rules:
 - NEVER invent tools not in the list.
 - For gen_image/gen_video: use config defaults from above UNLESS user explicitly mentions a different model / AR / duration / audio in their message — then override via tool_input.
 - If user says e.g. "pakai Kling Pro 1:1 10 detik no audio", pass { model: 'fal-ai/kling-video/v3/pro/image-to-video', ar: '1:1', duration: 10 } to gen_video (and bake "silent" into motion_prompt).
-- If user pastes a URL, prefer scrape_url_for_marketing.
+- URL HANDLING (CRITICAL):
+  - If user pastes URL + explicitly asks for VIDEO with params ("bikin video X detik", "tema Y", "pake model Z") -> call gen_marketing_video_from_url with extracted params (duration, theme, model override). This generates the video DIRECTLY.
+  - Detect model overrides in prompt: "pake Kling 3" -> model='fal-ai/kling-video/v3/image-to-video', "pake Kling Pro" -> '/v3/pro/image-to-video', "pake Seedance" -> 'bytedance/seedance-2.0/fast/image-to-video', "pake Veo" -> 'fal-ai/veo3', "pake Grok" -> 'xai/grok-imagine-video/image-to-video'.
+  - If user just pastes URL with NO video instruction ("check produknya dulu", "preview saja"), call scrape_url_for_marketing for preview-only.
 - If user uploads/attaches a video and says "analyze" or "make like this", call analyze_reference_video.
 - If user uploads/attaches image/video and asks to score / predict virality, call predict_virality.
 - Always return valid JSON. No markdown, no code fences.`
