@@ -360,8 +360,18 @@ const TOOLS = {
       }
       if (!audioOn) finalMotion += '\n\nNO dialogue, NO speech, silent ambient only.'
 
-      // Build refs from active context.
+      // Build refs from active context. PRIORITY ORDER:
+      //   1. Chat attachments (images user uploaded in this turn — primary
+      //      source when user says "gambar 2 dan produk di gambar 3")
+      //   2. Pinned persona refs
+      //   3. Pinned product ref
+      // This mirrors gen_image's behavior; without this, ref-to-video models
+      // (Grok, Seedance r2v, Kling r2v) 422 on empty reference_image_urls
+      // even when the user clearly uploaded ref images.
       const refUrls = []
+      for (const att of ctx.recentAttachments || []) {
+        if (att.type === 'image' && att.url) refUrls.push(att.url)
+      }
       if (ctx.activePersona?.id) {
         const { data: pRefs } = await ctx.supabase
           .from('persona_refs').select('refs(fal_url)').eq('persona_id', ctx.activePersona.id)
@@ -1001,6 +1011,87 @@ Be specific to Indonesian / SEA market. Make brand names that sound natural in I
     },
   },
 
+  // ─ Viral Ad Campaign (full agency workflow) ─────────────────────
+  viral_ad_campaign: {
+    description: 'BIG TOOL — full ad agency workflow. Generates N (default 20) ad concepts for a product based on proven viral ad patterns (hook frameworks, retention mechanics, CTA conversions), scores+ranks each, then COMBINES the strongest elements into ONE production-ready package: hook, 5-shot storyboard, shotlist with camera directions, voiceover script, on-screen text, CTA, and visual reference prompts. Use when user asks for "20 ad concepts", "build viral ad campaign", "ad agency workflow", "bikin iklan production-ready", "score + rank + combine into final ad". Pass product_description (or rely on pinned product/chat attachments), optional niche/target_audience/n_concepts.',
+    handler: async ({ product_description, niche, target_audience, n_concepts = 20 }, ctx) => {
+      // Resolve product context — explicit > pinned > chat attachments > raw user intent.
+      let productDesc = product_description || ''
+      if (!productDesc && ctx.activeProduct) {
+        productDesc = `${ctx.activeProduct.label}${ctx.activeProduct.knowledge ? ' — ' + JSON.stringify(ctx.activeProduct.knowledge).slice(0, 800) : ''}`
+      }
+      if (!productDesc && ctx.lastUserText) productDesc = ctx.lastUserText
+      if (!productDesc) return { type: 'error', error: 'Kasih deskripsi produk atau pin produk dulu.' }
+
+      const n = Math.max(5, Math.min(30, parseInt(n_concepts) || 20))
+
+      // ONE big LLM call to generate concepts + score + rank + final package.
+      // Multi-pass would be cleaner but costs 3x tokens; with maxOutputTokens
+      // = 8000 + Gemini 2.5 we get a coherent single-pass deliverable.
+      const prompt = `You are a senior creative director at a top-tier social ads agency. Your job: build a complete ad campaign for the product below, grounded in proven viral ad patterns (NOT real-time market analysis — work from established short-form ad frameworks).
+
+PRODUCT: ${productDesc}
+${niche ? `NICHE: ${niche}` : ''}
+${target_audience ? `TARGET AUDIENCE: ${target_audience}` : ''}
+
+DELIVERABLES (return as JSON, Bahasa Indonesia for copy where appropriate):
+
+1. concepts: array of ${n} distinct ad concepts. Each:
+   { id, name, hook_type (problem-agitate, transformation, social-proof, contrarian, demo, before-after, POV, etc), one_line_pitch, target_emotion, format (UGC selfie / cinematic / split-screen / etc) }
+
+2. scored_concepts: array of ${n}, same order as concepts. Each:
+   { id, hook_score (0-100), retention_score (0-100), conversion_score (0-100), overall (avg), why_it_works (1 sentence) }
+
+3. top_3_ids: array of the 3 highest overall scores, sorted descending.
+
+4. final_package: combining the strongest elements from top 3 into ONE production-ready ad. Object:
+   {
+     "title": "campaign title",
+     "duration_seconds": 15,
+     "hook": "first 1-3 sec hook line + visual",
+     "storyboard": [
+       { "shot": 1, "duration_s": 3, "visual": "...", "camera": "push-in / handheld POV / static wide / etc", "on_screen_text": "...", "voiceover": "..." },
+       { "shot": 2, ... },
+       ... 5 shots total covering full duration
+     ],
+     "shotlist_compact": "Shot 1: ... | Shot 2: ... | Shot 3: ... etc — single-line summary",
+     "voiceover_full": "complete VO script as one continuous block of speech",
+     "on_screen_text_full": "all on-screen text overlays in order",
+     "cta": "exact final CTA line + visual",
+     "visual_reference_prompts": [
+       "ref prompt 1 — describe a real-world ad style / shot that this looks like",
+       "ref prompt 2",
+       "ref prompt 3"
+     ],
+     "music_mood": "BPM range + genre + reference track style",
+     "why_this_combo": "1-2 sentence rationale for combining these specific elements"
+   }
+
+Return JSON only, no prose. No markdown fences. Be specific, no generic filler.`
+
+      try {
+        const result = await callLLMJSON({
+          workspaceId: ctx.workspaceId,
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          temperature: 0.7,
+          maxOutputTokens: 8000,
+        })
+        const p = result.parsed || {}
+        return {
+          type: 'viral_ad_campaign_result',
+          product: productDesc.slice(0, 200),
+          n_concepts: Array.isArray(p.concepts) ? p.concepts.length : 0,
+          concepts: p.concepts || [],
+          scored_concepts: p.scored_concepts || [],
+          top_3_ids: p.top_3_ids || [],
+          final_package: p.final_package || null,
+        }
+      } catch (e) {
+        return { type: 'error', error: e.message }
+      }
+    },
+  },
+
   // ─ Soul / LoRA training ─────────────────────────────────────────
   train_persona_soul: {
     description: 'Start training a Soul (LoRA) for a persona. Use when user explicitly asks to train soul, train persona, lock character via training. Requires persona_id + reference image URLs (from user attachments or persona refs).',
@@ -1108,6 +1199,13 @@ Rules:
 - If a tool fits, return tool name + inputs.
 - "text" should be brief setup line; UI renders tool result below.
 - NEVER invent tools not in the list.
+- NEVER refuse a request just because it sounds complex / multi-step. The tools below CAN handle big workflows:
+  * "20 ad concepts + scored + ranked + combined into production package" → viral_ad_campaign (one shot, returns all of it).
+  * "brand from scratch + naskah + listing photos" → brand_builder.
+  * "20 product variants in different scenes" → mass_image_variants.
+  * "analyze video + remake with my character + product" → analyze_reference_video first, then gen_video with refs.
+  If you see a tool that fits, USE IT. Don't tell user "gua belum bisa". Don't claim limits the tools don't have.
+- IMPORTANT: viral_ad_campaign does NOT need real-time market data. It synthesizes from established viral ad frameworks (hook types, retention mechanics, conversion triggers). Use it whenever user asks for ad concepts + scoring + final package, even if they mention "viral ads from last X days".
 
 PROMPT RULES (CRITICAL — fal returns 422 if empty):
 - gen_image MUST receive tool_input.prompt = a full English visual description (2-4 sentences). Take the user's Indonesian intent and EXPAND into vivid English prompt. NEVER send empty prompt. NEVER put the prompt only in "text".

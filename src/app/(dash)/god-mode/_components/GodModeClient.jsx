@@ -708,7 +708,115 @@ function ToolResult({ result, personas, onPresetUse, onPersonaPick, onProductPic
   if (result.type === 'mass_variants_result') {
     return <MassVariantsResult result={result} />
   }
+  if (result.type === 'viral_ad_campaign_result') {
+    return <ViralAdCampaignResult result={result} />
+  }
   return null
+}
+
+function ViralAdCampaignResult({ result }) {
+  const top3 = new Set(result.top_3_ids || [])
+  const fp = result.final_package || {}
+  return (
+    <div className="mt-3 bg-[var(--surface)] border border-[var(--border)] rounded-lg p-4 space-y-4">
+      <div className="text-[10px] uppercase font-bold text-[var(--accent)]">🚀 Viral Ad Campaign · {result.n_concepts} concepts scored</div>
+
+      {/* Scored concepts table */}
+      <div>
+        <div className="text-[10px] uppercase font-bold text-[var(--muted)] mb-1">📊 Scored concepts (top 3 highlighted)</div>
+        <div className="space-y-1 max-h-72 overflow-y-auto">
+          {(result.concepts || []).map((c, i) => {
+            const s = (result.scored_concepts || []).find((x) => x.id === c.id) || {}
+            const isTop = top3.has(c.id)
+            return (
+              <div
+                key={c.id || i}
+                className={`text-[11px] rounded p-2 border ${isTop ? 'bg-[var(--accent)]/10 border-[var(--accent)]/40' : 'bg-[var(--surface2)] border-[var(--border)]'}`}
+              >
+                <div className="flex items-baseline justify-between gap-2">
+                  <div className="font-bold truncate">{isTop ? '⭐ ' : ''}{c.name || c.id}</div>
+                  <div className="text-[10px] tabular-nums text-[var(--muted)] shrink-0">
+                    H:{s.hook_score || 0} · R:{s.retention_score || 0} · C:{s.conversion_score || 0} · <span className="text-[var(--accent)] font-bold">{s.overall || 0}</span>
+                  </div>
+                </div>
+                <div className="text-[10px] text-[var(--muted)] mt-0.5">{c.hook_type} · {c.format}</div>
+                <div className="text-[11px] mt-0.5">{c.one_line_pitch}</div>
+                {s.why_it_works && <div className="text-[10px] text-[var(--muted2)] italic mt-0.5">→ {s.why_it_works}</div>}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Final production package */}
+      {fp && (
+        <div className="border-t border-[var(--border)] pt-3 space-y-2">
+          <div className="text-[10px] uppercase font-bold text-[var(--accent)]">🎬 Final production package — combining strongest elements</div>
+          <div className="text-sm font-bold">{fp.title}</div>
+          <div className="text-[10px] text-[var(--muted)]">{fp.duration_seconds}s · {fp.music_mood}</div>
+
+          {fp.hook && (
+            <div className="bg-[var(--surface2)] rounded p-2 text-[11px]">
+              <div className="text-[9px] uppercase font-bold text-[var(--muted)] mb-0.5">⚡ Hook (first 1-3 sec)</div>
+              {fp.hook}
+            </div>
+          )}
+
+          {Array.isArray(fp.storyboard) && fp.storyboard.length > 0 && (
+            <div>
+              <div className="text-[9px] uppercase font-bold text-[var(--muted)] mb-1">🎞 Storyboard ({fp.storyboard.length} shots)</div>
+              <div className="space-y-1">
+                {fp.storyboard.map((s, i) => (
+                  <div key={i} className="bg-[var(--surface2)] rounded p-2 text-[10px] leading-relaxed">
+                    <div className="font-bold">Shot {s.shot} · {s.duration_s}s · {s.camera}</div>
+                    <div className="mt-0.5"><span className="text-[var(--muted)]">Visual:</span> {s.visual}</div>
+                    {s.voiceover && <div><span className="text-[var(--muted)]">VO:</span> "{s.voiceover}"</div>}
+                    {s.on_screen_text && <div><span className="text-[var(--muted)]">Text:</span> {s.on_screen_text}</div>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {fp.voiceover_full && (
+            <div className="bg-[var(--surface2)] rounded p-2 text-[11px]">
+              <div className="text-[9px] uppercase font-bold text-[var(--muted)] mb-0.5">🎙 Voiceover (full)</div>
+              <div className="whitespace-pre-wrap leading-relaxed">{fp.voiceover_full}</div>
+            </div>
+          )}
+
+          {fp.on_screen_text_full && (
+            <div className="bg-[var(--surface2)] rounded p-2 text-[11px]">
+              <div className="text-[9px] uppercase font-bold text-[var(--muted)] mb-0.5">📝 On-screen text</div>
+              <div className="whitespace-pre-wrap leading-relaxed">{fp.on_screen_text_full}</div>
+            </div>
+          )}
+
+          {fp.cta && (
+            <div className="bg-[var(--surface2)] rounded p-2 text-[11px]">
+              <div className="text-[9px] uppercase font-bold text-[var(--muted)] mb-0.5">🎯 CTA</div>
+              {fp.cta}
+            </div>
+          )}
+
+          {Array.isArray(fp.visual_reference_prompts) && fp.visual_reference_prompts.length > 0 && (
+            <div className="bg-[var(--surface2)] rounded p-2 text-[11px]">
+              <div className="text-[9px] uppercase font-bold text-[var(--muted)] mb-0.5">🎨 Visual reference prompts</div>
+              <ul className="list-disc pl-4 space-y-0.5">
+                {fp.visual_reference_prompts.map((v, i) => <li key={i}>{v}</li>)}
+              </ul>
+            </div>
+          )}
+
+          {fp.why_this_combo && (
+            <div className="text-[10px] italic text-[var(--muted)] border-l-2 border-[var(--accent)] pl-2">
+              💡 {fp.why_this_combo}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function BrandBuilderResult({ result }) {
