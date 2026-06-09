@@ -34,6 +34,13 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
   const [historyLoading, setHistoryLoading] = useState(false)
   const [pendingAttachments, setPendingAttachments] = useState([])
   const [uploadBusy, setUploadBusy] = useState(false)
+  // Self-contained gen state held IN THIS CHAT — never redirects to /generate.
+  // activePreset = cinematic preset locked for next gen.
+  // activePersona = persona character for next gen (auto-picked or user-chosen).
+  // activeProduct = product ref for next gen.
+  const [activePreset, setActivePreset] = useState(null)
+  const [activePersona, setActivePersona] = useState(null)
+  const [activeProduct, setActiveProduct] = useState(null)
   const scrollRef = useRef(null)
   const fileInputRef = useRef(null)
 
@@ -179,6 +186,25 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
           activeBrand,
           personaCount: personas.length,
           productCount: productRefs.length,
+          // Locked context — agent uses these as defaults when calling gen
+          // tools. User pinned them from earlier in the chat via picker UI.
+          activeContext: {
+            preset: activePreset || null,
+            persona: activePersona ? {
+              id: activePersona.id,
+              name: activePersona.name,
+              username: activePersona.username,
+              avatar_url: activePersona.avatar_url,
+              lora_url: activePersona.lora_url || null,
+              lora_trigger_word: activePersona.lora_trigger_word || null,
+            } : null,
+            product: activeProduct ? {
+              id: activeProduct.id,
+              label: activeProduct.label,
+              fal_url: activeProduct.fal_url,
+              knowledge: activeProduct.knowledge,
+            } : null,
+          },
         }),
       })
       const j = await res.json()
@@ -284,7 +310,14 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
         style={{ height: 'calc(100vh - 320px)', minHeight: 400 }}
       >
         {messages.map((m, i) => (
-          <MessageBubble key={i} msg={m} personas={personas} />
+          <MessageBubble
+            key={i}
+            msg={m}
+            personas={personas}
+            onPresetUse={setActivePreset}
+            onPersonaPick={setActivePersona}
+            onProductPick={setActiveProduct}
+          />
         ))}
         {busy && (
           <div className="flex items-center gap-2 text-xs text-[var(--muted)] mt-2 pl-1">
@@ -309,6 +342,32 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
           </button>
         ))}
       </div>
+
+      {/* Active context pills — locked persona / product / preset that get
+          baked into every subsequent gen request. User dismisses via ✕. */}
+      {(activePreset || activePersona || activeProduct) && (
+        <div className="mb-2 flex flex-wrap gap-1.5">
+          {activePreset && (
+            <div className="flex items-center gap-1 text-[10px] bg-[var(--accent)]/15 border border-[var(--accent)]/40 text-[var(--accent)] px-2 py-1 rounded-full">
+              🎥 {activePreset.label}
+              <button onClick={() => setActivePreset(null)} className="ml-1 opacity-60 hover:opacity-100">✕</button>
+            </div>
+          )}
+          {activePersona && (
+            <div className="flex items-center gap-1 text-[10px] bg-[var(--accent)]/15 border border-[var(--accent)]/40 text-[var(--accent)] px-2 py-1 rounded-full">
+              {activePersona.avatar_url && <img src={activePersona.avatar_url} className="w-4 h-4 rounded-full" />}
+              👤 {activePersona.name}
+              <button onClick={() => setActivePersona(null)} className="ml-1 opacity-60 hover:opacity-100">✕</button>
+            </div>
+          )}
+          {activeProduct && (
+            <div className="flex items-center gap-1 text-[10px] bg-[var(--accent)]/15 border border-[var(--accent)]/40 text-[var(--accent)] px-2 py-1 rounded-full">
+              📦 {activeProduct.label}
+              <button onClick={() => setActiveProduct(null)} className="ml-1 opacity-60 hover:opacity-100">✕</button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Pending attachments preview — shown above input when files are
           uploaded but not yet sent. User can review + remove before submit. */}
@@ -370,7 +429,7 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
   )
 }
 
-function MessageBubble({ msg, personas }) {
+function MessageBubble({ msg, personas, onPresetUse, onPersonaPick, onProductPick }) {
   if (msg.role === 'user') {
     return (
       <div className="flex justify-end mb-3">
@@ -399,19 +458,27 @@ function MessageBubble({ msg, personas }) {
         </div>
         <div className={`rounded-2xl rounded-bl-sm px-4 py-3 text-sm ${msg.error ? 'bg-red-500/10 border border-red-500/30 text-red-300' : 'bg-[var(--surface2)] border border-[var(--border)]'}`}>
           <div className="whitespace-pre-wrap">{msg.content}</div>
-          {msg.toolResult && <ToolResult result={msg.toolResult} personas={personas} />}
+          {msg.toolResult && (
+            <ToolResult
+              result={msg.toolResult}
+              personas={personas}
+              onPresetUse={onPresetUse}
+              onPersonaPick={onPersonaPick}
+              onProductPick={onProductPick}
+            />
+          )}
         </div>
       </div>
     </div>
   )
 }
 
-function ToolResult({ result, personas }) {
+function ToolResult({ result, personas, onPresetUse, onPersonaPick, onProductPick }) {
   if (!result || result.type === 'error') {
     return <div className="mt-3 text-xs text-red-400">⚠ {result?.error || 'tool failed'}</div>
   }
   if (result.type === 'cinematic_preset_suggestions') {
-    return <PresetCards presets={result.suggestions} compact />
+    return <PresetCards presets={result.suggestions} compact onUse={onPresetUse} />
   }
   if (result.type === 'cinematic_preset_library') {
     return (
@@ -420,7 +487,7 @@ function ToolResult({ result, personas }) {
           cat.presets?.length > 0 && (
             <div key={cat.id}>
               <div className="text-[11px] font-semibold mb-1 text-[var(--muted)]">{cat.label}</div>
-              <PresetCards presets={cat.presets} compact />
+              <PresetCards presets={cat.presets} compact onUse={onPresetUse} />
             </div>
           )
         ))}
@@ -435,13 +502,17 @@ function ToolResult({ result, personas }) {
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 gap-1.5">
             {result.personas.map((p) => (
-              <div key={p.id} className="flex items-center gap-2 bg-[var(--surface)] border border-[var(--border)] rounded p-2">
+              <button
+                key={p.id}
+                onClick={() => onPersonaPick && onPersonaPick(p)}
+                className="flex items-center gap-2 bg-[var(--surface)] border border-[var(--border)] rounded p-2 hover:border-[var(--accent)]/50 hover:bg-[var(--surface2)] text-left">
                 {p.avatar_url ? <img src={p.avatar_url} alt="" className="w-8 h-8 rounded-full object-cover" /> : <div className="w-8 h-8 rounded-full bg-[var(--surface2)] flex items-center justify-center text-xs">{p.name?.[0]}</div>}
                 <div className="min-w-0">
                   <div className="text-xs font-semibold truncate">{p.name}</div>
                   <div className="text-[10px] text-[var(--muted2)] truncate">@{p.username || '—'}</div>
+                  {p.lora_url && <div className="text-[9px] text-[var(--accent)]">🧬 Soul trained</div>}
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         )}
@@ -456,21 +527,191 @@ function ToolResult({ result, personas }) {
         ) : (
           <div className="grid grid-cols-3 md:grid-cols-4 gap-1.5">
             {result.products.map((p) => (
-              <div key={p.id} className="bg-[var(--surface)] border border-[var(--border)] rounded p-1.5">
+              <button
+                key={p.id}
+                onClick={() => onProductPick && onProductPick(p)}
+                className="bg-[var(--surface)] border border-[var(--border)] rounded p-1.5 hover:border-[var(--accent)]/50 text-left">
                 <img src={p.fal_url} alt={p.label} className="w-full aspect-square object-cover rounded" />
                 <div className="text-[10px] font-semibold mt-1 truncate">{p.label}</div>
                 {p.knowledge && <div className="text-[9px] text-[var(--muted2)] truncate" title={p.knowledge}>📋 has knowledge</div>}
-              </div>
+              </button>
             ))}
           </div>
         )}
       </div>
     )
   }
+  if (result.type === 'gen_image_result') {
+    return <GenImageResult result={result} />
+  }
+  if (result.type === 'gen_video_result') {
+    return <GenVideoResult result={result} />
+  }
+  if (result.type === 'url_marketing_proposal') {
+    return <UrlMarketingProposal result={result} />
+  }
+  if (result.type === 'video_analysis') {
+    return <VideoAnalysisCard result={result} />
+  }
+  if (result.type === 'virality_score') {
+    return <ViralityScoreCard result={result} />
+  }
+  if (result.type === 'soul_training_result') {
+    return <SoulTrainingResult result={result} />
+  }
   return null
 }
 
-function PresetCards({ presets, compact = false }) {
+function GenImageResult({ result }) {
+  return (
+    <div className="mt-3 bg-[var(--surface)] border border-[var(--border)] rounded-lg overflow-hidden">
+      <img src={result.url} alt="generated" className="w-full max-h-[400px] object-contain bg-black" />
+      <div className="p-2 flex items-center justify-between gap-2 text-[10px]">
+        <div className="flex gap-1.5 text-[var(--muted2)]">
+          {result.model && <span>🎨 {result.model.split('/').pop()}</span>}
+          {result.ar && <span>📐 {result.ar}</span>}
+        </div>
+        <div className="flex gap-1">
+          <a href={result.url} target="_blank" rel="noreferrer" className="px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)]">⬇ Download</a>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function GenVideoResult({ result }) {
+  return (
+    <div className="mt-3 bg-[var(--surface)] border border-[var(--border)] rounded-lg overflow-hidden">
+      <video src={result.url} controls className="w-full max-h-[500px] bg-black" />
+      <div className="p-2 flex items-center justify-between gap-2 text-[10px]">
+        <div className="flex gap-1.5 text-[var(--muted2)] flex-wrap">
+          {result.model && <span>🎬 {result.model.split('/').pop()}</span>}
+          {result.ar && <span>📐 {result.ar}</span>}
+          {result.duration && <span>⏱ {result.duration}s</span>}
+        </div>
+        <div className="flex gap-1">
+          <a href={result.url} target="_blank" rel="noreferrer" className="px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)]">⬇</a>
+          {result.result_id && <Link href={`/qc#${result.result_id}`} className="px-2 py-1 rounded bg-[var(--accent)]/20 border border-[var(--accent)]/40 text-[var(--accent)]">🧪 QC</Link>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function UrlMarketingProposal({ result }) {
+  return (
+    <div className="mt-3 bg-[var(--surface)] border border-[var(--border)] rounded-lg p-3 space-y-2">
+      <div className="flex items-start gap-3">
+        {result.image && <img src={result.image} alt="" className="w-20 h-20 object-cover rounded border border-[var(--border)]" />}
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-bold truncate">{result.title || 'Product'}</div>
+          {result.price && <div className="text-xs text-[var(--accent)] mt-0.5">{result.price}</div>}
+          {result.description && <div className="text-[11px] text-[var(--muted)] mt-1 line-clamp-3">{result.description}</div>}
+        </div>
+      </div>
+      {result.naskah && (
+        <div className="bg-[var(--surface2)] border border-[var(--border)] rounded p-2 text-[11px] whitespace-pre-wrap leading-relaxed">
+          <div className="text-[9px] uppercase font-bold text-[var(--muted)] mb-1">📝 Suggested naskah</div>
+          {result.naskah}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function VideoAnalysisCard({ result }) {
+  const fields = [
+    ['Style', result.style],
+    ['Camera', result.camera],
+    ['Mood', result.mood],
+    ['Pacing', result.pacing],
+    ['Character notes', result.character_notes],
+    ['Suggested model', result.suggested_model],
+    ['Replication strategy', result.replication_strategy],
+  ]
+  return (
+    <div className="mt-3 bg-[var(--surface)] border border-[var(--border)] rounded-lg p-3 space-y-1.5">
+      {fields.filter(([_, v]) => v).map(([k, v]) => (
+        <div key={k} className="text-[11px]">
+          <span className="font-bold text-[var(--muted)]">{k}:</span>{' '}
+          <span className="text-[var(--text)]">{v}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ViralityScoreCard({ result }) {
+  const Bar = ({ label, value }) => (
+    <div className="mb-1">
+      <div className="flex justify-between text-[10px] mb-0.5">
+        <span className="text-[var(--muted)]">{label}</span>
+        <span className="font-bold">{value}/100</span>
+      </div>
+      <div className="h-1.5 bg-[var(--surface2)] rounded overflow-hidden">
+        <div
+          className={`h-full ${value >= 75 ? 'bg-green-500' : value >= 50 ? 'bg-yellow-500' : 'bg-red-500'}`}
+          style={{ width: `${value}%` }}
+        />
+      </div>
+    </div>
+  )
+  return (
+    <div className="mt-3 bg-[var(--surface)] border border-[var(--border)] rounded-lg p-3 space-y-2">
+      <div className="flex items-baseline justify-between">
+        <div className="text-xs font-bold">Virality score</div>
+        <div className={`text-2xl font-bold ${result.overall >= 75 ? 'text-green-400' : result.overall >= 50 ? 'text-yellow-400' : 'text-red-400'}`}>
+          {result.overall}<span className="text-xs text-[var(--muted)]">/100</span>
+        </div>
+      </div>
+      <Bar label="Hook strength" value={result.hook || 0} />
+      <Bar label="Retention" value={result.retention || 0} />
+      <Bar label="Visual impact" value={result.visual || 0} />
+      {Array.isArray(result.advice) && result.advice.length > 0 && (
+        <div className="bg-[var(--surface2)] border border-[var(--border)] rounded p-2 mt-2">
+          <div className="text-[9px] uppercase font-bold text-[var(--muted)] mb-1">💡 Improvement tips</div>
+          <ul className="text-[11px] space-y-0.5">
+            {result.advice.map((tip, i) => <li key={i}>• {tip}</li>)}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SoulTrainingResult({ result }) {
+  return (
+    <div className="mt-3 bg-[var(--surface)] border border-[var(--border)] rounded-lg p-3">
+      {result.status === 'training' && (
+        <div className="text-xs">
+          ⏳ Training Soul untuk <strong>{result.persona_name}</strong>...
+          <div className="text-[10px] text-[var(--muted2)] mt-1">
+            Trigger word: <code className="bg-[var(--surface2)] px-1 rounded">{result.trigger_word}</code>
+          </div>
+          <div className="text-[10px] text-[var(--muted2)] mt-1">
+            Estimasi: 3-5 menit. Lo bisa keep chatting; agent bakal update kalau udah selesai.
+          </div>
+        </div>
+      )}
+      {result.status === 'done' && (
+        <div className="text-xs">
+          ✓ Soul training done untuk <strong>{result.persona_name}</strong>!
+          <div className="text-[10px] text-[var(--muted2)] mt-1">
+            Trigger: <code className="bg-[var(--surface2)] px-1 rounded">{result.trigger_word}</code>
+          </div>
+          <div className="text-[10px] mt-1">
+            Sekarang generate apapun yang mention persona ini akan pake Soul LoRA = karakter 95%+ konsisten.
+          </div>
+        </div>
+      )}
+      {result.status === 'failed' && (
+        <div className="text-xs text-red-400">⚠ Training gagal: {result.error}</div>
+      )}
+    </div>
+  )
+}
+
+function PresetCards({ presets, compact = false, onUse }) {
   const [copied, setCopied] = useState(null)
   return (
     <div className={`mt-2 space-y-1.5 ${compact ? '' : ''}`}>
@@ -492,11 +733,13 @@ function PresetCards({ presets, compact = false }) {
                 className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] hover:bg-[var(--accent)]/20 border border-[var(--border)] whitespace-nowrap">
                 {copied === p.id ? '✓ Copied' : '📋 Copy'}
               </button>
-              <Link
-                href={`/generate?preset=${p.id}`}
-                className="text-[10px] px-2 py-1 rounded bg-[var(--accent)]/20 hover:bg-[var(--accent)]/30 border border-[var(--accent)]/40 text-[var(--accent)] font-semibold whitespace-nowrap text-center">
-                Use →
-              </Link>
+              {onUse && (
+                <button
+                  onClick={() => onUse(p)}
+                  className="text-[10px] px-2 py-1 rounded bg-[var(--accent)]/20 hover:bg-[var(--accent)]/30 border border-[var(--accent)]/40 text-[var(--accent)] font-semibold whitespace-nowrap text-center">
+                  🎥 Lock preset
+                </button>
+              )}
             </div>
           </div>
         </div>
