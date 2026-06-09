@@ -72,6 +72,7 @@ export default async function DashLayout({ children }) {
       <div className="mb-3"><CostWidget workspaceId={activeWs.id} /></div>
       <div className="mb-4"><OnboardingChecklist /></div>
       <NavLink href="/generate" label="⚡ Generate" />
+      <NavLink href="/god-mode" label="🔥 God Mode" highlight />
       <NavLink href="/qc" label="🧪 QC" />
       <NavLink href="/editor" label="✂️ Editor" />
       <NavLink href="/scheduled" label="📅 Scheduled" />
@@ -108,10 +109,12 @@ export default async function DashLayout({ children }) {
   )
 }
 
-function NavLink({ href, label }) {
-  return (
-    <Link href={href} className="block px-3 py-2 rounded text-sm hover:bg-[var(--surface2)]">
-      {label}
-    </Link>
-  )
+function NavLink({ href, label, highlight = false }) {
+  // GOD MODE entry uses a subtle accent border so the user can spot the new
+  // surface area at a glance. Other links keep the default flat hover style.
+  const base = 'block px-3 py-2 rounded text-sm hover:bg-[var(--surface2)]'
+  const cls = highlight
+    ? `${base} border border-[var(--accent)]/40 bg-gradient-to-r from-[var(--accent)]/10 to-transparent text-[var(--accent)] font-semibold`
+    : base
+  return <Link href={href} className={cls}>{label}</Link>
 }
