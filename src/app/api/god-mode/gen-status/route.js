@@ -42,55 +42,82 @@ export async function GET(req) {
   const falKey = await getFalKey(supabase, wsId)
   if (!falKey) return NextResponse.json({ ok: false, error: 'no fal key' }, { status: 500 })
 
+  // Try the status endpoint first. fal returns { status: "IN_QUEUE" |
+  // "IN_PROGRESS" | "COMPLETED" | "FAILED" }. If status check returns
+  // anything weird (e.g. fal aliased the endpoint and routed status to a
+  // different path), we fall back to fetching the result directly as a
+  // probe — if it returns a video URL, the gen IS done regardless of what
+  // /status said.
   const statusRes = await fetch(`https://queue.fal.run/${model}/requests/${requestId}/status`, {
     headers: { 'Authorization': `Key ${falKey}` },
+    cache: 'no-store',
   })
   const statusData = await statusRes.json().catch(() => ({}))
+  const falStatus = statusData?.status
 
-  if (statusData?.status === 'COMPLETED') {
+  const ar = url.searchParams.get('ar') || 'auto'
+  const duration = parseInt(url.searchParams.get('duration')) || 5
+  const motion = url.searchParams.get('motion') || ''
+  const personaId = url.searchParams.get('persona_id') || null
+
+  async function fetchResultAndPersist() {
     const fullRes = await fetch(`https://queue.fal.run/${model}/requests/${requestId}`, {
       headers: { 'Authorization': `Key ${falKey}` },
+      cache: 'no-store',
     })
     const fullData = await fullRes.json().catch(() => ({}))
-    const videoUrl = fullData?.video?.url || fullData?.url
+    // Try every common shape fal uses across video models.
+    const videoUrl =
+      fullData?.video?.url ||
+      fullData?.video_url ||
+      fullData?.output?.video?.url ||
+      fullData?.output?.url ||
+      fullData?.url ||
+      (Array.isArray(fullData?.videos) && fullData.videos[0]?.url) ||
+      null
+    if (!videoUrl) return null
 
-    if (videoUrl) {
-      // Optional context from query (matches what was returned in the
-      // queued response) so we can save the result with proper metadata.
-      const ar = url.searchParams.get('ar') || 'auto'
-      const duration = parseInt(url.searchParams.get('duration')) || 5
-      const motion = url.searchParams.get('motion') || ''
-      const personaId = url.searchParams.get('persona_id') || null
+    const { data: row } = await supabase.from('results').insert({
+      workspace_id: wsId,
+      persona_id: personaId,
+      type: 'video', url: videoUrl,
+      label: 'God Mode — video',
+      ar,
+      meta: { source: 'god-mode', motion, model, request_id: requestId },
+      created_by: user.id,
+    }).select('id').single()
 
-      // Insert into results so it shows up in /qc.
-      const { data: row } = await supabase.from('results').insert({
-        workspace_id: wsId,
-        persona_id: personaId,
-        type: 'video', url: videoUrl,
-        label: 'God Mode — video',
-        ar,
-        meta: { source: 'god-mode', motion, model, request_id: requestId },
-        created_by: user.id,
-      }).select('id').single()
-
-      return NextResponse.json({
-        ok: true,
-        status: 'done',
-        url: videoUrl, model, ar, duration, result_id: row?.id, motion,
-      })
-    }
-    return NextResponse.json({ ok: false, error: 'completed but no video url' }, { status: 500 })
+    return NextResponse.json({
+      ok: true,
+      status: 'done',
+      url: videoUrl, model, ar, duration, result_id: row?.id, motion,
+    })
   }
 
-  if (statusData?.status === 'FAILED' || statusData?.status === 'CANCELLED') {
-    return NextResponse.json({ ok: true, status: 'failed', error: statusData?.error || 'gen failed' })
+  if (falStatus === 'COMPLETED') {
+    const r = await fetchResultAndPersist()
+    if (r) return r
+    return NextResponse.json({ ok: false, error: 'completed but no video url in fal response' }, { status: 500 })
   }
 
-  // Still in queue or processing — return progress info.
+  if (falStatus === 'FAILED' || falStatus === 'CANCELLED') {
+    return NextResponse.json({ ok: true, status: 'failed', error: statusData?.error || statusData?.detail || 'gen failed' })
+  }
+
+  // If status was unreadable (no status field, HTTP error response, weird shape),
+  // probe the result endpoint anyway — fal sometimes serves results even when
+  // /status returns 404 or alias mismatch.
+  if (!falStatus || falStatus === 'unknown') {
+    const r = await fetchResultAndPersist()
+    if (r) return r
+  }
+
   return NextResponse.json({
     ok: true,
     status: 'queued',
-    fal_status: statusData?.status || 'unknown',
+    fal_status: falStatus || 'unknown',
     queue_position: statusData?.queue_position,
+    // surface a hint if fal returned an error-shape response from /status
+    fal_hint: statusData?.detail || statusData?.error || null,
   })
 }
