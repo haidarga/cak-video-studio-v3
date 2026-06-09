@@ -875,43 +875,79 @@ function GenVideoQueued({ result, onResolved }) {
   const [status, setStatus] = useState('queued')
   const [resolved, setResolved] = useState(null)
   const [err, setErr] = useState('')
+  const [attempts, setAttempts] = useState(0)
+  const [falStatus, setFalStatus] = useState('')
+  const cancelRef = useRef(false)
+  const timerRef = useRef(null)
+
+  const checkOnce = async () => {
+    if (cancelRef.current) return
+    setAttempts((n) => n + 1)
+    try {
+      const qs = new URLSearchParams({
+        request_id: result.request_id,
+        model: result.model,
+        ar: result.ar || '',
+        duration: String(result.duration || ''),
+        motion: result.motion || '',
+        persona_id: result.persona_id || '',
+      })
+      const r = await fetch(`/api/god-mode/gen-status?${qs}`, { cache: 'no-store' })
+      const j = await r.json().catch(() => ({ ok: false, error: 'non-json response' }))
+      if (cancelRef.current) return
+      if (j.ok && j.status === 'done') {
+        setStatus('done'); setResolved(j); onResolved?.(j); return true
+      }
+      if (j.ok && j.status === 'failed') {
+        setStatus('failed'); setErr(j.error || 'gen failed'); return true
+      }
+      if (!j.ok) {
+        // Endpoint error — surface it instead of silently looping forever.
+        setErr(j.error || `gen-status returned ok:false`)
+      } else {
+        setErr('')
+        if (j.fal_status) setFalStatus(j.fal_status)
+      }
+      return false
+    } catch (e) {
+      if (!cancelRef.current) setErr(e.message)
+      return false
+    }
+  }
 
   useEffect(() => {
-    let cancelled = false
-    let attempts = 0
-    async function poll() {
-      if (cancelled) return
-      attempts++
-      try {
-        const qs = new URLSearchParams({
-          request_id: result.request_id,
-          model: result.model,
-          ar: result.ar || '',
-          duration: String(result.duration || ''),
-          motion: result.motion || '',
-          persona_id: result.persona_id || '',
-        })
-        const r = await fetch(`/api/god-mode/gen-status?${qs}`)
-        const j = await r.json()
-        if (cancelled) return
-        if (j.ok && j.status === 'done') {
-          setStatus('done')
-          setResolved(j)
-          onResolved?.(j)
-          return
-        }
-        if (j.ok && j.status === 'failed') {
-          setStatus('failed'); setErr(j.error || 'gen failed'); return
-        }
-        // Cap polling at 60 attempts (5 min). After that user can reload page.
-        if (attempts > 60) { setStatus('timeout'); setErr('Polling timeout — refresh page to retry'); return }
-        setTimeout(poll, 5000)
-      } catch (e) {
-        if (!cancelled) { setErr(e.message); setStatus('failed') }
+    cancelRef.current = false
+    let localAttempts = 0
+    const loop = async () => {
+      if (cancelRef.current) return
+      localAttempts++
+      const done = await checkOnce()
+      if (done || cancelRef.current) return
+      // Cap polling at 120 attempts. With 5s base interval + background-tab
+      // throttling, this can span up to ~2hrs in inactive tabs (Chrome
+      // throttles setTimeout to ~1/min in background). User can also click
+      // "Check now" to force-refresh manually.
+      if (localAttempts > 120) { setStatus('timeout'); setErr('Polling timeout — klik "Check now" buat retry.'); return }
+      timerRef.current = setTimeout(loop, 5000)
+    }
+    loop()
+
+    // Re-check immediately when tab becomes visible — Chrome throttles
+    // setTimeout to once per minute in background tabs, so the user might
+    // come back to a stale spinner even though fal is long done.
+    const onVis = () => {
+      if (document.visibilityState === 'visible' && !cancelRef.current && !resolved) {
+        if (timerRef.current) clearTimeout(timerRef.current)
+        loop()
       }
     }
-    poll()
-    return () => { cancelled = true }
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      cancelRef.current = true
+      if (timerRef.current) clearTimeout(timerRef.current)
+      document.removeEventListener('visibilitychange', onVis)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result.request_id])
 
   if (resolved) return <GenVideoResult result={resolved} />
@@ -920,15 +956,22 @@ function GenVideoQueued({ result, onResolved }) {
       <div className="flex items-center gap-2">
         <span className="inline-block w-2 h-2 rounded-full bg-[var(--accent)] animate-pulse" />
         <div className="text-xs font-bold">
-          {status === 'queued' ? 'Video gen di fal.ai queue...' : status === 'failed' ? 'Gen failed' : 'Gen done'}
+          {status === 'queued' ? 'Video gen di fal.ai queue...' : status === 'failed' ? 'Gen failed' : status === 'timeout' ? 'Polling timeout' : 'Gen done'}
         </div>
       </div>
       <div className="text-[10px] text-[var(--muted2)] mt-1">
         Model: {result.model?.split('/').pop()} · {result.ar} · {result.duration}s
       </div>
-      <div className="text-[10px] text-[var(--muted)] mt-2">
-        Polling every 5s. Auto-updates di sini saat selesai. Lo bisa keep chatting.
+      <div className="text-[10px] text-[var(--muted)] mt-2 flex items-center gap-2 flex-wrap">
+        <span>Attempt {attempts}{falStatus ? ` · fal: ${falStatus}` : ''}</span>
+        <button
+          onClick={checkOnce}
+          className="px-2 py-0.5 text-[10px] rounded border border-[var(--border)] hover:bg-[var(--surface2)]"
+        >
+          ↻ Check now
+        </button>
       </div>
+      <div className="text-[10px] text-[var(--muted)] mt-1">Lo bisa keep chatting — auto-updates di sini saat selesai.</div>
       {err && <div className="text-[10px] text-red-400 mt-1">⚠ {err}</div>}
     </div>
   )
