@@ -97,19 +97,24 @@ function buildImageInputForModel(model, { prompt, refs, ar, quality }) {
   const refList = (refs || []).filter(Boolean).slice(0, 8)
 
   if (model.includes('nano-banana')) {
-    return { prompt, image_urls: refList, output_format: 'jpeg' }
+    const isEdit = model.includes('edit')
+    // text-to-image variant doesn't accept image_urls; only edit variant uses it.
+    return {
+      prompt,
+      ...(isEdit ? { image_urls: refList } : {}),
+      output_format: 'jpeg',
+    }
   }
 
   if (model.includes('gpt-image')) {
-    // Both /edit and /generation variants on fal use `image_urls` (NOT
-    // `input_image_urls`). Edit mode REQUIRES at least one ref image —
-    // fal returns 422 missing field if image_urls is empty.
-    if (model.includes('edit') && refList.length === 0) {
-      throw new Error('GPT Image 2 Edit mode butuh minimal 1 source image. Pin product/persona dulu, atau pakai "GPT Image 2 (generation mode)" untuk text-to-image murni.')
+    // /edit takes image_urls (required, min 1). /generation = pure t2i, no image_urls.
+    const isEdit = model.includes('edit')
+    if (isEdit && refList.length === 0) {
+      throw new Error('GPT Image 2 Edit mode butuh minimal 1 source image. Upload gambar ke chat dulu.')
     }
     return {
       prompt,
-      image_urls: refList,
+      ...(isEdit ? { image_urls: refList } : {}),
       quality: quality === '1080p' ? 'high' : 'medium',
       aspect_ratio: ar || '1:1',
     }
@@ -258,13 +263,30 @@ const TOOLS = {
       //   2. Soul LoRA if persona has one trained
       //   3. User's picked image_model from config bar
       let model = modelOverride || ''
-      let finalPrompt = String(prompt || '')
+      let finalPrompt = String(prompt || '').trim()
+
+      // Prompt fallback — Gemini sometimes drops the prompt field empty
+      // when it embeds the description in `text` only. Fall back to the
+      // user's raw last-message text so fal doesn't 422 on min_length.
+      if (finalPrompt.length < 3 && ctx.lastUserText) finalPrompt = ctx.lastUserText
+      if (finalPrompt.length < 3) {
+        return { type: 'error', error: 'Prompt kosong. Coba: "bikin foto X di lokasi Y, style Z".' }
+      }
 
       if (!model && ctx.activePersona?.lora_url && ctx.activePersona?.lora_trigger_word) {
         model = 'fal-ai/flux-lora'
         finalPrompt = `${ctx.activePersona.lora_trigger_word}, ${finalPrompt}`
       }
       if (!model) model = cfg.image_model || 'fal-ai/nano-banana/edit'
+
+      // Auto-switch /edit variants to their text-to-image counterpart when
+      // no source images are available. User asked "bikin foto X" without
+      // uploading or pinning — they want pure generation, not edit.
+      if (refUrls.length === 0) {
+        if (model === 'fal-ai/nano-banana/edit') model = 'fal-ai/nano-banana'
+        if (model === 'openai/gpt-image-2/edit') model = 'openai/gpt-image-2'
+        if (model.endsWith('/edit')) model = model.replace(/\/edit$/, '')
+      }
 
       // Build input per-model via centralized helper. Each fal.ai model
       // has different field expectations — this fails gracefully with a
@@ -325,7 +347,14 @@ const TOOLS = {
       const audioOn = cfg.audio !== false
 
       // Compose final motion prompt with active preset appended.
-      let finalMotion = String(motion_prompt || '')
+      let finalMotion = String(motion_prompt || '').trim()
+      // Prompt fallback — Gemini sometimes drops motion_prompt empty when it
+      // puts the description only in `text`. Use the user's raw last message
+      // so fal doesn't 422 on min_length.
+      if (finalMotion.length < 3 && ctx.lastUserText) finalMotion = ctx.lastUserText
+      if (finalMotion.length < 3) {
+        return { type: 'error', error: 'Motion prompt kosong. Coba: "video X detik tema Y dengan camera Z".' }
+      }
       if (ctx.activePreset?.prompt) {
         finalMotion += `\n\n[Cinematic preset: ${ctx.activePreset.label}] ${ctx.activePreset.prompt}`
       }
@@ -340,10 +369,19 @@ const TOOLS = {
       }
       if (ctx.activeProduct?.fal_url) refUrls.push(ctx.activeProduct.fal_url)
 
+      // Auto-promote source image_url: explicit > recent chat attachment > refs[0].
+      // This is what fixes the "start_image_url Field required" 422 — when user
+      // uploaded image to chat but agent didn't echo it back as image_url.
+      let finalImageUrl = image_url
+      if (!finalImageUrl) {
+        const attImg = (ctx.recentAttachments || []).find((a) => a.type === 'image' && a.url)
+        if (attImg) finalImageUrl = attImg.url
+      }
+
       // Model selection: explicit override > config > smart default by mode.
       let model = modelOverride
       if (!model) {
-        if (image_url) {
+        if (finalImageUrl) {
           // Image-to-video — pick i2v variant of the configured family if possible
           const i2vMap = {
             'bytedance/seedance-2.0/fast/reference-to-video': 'bytedance/seedance-2.0/fast/image-to-video',
@@ -357,13 +395,32 @@ const TOOLS = {
         }
       }
 
+      // If model is an i2v variant but we still have no source image, fall back
+      // to refs[0] as start frame, else auto-switch to ref-to-video (or text-to-video).
+      if (model.includes('image-to-video') && !finalImageUrl) {
+        if (refUrls.length > 0) {
+          finalImageUrl = refUrls[0]
+        } else {
+          // Switch to ref-to-video variant; if no refs either, switch to text-to-video.
+          const r2vMap = {
+            'fal-ai/kling-video/v3/image-to-video': 'fal-ai/kling-video/v3/reference-to-video',
+            'fal-ai/kling-video/v3/standard/image-to-video': 'fal-ai/kling-video/v3/reference-to-video',
+            'fal-ai/kling-video/v3/pro/image-to-video': 'fal-ai/kling-video/v3/reference-to-video',
+            'bytedance/seedance-2.0/fast/image-to-video': 'bytedance/seedance-2.0/fast/reference-to-video',
+            'alibaba/happy-horse/image-to-video': 'alibaba/happy-horse/reference-to-video',
+            'xai/grok-imagine-video/image-to-video': 'xai/grok-imagine-video/reference-to-video',
+          }
+          model = r2vMap[model] || model.replace('/image-to-video', '/text-to-video')
+        }
+      }
+
       // Build input via centralized per-model helper. Handles Kling's
       // start_image_url, Seedance's image_urls array, Grok's
       // reference_image_urls, etc. — all the field-name variants that
       // caused 422 errors before.
       const input = buildVideoInputForModel(model, {
         motion_prompt: finalMotion,
-        image_url,
+        image_url: finalImageUrl,
         image_urls: refUrls,
         duration: dur,
         aspect_ratio: finalAr,
@@ -419,7 +476,7 @@ const TOOLS = {
             persona_id: ctx.activePersona?.id || null,
             type: 'video', url, label: `God Mode — video`,
             ar: finalAr,
-            meta: { source: 'god-mode', motion: finalMotion, model, image_url, refs: refUrls },
+            meta: { source: 'god-mode', motion: finalMotion, model, image_url: finalImageUrl, refs: refUrls },
             created_by: ctx.userId,
           }).select('id').single()
 
@@ -486,7 +543,7 @@ Match the theme vibe in the naskah tone. Keep timestamps consistent with ${durat
           workspaceId: ctx.workspaceId,
           contents: [{ role: 'user', parts: [{ text: extractPrompt }] }],
           temperature: 0.5,
-          maxOutputTokens: 2048,
+          maxOutputTokens: 4000,
         })
         const p = result.parsed || {}
         return {
@@ -535,7 +592,7 @@ HTML: ${html.slice(0, 22000)}`
           workspaceId: ctx.workspaceId,
           contents: [{ role: 'user', parts: [{ text: extractPrompt }] }],
           temperature: 0.6,
-          maxOutputTokens: 1000,
+          maxOutputTokens: 3000,
         })
         const p = extracted.parsed || {}
         if (!p.image_url || !p.image_prompt) {
@@ -619,7 +676,7 @@ HTML: ${html.slice(0, 22000)}`
           workspaceId: ctx.workspaceId,
           contents: [{ role: 'user', parts: [{ text: extractPrompt }] }],
           temperature: 0.6,
-          maxOutputTokens: 1500,
+          maxOutputTokens: 4000,
         })
         const p = extracted.parsed || {}
 
@@ -1045,6 +1102,17 @@ Rules:
 - If a tool fits, return tool name + inputs.
 - "text" should be brief setup line; UI renders tool result below.
 - NEVER invent tools not in the list.
+
+PROMPT RULES (CRITICAL — fal returns 422 if empty):
+- gen_image MUST receive tool_input.prompt = a full English visual description (2-4 sentences). Take the user's Indonesian intent and EXPAND into vivid English prompt. NEVER send empty prompt. NEVER put the prompt only in "text".
+- gen_video MUST receive tool_input.motion_prompt = full English motion description (what happens, camera moves, mood). NEVER send empty motion_prompt.
+- Example: user says "bro buatin gambar orang di pantai candid UGC pake samsung a13 potrait" → prompt: "A candid UGC-style portrait of a young person at a sunny tropical beach, shot on Samsung A13 with slight motion blur, natural sunlight, authentic vacation vibe, vertical 9:16 framing, soft warm tones."
+
+MODEL VARIANT RULES (CRITICAL):
+- If user wants pure text-to-image (no source image uploaded, no pinned product, no URL): pick the BASE variant — "fal-ai/nano-banana" (not /edit), "openai/gpt-image-2" (not /edit).
+- If user uploaded image to chat OR has pinned source: pick the /edit variant for that family.
+- For video: if user uploaded image OR pinned product → use image-to-video variant. If only personas pinned (multi-ref) → use reference-to-video. If pure text → text-to-video.
+
 - For gen_image/gen_video: use config defaults from above UNLESS user explicitly mentions a different model / AR / duration / audio in their message — then override via tool_input.
 - If user says e.g. "pakai Kling Pro 1:1 10 detik no audio", pass { model: 'fal-ai/kling-video/v3/pro/image-to-video', ar: '1:1', duration: 10 } to gen_video (and bake "silent" into motion_prompt).
 - SOURCE RESOLUTION (CRITICAL — read carefully):
@@ -1086,6 +1154,7 @@ export async function POST(req) {
   // uploaded content (analyze_reference_video, predict_virality, gen_image).
   const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user')
   const recentAttachments = lastUserMsg?.attachments || []
+  const lastUserText = lastUserMsg?.content ? String(lastUserMsg.content).trim() : ''
 
   // Collect URLs mentioned anywhere in the recent conversation (last 6 msgs).
   // If user says "dari link itu" without re-pasting, we can still resolve.
@@ -1112,6 +1181,7 @@ export async function POST(req) {
     activeConfig: activeContext?.config || {},
     recentAttachments,
     recentUrls,
+    lastUserText,
     req,
   }
 

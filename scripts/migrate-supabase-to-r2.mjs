@@ -123,21 +123,43 @@ async function mirrorBucket() {
           console.log(`  [plan] copy: ${fullPath}`)
           continue
         }
-        try {
-          const { data: blob, error: dlErr } = await sb.storage.from('refs').download(fullPath)
-          if (dlErr) throw dlErr
-          const buf = Buffer.from(await blob.arrayBuffer())
-          await r2.send(new PutObjectCommand({
-            Bucket: R2_BUCKET, Key: fullPath, Body: buf,
-            ContentType: blob.type || 'application/octet-stream',
-            CacheControl: 'public, max-age=31536000, immutable',
-          }))
-          copied++
-          if (copied % 10 === 0) console.log(`  [${total}] copied ${copied} | ${fullPath} (${(buf.length / 1024).toFixed(0)}KB)`)
-        } catch (e) {
-          failed++
-          console.error(`  FAIL ${fullPath}: ${e.message || e}`)
+        // Retry up to 4 times with exponential backoff. Supabase storage starts
+        // tarpitting / closing connections once the project hits its egress
+        // cap — that's exactly the user's situation (451% cached egress over
+        // quota). A transient fetch fail almost always succeeds on retry; the
+        // first run failed permanently because there was no retry.
+        let lastErr = null
+        for (let attempt = 1; attempt <= 4; attempt++) {
+          try {
+            const { data: blob, error: dlErr } = await sb.storage.from('refs').download(fullPath)
+            if (dlErr) throw dlErr
+            const buf = Buffer.from(await blob.arrayBuffer())
+            await r2.send(new PutObjectCommand({
+              Bucket: R2_BUCKET, Key: fullPath, Body: buf,
+              ContentType: blob.type || 'application/octet-stream',
+              CacheControl: 'public, max-age=31536000, immutable',
+            }))
+            copied++
+            if (copied % 5 === 0) console.log(`  [${total}] copied ${copied} | ${fullPath} (${(buf.length / 1024).toFixed(0)}KB)`)
+            lastErr = null
+            break
+          } catch (e) {
+            lastErr = e
+            if (attempt < 4) {
+              const wait = 1000 * Math.pow(2, attempt - 1) // 1s, 2s, 4s
+              console.warn(`  ... retry ${attempt}/3 in ${wait}ms (${fullPath}): ${e.message || e}`)
+              await new Promise((r) => setTimeout(r, wait))
+            }
+          }
         }
+        if (lastErr) {
+          failed++
+          console.error(`  FAIL ${fullPath}: ${lastErr.message || lastErr}`)
+        }
+        // Small inter-file delay so we don't hammer Supabase storage faster
+        // than its rate limiter allows. 100ms = max 10 files/sec which is way
+        // under the IP cap.
+        await new Promise((r) => setTimeout(r, 100))
       }
       if (data.length < 100) break
       page++
@@ -149,12 +171,13 @@ async function mirrorBucket() {
 
 // Phase 2 — rewrite DB URLs. Tables + columns enumerated explicitly.
 const TARGETS = [
-  // [table, [{ col, kind }]] — kind: 'text' (single URL string) or 'jsonb_array' (array of URLs) or 'jsonb_path' (URL inside nested JSON, e.g. meta.cloned_audio_url)
+  // [table, [{ col, kind }]] — kind: 'text' (single URL string), 'jsonb_array' (array of URLs), 'jsonb_path' (URL inside nested JSON, e.g. meta.cloned_audio_url).
+  // Verified against migrations 0001-0023; no voices table, no voice_source_url
+  // column. Cloned voice URLs live in results.meta.cloned_audio_url.
   ['refs',           [{ col: 'fal_url', kind: 'text' }]],
   ['results',        [{ col: 'url', kind: 'text' }, { col: 'meta', kind: 'jsonb_path', subpath: 'cloned_audio_url' }]],
-  ['personas',       [{ col: 'avatar_url', kind: 'text' }, { col: 'voice_source_url', kind: 'text' }]],
+  ['personas',       [{ col: 'avatar_url', kind: 'text' }]],
   ['camera_presets', [{ col: 'style_ref_urls', kind: 'jsonb_array' }]],
-  ['voices',         [{ col: 'preview_url', kind: 'text' }]],
 ]
 
 function rewriteUrl(u) {
