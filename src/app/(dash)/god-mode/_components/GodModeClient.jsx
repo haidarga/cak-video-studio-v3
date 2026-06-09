@@ -699,7 +699,130 @@ function ToolResult({ result, personas, onPresetUse, onPersonaPick, onProductPic
   if (result.type === 'soul_training_result') {
     return <SoulTrainingResult result={result} />
   }
+  if (result.type === 'brand_builder_result') {
+    return <BrandBuilderResult result={result} />
+  }
+  if (result.type === 'mass_variants_result') {
+    return <MassVariantsResult result={result} />
+  }
   return null
+}
+
+function BrandBuilderResult({ result }) {
+  return (
+    <div className="mt-3 bg-[var(--surface)] border border-[var(--border)] rounded-lg p-4 space-y-3">
+      <div className="text-xs">
+        <div className="text-[10px] uppercase font-bold text-[var(--muted)] mb-1">🎯 Niche analysis</div>
+        <div className="text-[var(--text)] leading-relaxed">{result.niche_analysis}</div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          <div className="text-[10px] uppercase font-bold text-[var(--muted)] mb-1">🏷 Brand name suggestions</div>
+          <div className="space-y-0.5">
+            {result.brand_name_suggestions?.map((n, i) => (
+              <div key={i} className="text-xs font-bold text-[var(--accent)]">• {n}</div>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase font-bold text-[var(--muted)] mb-1">📣 Taglines</div>
+          <div className="space-y-0.5">
+            {result.tagline_suggestions?.map((t, i) => (
+              <div key={i} className="text-xs italic">"{t}"</div>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase font-bold text-[var(--muted)] mb-1">🎨 Brand voice</div>
+          <div className="text-xs">{result.brand_voice}</div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase font-bold text-[var(--muted)] mb-1">🎨 Color palette</div>
+          <div className="flex gap-1">
+            {result.color_palette?.map((c, i) => (
+              <div key={i} className="flex items-center gap-1 text-[10px] font-mono">
+                <div className="w-5 h-5 rounded border border-[var(--border)]" style={{ backgroundColor: c }} />
+                {c}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div>
+        <div className="text-[10px] uppercase font-bold text-[var(--muted)] mb-1">📦 Product concept</div>
+        <div className="text-xs leading-relaxed">{result.product_concept}</div>
+      </div>
+      <div>
+        <div className="text-[10px] uppercase font-bold text-[var(--muted)] mb-1">👥 Target audience</div>
+        <div className="text-xs leading-relaxed">{result.target_audience}</div>
+      </div>
+      <div>
+        <div className="text-[10px] uppercase font-bold text-[var(--muted)] mb-1">📸 Listing photo prompts (click ✨ to gen)</div>
+        <div className="space-y-1">
+          {result.listing_photo_prompts?.map((p, i) => (
+            <div key={i} className="bg-[var(--surface2)] border border-[var(--border)] rounded p-2 text-[11px] italic">
+              "{p}"
+            </div>
+          ))}
+        </div>
+      </div>
+      <div>
+        <div className="text-[10px] uppercase font-bold text-[var(--muted)] mb-1">🎬 Hero video naskah</div>
+        <div className="bg-[var(--surface2)] border border-[var(--border)] rounded p-2 text-[11px] whitespace-pre-wrap leading-relaxed">
+          {result.hero_video_naskah}
+        </div>
+      </div>
+      {result.marketing_angles?.length > 0 && (
+        <div>
+          <div className="text-[10px] uppercase font-bold text-[var(--muted)] mb-1">📈 Marketing angles</div>
+          <div className="space-y-0.5">
+            {result.marketing_angles.map((a, i) => <div key={i} className="text-xs">• {a}</div>)}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function MassVariantsResult({ result }) {
+  const ok = result.variants?.filter((v) => v && !v.error) || []
+  const failed = result.variants?.filter((v) => v?.error) || []
+  return (
+    <div className="mt-3 bg-[var(--surface)] border border-[var(--border)] rounded-lg p-3 space-y-2">
+      <div className="flex items-center justify-between text-xs">
+        <div>
+          <span className="font-bold">🏭 Mass variants</span>
+          {result.product_label && <span className="text-[var(--muted)]"> · {result.product_label}</span>}
+        </div>
+        <div className="text-[10px] text-[var(--muted2)]">
+          {ok.length}/{result.requested} generated{failed.length > 0 && ` · ${failed.length} failed`}
+        </div>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-1.5">
+        {ok.map((v) => (
+          <div key={v.index} className="bg-[var(--surface2)] border border-[var(--border)] rounded overflow-hidden">
+            <a href={v.url} target="_blank" rel="noreferrer">
+              <img src={v.url} alt={v.scene} className="w-full aspect-square object-cover hover:opacity-80" />
+            </a>
+            <div className="p-1.5 text-[9px] text-[var(--muted2)]">
+              <div className="font-bold text-[var(--text)] truncate">{v.hook}</div>
+              <div className="truncate">{v.scene}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+      {failed.length > 0 && (
+        <details className="text-[10px] text-red-400">
+          <summary className="cursor-pointer">⚠ {failed.length} failed</summary>
+          <div className="mt-1 space-y-0.5">
+            {failed.map((v, i) => (
+              <div key={i}>variant {v.index + 1} ({v.scene}): {v.error}</div>
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
+  )
 }
 
 function GenImageResult({ result, onAction }) {

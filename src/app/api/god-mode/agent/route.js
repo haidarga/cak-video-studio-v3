@@ -529,6 +529,132 @@ Return JSON only:
     },
   },
 
+  // ─ Brand Builder ─────────────────────────────────────────────────
+  brand_builder: {
+    description: 'Bootstrap a brand from scratch. User describes a niche or product idea, this returns: niche analysis + brand concept + suggested name/tagline + product description + 3 listing photo prompts + 1 hero video naskah. Use when user says "build me a brand", "bikin brand X from scratch", "research niche Y + bikin konsep".',
+    handler: async ({ niche_or_idea }, ctx) => {
+      if (!niche_or_idea) return { type: 'error', error: 'niche_or_idea required' }
+
+      const prompt = `You are a brand strategist + creative director. User wants to bootstrap a brand from this seed: "${niche_or_idea}".
+
+Generate a full brand bootstrap package in Bahasa Indonesia. Return JSON only:
+{
+  "niche_analysis": "1-2 paragraph niche analysis — pain point yang dipecahkan, target audience, competitor angle",
+  "brand_name_suggestions": ["name1", "name2", "name3"],
+  "tagline_suggestions": ["tagline1", "tagline2"],
+  "brand_voice": "casual/formal/playful/luxury - one of these + 1 line rationale",
+  "color_palette": ["#hex1", "#hex2", "#hex3"],
+  "product_concept": "1 paragraph what the product is + key features",
+  "target_audience": "specific audience demographics + psychographics in 1 paragraph",
+  "listing_photo_prompts": [
+    "prompt 1 — clean studio shot",
+    "prompt 2 — lifestyle in-use shot",
+    "prompt 3 — hero detail close-up"
+  ],
+  "hero_video_naskah": "30s UGC-style video naskah in Indonesian, 5 shots with [0:XX-0:YY] timestamps, dialog cues, mood notes",
+  "marketing_angles": ["angle 1", "angle 2", "angle 3"]
+}
+
+Be specific to Indonesian / SEA market. Make brand names that sound natural in Indonesian (mix English/Indonesian OK).`
+
+      try {
+        const result = await callLLMJSON({
+          workspaceId: ctx.workspaceId,
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          temperature: 0.7,
+          maxOutputTokens: 3000,
+        })
+        return { type: 'brand_builder_result', seed: niche_or_idea, ...(result.parsed || {}) }
+      } catch (e) {
+        return { type: 'error', error: e.message }
+      }
+    },
+  },
+
+  // ─ Mass Image Variants (Variant Forge Lite) ─────────────────────
+  mass_image_variants: {
+    description: 'Generate multiple image variants of a product/persona across different scenes/concepts. User specifies count (5-30), scenes/concepts list, personas list. Returns gallery of N images. Use when user asks "bikin 10 variant" / "gen 20 variasi product di scene berbeda" / "mass generate images".',
+    handler: async ({ count = 6, scenes = [], hooks = [], use_product = true, use_personas = false }, ctx) => {
+      const falKey = await getFalKey(ctx.supabase, ctx.workspaceId)
+      if (!falKey) return { type: 'error', error: 'no fal.ai key configured' }
+
+      const n = Math.max(2, Math.min(20, parseInt(count) || 6))
+
+      // Build variation matrix — combine scenes × hooks if both provided,
+      // else just use scenes, else infer 4 default scenes.
+      let scenesList = Array.isArray(scenes) && scenes.length ? scenes : ['di cafe modern', 'di kamar dengan natural window light', 'di kitchen rapi', 'outdoor taman santai', 'di mobil', 'home studio minimalist']
+      let hooksList = Array.isArray(hooks) && hooks.length ? hooks : ['close-up product detail', 'lifestyle wide shot', 'hand holding product', 'over-shoulder POV', 'flat lay aesthetic']
+
+      // Generate variations — round-robin combinations.
+      const variations = []
+      for (let i = 0; i < n; i++) {
+        variations.push({
+          scene: scenesList[i % scenesList.length],
+          hook: hooksList[i % hooksList.length],
+          index: i,
+        })
+      }
+
+      // Build refs (product + persona if pinned)
+      const refUrls = []
+      if (use_product && ctx.activeProduct?.fal_url) refUrls.push(ctx.activeProduct.fal_url)
+      if (use_personas && ctx.activePersona?.id) {
+        const { data: pRefs } = await ctx.supabase
+          .from('persona_refs').select('refs(fal_url)').eq('persona_id', ctx.activePersona.id)
+        for (const r of pRefs || []) if (r.refs?.fal_url) refUrls.push(r.refs.fal_url)
+      }
+
+      const model = 'fal-ai/nano-banana/edit'
+      const cfg = ctx.activeConfig || {}
+
+      // Fire all gens in parallel with concurrency cap = 5 to stay under
+      // fal.ai rate limits + Vercel function 60s timeout. Each image gen
+      // is usually <15s, 5 concurrent x ceil(20/5) = 4 batches = ~60s max.
+      const results = []
+      const CONCURRENCY = 5
+      for (let batchStart = 0; batchStart < variations.length; batchStart += CONCURRENCY) {
+        const batch = variations.slice(batchStart, batchStart + CONCURRENCY)
+        const batchResults = await Promise.all(batch.map(async (v) => {
+          const productHint = ctx.activeProduct ? `${ctx.activeProduct.label}` : 'the product'
+          const prompt = `${v.hook} of ${productHint} ${v.scene}, professional photography, ${cfg.resolution === '1080p' ? 'highly detailed' : 'clean composition'}`
+          try {
+            const data = await falCall(model, {
+              prompt,
+              image_urls: refUrls.slice(0, 6),
+              output_format: 'jpeg',
+            }, falKey)
+            const url = data?.images?.[0]?.url || data?.image?.url
+            if (!url) return null
+
+            // Save to results
+            const { data: row } = await ctx.supabase.from('results').insert({
+              workspace_id: ctx.workspaceId,
+              persona_id: ctx.activePersona?.id || null,
+              type: 'image', url,
+              label: `Variant ${v.index + 1}`,
+              ar: cfg.ar || 'auto',
+              meta: { source: 'god-mode', batch: 'mass-variants', scene: v.scene, hook: v.hook, prompt, model },
+              created_by: ctx.userId,
+            }).select('id').single()
+
+            return { url, scene: v.scene, hook: v.hook, index: v.index, result_id: row?.id }
+          } catch (e) {
+            return { error: e.message, scene: v.scene, hook: v.hook, index: v.index }
+          }
+        }))
+        results.push(...batchResults)
+      }
+
+      return {
+        type: 'mass_variants_result',
+        count: results.filter(Boolean).length,
+        requested: n,
+        variants: results,
+        product_label: ctx.activeProduct?.label || null,
+      }
+    },
+  },
+
   // ─ Soul / LoRA training ─────────────────────────────────────────
   train_persona_soul: {
     description: 'Start training a Soul (LoRA) for a persona. Use when user explicitly asks to train soul, train persona, lock character via training. Requires persona_id + reference image URLs (from user attachments or persona refs).',
