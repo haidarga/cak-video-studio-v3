@@ -132,9 +132,25 @@ const TOOLS = {
         return { type: 'error', error: 'Prompt kosong. Coba: "bikin foto X di lokasi Y, style Z".' }
       }
 
-      if (!model && ctx.activePersona?.lora_url && ctx.activePersona?.lora_trigger_word) {
-        model = 'fal-ai/flux-lora'
-        finalPrompt = `${ctx.activePersona.lora_trigger_word}, ${finalPrompt}`
+      // ── Soul LoRA auto-inject ──
+      // If pinned persona has a trained LoRA, two things happen automatically:
+      //   1. trigger_word is prepended to the prompt (helps the model invoke
+      //      the trained character even on non-LoRA models, since the trigger
+      //      word also leaks into general latent space during training).
+      //   2. If no model override, switch to flux-lora to actually USE the
+      //      LoRA weights (the loras array is injected after buildInput).
+      // Previously the trigger word only got injected when model was unset,
+      // so picking nano-banana with a LoRA persona meant the trained
+      // character was effectively ignored. Now trigger word fires always.
+      const hasSoul = ctx.activePersona?.lora_url && ctx.activePersona?.lora_trigger_word
+      if (hasSoul) {
+        const trigger = ctx.activePersona.lora_trigger_word
+        // Only prepend if user prompt doesn't already contain the trigger
+        // — avoid double-prepending when user types the trigger themselves.
+        if (!finalPrompt.toLowerCase().includes(trigger.toLowerCase())) {
+          finalPrompt = `${trigger}, ${finalPrompt}`
+        }
+        if (!model) model = 'fal-ai/flux-lora'
       }
       if (!model) model = cfg.image_model || 'fal-ai/nano-banana/edit'
 

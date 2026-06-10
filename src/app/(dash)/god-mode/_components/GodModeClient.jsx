@@ -34,6 +34,7 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
   const [showHistory, setShowHistory] = useState(false)
   const [historyList, setHistoryList] = useState([])
   const [historyLoading, setHistoryLoading] = useState(false)
+  const [historySearch, setHistorySearch] = useState('')
   const [pendingAttachments, setPendingAttachments] = useState([])
   const [uploadBusy, setUploadBusy] = useState(false)
   // Self-contained gen state held IN THIS CHAT — never redirects to /generate.
@@ -91,10 +92,11 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
     return () => clearTimeout(timer)
   }, [messages, conversationId, activeBrand?.id])
 
-  async function loadHistory() {
+  async function loadHistory(q = '') {
     setHistoryLoading(true)
     try {
-      const res = await fetch('/api/god-mode/conversations')
+      const qs = q ? `?q=${encodeURIComponent(q)}&limit=100` : ''
+      const res = await fetch(`/api/god-mode/conversations${qs}`)
       const j = await res.json()
       if (j.ok) setHistoryList(j.conversations || [])
     } catch (e) {
@@ -102,6 +104,16 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
     }
     setHistoryLoading(false)
   }
+
+  // Debounce-search: wait 250ms after user stops typing before hitting API.
+  // Prevents firing a request per keystroke. Cancels prior pending fetch
+  // when user keeps typing.
+  useEffect(() => {
+    if (!showHistory) return
+    const t = setTimeout(() => loadHistory(historySearch), 250)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historySearch, showHistory])
 
   async function openConversation(id) {
     setBusy(true)
@@ -324,11 +336,22 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
           conversations with click-to-resume + delete affordance. */}
       {showHistory && (
         <div className="mb-3 bg-[var(--surface)] border border-[var(--border)] rounded-xl p-3 max-h-72 overflow-y-auto">
-          <div className="text-[10px] uppercase font-bold text-[var(--muted)] mb-2 px-1">
-            Recent conversations {historyLoading && '· loading...'}
+          <div className="flex items-center justify-between gap-2 mb-2 px-1">
+            <div className="text-[10px] uppercase font-bold text-[var(--muted)]">
+              Conversations {historyLoading && '· loading...'}
+            </div>
+            <input
+              type="text"
+              value={historySearch}
+              onChange={(e) => setHistorySearch(e.target.value)}
+              placeholder="Search title..."
+              className="text-xs px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)]/50 w-40"
+            />
           </div>
           {historyList.length === 0 && !historyLoading && (
-            <div className="text-xs text-[var(--muted2)] px-1 py-2">Belum ada conversation tersimpan.</div>
+            <div className="text-xs text-[var(--muted2)] px-1 py-2">
+              {historySearch ? `Gak nemu conversation dengan "${historySearch}".` : 'Belum ada conversation tersimpan.'}
+            </div>
           )}
           <div className="space-y-1">
             {historyList.map((c) => (

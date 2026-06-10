@@ -69,6 +69,10 @@ export async function POST(req) {
       kind, model,
       status: 'pending',
       duration_seconds,
+      // Store the input payload so failed jobs can be retried via
+      // /api/gen-jobs/retry without callers having to re-build the
+      // payload from scratch.
+      input: input || {},
       meta: {
         ...(meta || {}),
         raw_model: rawModel !== model ? rawModel : undefined,

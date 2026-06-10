@@ -310,10 +310,38 @@ function PersonaCard({ persona, selected, brands = [], onSelect, onEdit, onDelet
         <input type="checkbox" checked={selected} onChange={onSelect} className="mt-2 w-4 h-4" />
         <Avatar url={persona.avatar_url} name={persona.name} />
         <div className="flex-1 min-w-0">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <div className="font-bold text-lg truncate pr-2">{persona.name}</div>
-            <span className="text-[10px] font-semibold text-[#7dd3fc] border border-[#7dd3fc]/40 px-2 py-0.5 rounded">Inspired</span>
+            <div className="flex items-center gap-1 shrink-0">
+              {/* Soul LoRA status badge — surfaces training state directly
+                  on the card so user doesn't have to click into edit modal
+                  to know if a persona's character is locked via training. */}
+              {persona.lora_url && persona.lora_training_status === 'done' && (
+                <span
+                  className="text-[10px] font-semibold text-[#a78bfa] border border-[#a78bfa]/50 bg-[#a78bfa]/10 px-2 py-0.5 rounded"
+                  title={`Soul trained — trigger word: ${persona.lora_trigger_word || '?'}`}
+                >
+                  🔮 Soul
+                </span>
+              )}
+              {persona.lora_training_status === 'training' && (
+                <span className="text-[10px] font-semibold text-[#fbbf24] border border-[#fbbf24]/50 bg-[#fbbf24]/10 px-2 py-0.5 rounded">
+                  ⏳ Training
+                </span>
+              )}
+              {persona.lora_training_status === 'failed' && (
+                <span className="text-[10px] font-semibold text-[#ef4444] border border-[#ef4444]/50 bg-[#ef4444]/10 px-2 py-0.5 rounded">
+                  ⚠ Train failed
+                </span>
+              )}
+              <span className="text-[10px] font-semibold text-[#7dd3fc] border border-[#7dd3fc]/40 px-2 py-0.5 rounded">Inspired</span>
+            </div>
           </div>
+          {persona.lora_url && persona.lora_training_status === 'done' && persona.lora_trigger_word && (
+            <div className="text-[10px] text-[#a78bfa]/80 mt-0.5 font-mono">
+              trigger: <span className="font-bold">{persona.lora_trigger_word}</span>
+            </div>
+          )}
           {persona.username && <div className="text-xs text-[#93c5fd]">@{persona.username}</div>}
           <div className="text-xs text-[var(--muted)] mt-1">
             {persona.role_label || persona.occupation || '—'}

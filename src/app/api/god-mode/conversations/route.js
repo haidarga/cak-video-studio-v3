@@ -63,17 +63,30 @@ export async function GET(req) {
     return NextResponse.json({ ok: true, conversation: data })
   }
 
-  // List view — metadata only (no messages payload).
-  const { data, error } = await supabase
+  // List view — metadata only (no messages payload). Supports:
+  //   - ?q=text     — case-insensitive substring match on title
+  //   - ?brand_id   — filter by brand
+  //   - ?limit      — override default 50 (max 200)
+  // Title search uses ilike; for deeper full-text search across messages
+  // body, add a tsvector column in a future migration.
+  const q = (url.searchParams.get('q') || '').trim()
+  const brandFilter = url.searchParams.get('brand_id') || null
+  const limit = Math.min(200, Math.max(10, parseInt(url.searchParams.get('limit')) || 50))
+
+  let query = supabase
     .from('god_mode_conversations')
     .select('id, title, brand_id, message_count, created_at, updated_at')
     .eq('user_id', user.id)
     .eq('workspace_id', ws.id)
     .eq('archived', false)
     .order('updated_at', { ascending: false })
-    .limit(50)
+    .limit(limit)
+  if (q) query = query.ilike('title', `%${q}%`)
+  if (brandFilter) query = query.eq('brand_id', brandFilter)
+
+  const { data, error } = await query
   if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
-  return NextResponse.json({ ok: true, conversations: data || [] })
+  return NextResponse.json({ ok: true, conversations: data || [], filters: { q, brand_id: brandFilter, limit } })
 }
 
 export async function POST(req) {
