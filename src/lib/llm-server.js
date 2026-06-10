@@ -229,10 +229,14 @@ export async function callLLM({ workspaceId, contents, generationConfig = {}, mo
 }
 
 // JSON convenience wrapper.
-export async function callLLMJSON({ workspaceId, contents, temperature = 0.7, maxOutputTokens = 4096, modelOverride } = {}) {
+export async function callLLMJSON({ workspaceId, contents, temperature = 0.7, maxOutputTokens = 4096, modelOverride, ...extra } = {}) {
+  // Spread `extra` so callers can pass through Gemini-specific knobs like
+  // mediaResolution ('low'|'medium'|'high' — controls how many pixels per
+  // frame the model processes). For YouTube file_data calls, 'low' (360p)
+  // is 3-4x faster than default + uses ~5x fewer tokens.
   const { text, model } = await callLLM({
     workspaceId, contents, modelOverride,
-    generationConfig: { temperature, maxOutputTokens, responseMimeType: 'application/json' },
+    generationConfig: { temperature, maxOutputTokens, responseMimeType: 'application/json', ...extra },
   })
   let clean = text.replace(/```json|```/g, '').trim()
   const first = clean.indexOf('{')

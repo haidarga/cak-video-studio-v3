@@ -782,10 +782,17 @@ Return JSON only with these fields:
 
       try {
         let videoPart
+        let mediaResolution = null
         if (isYouTube) {
           // YouTube → file_data with the URL. Gemini fetches natively.
           // mime_type 'video/*' lets the API auto-detect format.
+          // mediaResolution: 'low' (360p) makes Gemini process ~3-4x
+          // faster + uses ~5x fewer tokens, critical to stay under the
+          // Vercel function timeout (60s Hobby / 120s Pro). Quality is
+          // still plenty for the kind of metadata we're extracting
+          // (style/camera/mood/pacing don't need 1080p frames).
           videoPart = { file_data: { mime_type: 'video/*', file_uri: urlToAnalyze } }
+          mediaResolution = 'low'
         } else {
           // Direct video URL — fetch + inline. Check size first.
           const head = await fetch(urlToAnalyze, { method: 'HEAD' })
@@ -806,15 +813,30 @@ Return JSON only with these fields:
           videoPart = { inline_data: { mime_type: mimeType, data: videoBuf.toString('base64') } }
         }
 
+        // mediaResolution 'low' bakes into generationConfig only when set —
+        // for inline_data (R2 mp4) it doesn't apply, only for file_data
+        // YouTube fetches.
+        const generationConfig = {
+          temperature: 0.4,
+          maxOutputTokens: 1500, // tighter than original 3000 — analysis fits
+          ...(mediaResolution ? { mediaResolution } : {}),
+        }
         const result = await callLLMJSON({
           workspaceId: ctx.workspaceId,
           contents: [{ role: 'user', parts: [{ text: analyzePrompt }, videoPart] }],
-          temperature: 0.4,
-          maxOutputTokens: 3000,
+          ...generationConfig,
         })
         return { type: 'video_analysis', source_url: urlToAnalyze, ...(result.parsed || {}) }
       } catch (e) {
-        return { type: 'error', error: `Analisis gagal: ${e.message}. Coba upload video langsung lewat 📎 kalo URL nya bermasalah.` }
+        const msg = String(e?.message || e)
+        // Surface timeout-specific guidance so user knows next step.
+        if (/timeout|deadline|504|exceeded/i.test(msg)) {
+          return {
+            type: 'error',
+            error: `Gemini analyze YouTube kelamaan (Vercel function limit). Workaround: download videonya pake ssstik.io / yt-dlp, upload mp4 ke chat lewat 📎 — analyze dari upload jauh lebih cepat (file lokal di R2, gak perlu Gemini fetch YouTube).`,
+          }
+        }
+        return { type: 'error', error: `Analisis gagal: ${msg}. Coba upload video langsung lewat 📎.` }
       }
     },
   },

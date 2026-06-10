@@ -266,7 +266,10 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
       try { j = JSON.parse(raw) }
       catch {
         if (res.status === 504 || res.status === 502 || res.status === 408) {
-          throw new Error(`Agent timeout (${res.status}). Video gen kemungkinan masih jalan di fal.ai server-side — coba "cek status gen terakhir" untuk poll hasilnya, atau tunggu 2-3 menit lalu refresh.`)
+          // 504 has multiple possible causes — be honest about which one
+          // based on the request shape. Video gen would still be running
+          // server-side; analyze (YouTube via Gemini) is just slow upstream.
+          throw new Error(`Agent timeout (${res.status}). Kemungkinan penyebabnya: (1) Video gen masih jalan di fal — coba "cek status gen terakhir" buat poll. (2) Analyze YouTube via Gemini lagi lama — coba lagi atau download mp4 dulu lalu upload (lebih cepat). (3) URL paste tapi Gemini gak bisa fetch — pakai upload langsung.`)
         }
         throw new Error(`Server return non-JSON response (status ${res.status}). Kemungkinan function timeout atau crash. Body: ${raw.slice(0, 100)}`)
       }
