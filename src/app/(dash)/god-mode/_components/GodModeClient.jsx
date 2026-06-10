@@ -1276,7 +1276,7 @@ function GenImageResult({ result, onAction }) {
           {result.ar && <span>📐 {result.ar}</span>}
         </div>
         <div className="flex flex-wrap gap-1">
-          <button type="button" onClick={() => onAction?.('continue_shot', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--accent)]/30 border border-[var(--accent)]/60 text-white font-bold hover:bg-[var(--accent)]/50 disabled:opacity-40 disabled:cursor-not-allowed" disabled={busy}>🎬 Continue</button>
+          <button type="button" onClick={() => onAction?.('continue_shot', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--accent)]/30 border border-[var(--accent)]/60 text-white font-bold hover:bg-[var(--accent)]/50">🎬 Continue</button>
           <button type="button" onClick={() => onAction?.('animate', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--accent)]/20 border border-[var(--accent)]/40 text-[var(--accent)] font-semibold">▶ Animate</button>
           <button type="button" onClick={() => onAction?.('regen_image', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)]">↻ Regenerate</button>
           <button type="button" onClick={() => onAction?.('predict_virality', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)] cursor-pointer">📊 Score</button>
@@ -1300,7 +1300,7 @@ function GenVideoResult({ result, onAction }) {
           {result.audio !== undefined && <span>🔊 {result.audio ? 'audio' : 'silent'}</span>}
         </div>
         <div className="flex flex-wrap gap-1">
-          <button type="button" onClick={() => onAction?.('continue_shot', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--accent)]/30 border border-[var(--accent)]/60 text-white font-bold hover:bg-[var(--accent)]/50 disabled:opacity-40 disabled:cursor-not-allowed" disabled={busy}>🎬 Continue</button>
+          <button type="button" onClick={() => onAction?.('continue_shot', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--accent)]/30 border border-[var(--accent)]/60 text-white font-bold hover:bg-[var(--accent)]/50">🎬 Continue</button>
           <button type="button" onClick={() => onAction?.('regen_video', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--accent)]/20 border border-[var(--accent)]/40 text-[var(--accent)] font-semibold">↻ Regenerate</button>
           <button type="button" onClick={() => onAction?.('predict_virality', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)] cursor-pointer">📊 Score</button>
           <a href={result.url} target="_blank" rel="noreferrer" className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)]">⬇ Download</a>
