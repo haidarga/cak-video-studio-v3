@@ -292,6 +292,7 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
   // Quick-action pills above input. Each fires a pre-canned prompt at the
   // agent so users can discover tools without typing.
   const QUICK_ACTIONS = [
+    { label: '🎬 Continue last shot', prompt: 'Lanjutin shot terakhir, sama persona/style tapi scene berikutnya. Bikin shot 2.' },
     { label: '🎥 Browse cinematic presets', prompt: 'Tampilkan semua cinematic presets yang ada, group by category' },
     { label: '🎯 Bullet time effect', prompt: 'Bikin preset bullet time effect untuk produk' },
     { label: '📦 Product 360 spin', prompt: 'Suggest preset untuk product 360 degree spin showcase' },

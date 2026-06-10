@@ -1330,20 +1330,39 @@ Return JSON only, no prose. No markdown fences. Be specific, no generic filler.`
   continue_shot: {
     description: 'Generate the NEXT shot in a sequence based on the most recent gen_image / gen_video in this conversation. Same character/style/setting carried over, only the action/moment advances. Use when user says "next shot", "lanjutin", "shot 2", "continue dari yang tadi", "shot berikutnya tapi dia lagi X". Optional `next_action` describes what the new shot shows.',
     handler: async ({ next_action, kind }, ctx) => {
-      // Find most recent gen result in conversation history. Skip queued
-      // / pending types — only completed results carry usable metadata.
+      // Find most recent gen result in conversation history. Cover all
+      // gen-producing types — original bug: only checked gen_image_result
+      // and gen_video_result so multi-queued / url-marketing / still-
+      // queued shots were invisible and continue_shot returned "no gen
+      // found" even right after a successful gen.
       const allMsgs = ctx.messages || []
       let lastGen = null
       for (let i = allMsgs.length - 1; i >= 0; i--) {
         const m = allMsgs[i]
         const r = m?.result
-        if (r && (r.type === 'gen_image_result' || r.type === 'gen_video_result')) {
+        if (!r) continue
+        // Single result types — direct match
+        if (r.type === 'gen_image_result' || r.type === 'gen_video_result') {
           lastGen = r
           break
         }
+        // Queued (still polling) — agent can continue based on its
+        // recorded regen_payload even before resolution
+        if (r.type === 'gen_video_queued' && r.regen_payload) {
+          lastGen = { ...r, type: 'gen_video_result' } // normalize
+          break
+        }
+        // Multi-queued — pick first item (most recently submitted shot)
+        if (r.type === 'gen_video_multi_queued' && Array.isArray(r.items)) {
+          const firstOk = r.items.find((it) => it?.type === 'gen_video_queued' && it.regen_payload)
+          if (firstOk) {
+            lastGen = { ...firstOk, type: 'gen_video_result' }
+            break
+          }
+        }
       }
       if (!lastGen) {
-        return { type: 'error', error: 'Belum ada gen result di chat ini buat dilanjutin. Bikin shot pertama dulu pake gen_image atau gen_video.' }
+        return { type: 'error', error: 'Belum ada gen result di chat ini buat dilanjutin. Bikin shot pertama dulu pake gen_image / gen_video / gen_image_from_url / gen_marketing_video_from_url.' }
       }
 
       const isVideoSource = lastGen.type === 'gen_video_result'
@@ -1579,6 +1598,8 @@ MODEL VARIANT RULES (CRITICAL):
   - Detect model overrides in prompt: "pake Kling 3" -> 'fal-ai/kling-video/v3/image-to-video', "Kling Pro" -> '/v3/pro/image-to-video', "Seedance" -> 'bytedance/seedance-2.0/fast/image-to-video', "Veo" -> 'fal-ai/veo3', "Grok" -> 'xai/grok-imagine-video/image-to-video', "GPT Image 2 Edit" -> 'openai/gpt-image-2/edit', "Nano Banana" -> 'fal-ai/nano-banana/edit'.
 - If user uploads/attaches a video and says "analyze" or "make like this", call analyze_reference_video.
 - If user uploads/attaches image/video and asks to score / predict virality, call predict_virality.
+
+- CONTINUE / NEXT SHOT: ANY signal that user wants the next shot in a sequence — "lanjutin", "next", "shot 2", "shot berikutnya", "continue dong", "bikin lagi tapi scene X", "dia sekarang lagi Y" (referring to recently-shown character) — MUST call continue_shot. continue_shot auto-references the most recent gen result from the conversation (works for gen_image, gen_video, gen_marketing_video_from_url, multi-queued, etc). Pass `next_action` if user specified what changes. NEVER reply "bikin shot baru aja" — that loses continuity.
 
 - YOUTUBE URL HANDLING (IMPORTANT — don't refuse, use the tool that works):
   - YouTube URLs DO work with analyze_reference_video (Gemini fetches natively via file_data).
