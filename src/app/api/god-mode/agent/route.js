@@ -930,7 +930,11 @@ Return JSON only with these fields:
           // still plenty for the kind of metadata we're extracting
           // (style/camera/mood/pacing don't need 1080p frames).
           videoPart = { file_data: { mime_type: 'video/*', file_uri: urlToAnalyze } }
-          mediaResolution = 'low'
+          // Gemini's generation_config.media_resolution is an ENUM, not
+          // a plain string. Sending 'low' returns 400 Invalid Value;
+          // the API wants the full enum name MEDIA_RESOLUTION_LOW.
+          // Same for MEDIUM / HIGH variants if we ever bump quality.
+          mediaResolution = 'MEDIA_RESOLUTION_LOW'
         } else {
           // Direct video URL — fetch + inline. Check size first.
           const head = await fetch(urlToAnalyze, { method: 'HEAD' })
