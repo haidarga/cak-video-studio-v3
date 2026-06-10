@@ -17,6 +17,7 @@ import { callLLMJSON, callLLM } from '@/lib/llm-server'
 import { CINEMATIC_PRESETS, CINEMATIC_CATEGORIES, getPresetById } from '@/lib/cinematic-presets'
 import { IMAGE_MODELS, VIDEO_MODELS } from '@/lib/fal-client'
 import { canonicalFalPath, candidateFalPaths } from '@/lib/fal-paths'
+import { assertBudget, estimateFalCost } from '@/lib/budget-gate'
 
 export const runtime = 'nodejs'
 export const maxDuration = 120
@@ -338,6 +339,14 @@ const TOOLS = {
         return { type: 'error', error: e.message }
       }
 
+      // Budget gate — refuse the gen if the workspace's daily/monthly
+      // budget would be busted. WITHOUT this, god-mode chat became the
+      // only fal-spending surface that bypassed the limit. assertBudget
+      // is fail-closed so a DB read hiccup blocks rather than allows.
+      const imgProjected = estimateFalCost(model, input || {})
+      const imgGate = await assertBudget(ctx.supabase, ctx.workspaceId, { projectedUsd: imgProjected })
+      if (!imgGate.ok) return { type: 'error', error: imgGate.reason, gate: imgGate }
+
       try {
         const data = await falCall(model, input, falKey)
         const url = data?.images?.[0]?.url || data?.image?.url || data?.url
@@ -468,6 +477,13 @@ const TOOLS = {
       })
 
       try {
+        // Budget gate BEFORE submit — videos are the most expensive
+        // calls in the app ($0.07-$0.28/dtk × duration). 10 unchecked
+        // 10s seedance gens = $24 burned through god-mode chat alone.
+        const vidProjected = estimateFalCost(model, input || {})
+        const vidGate = await assertBudget(ctx.supabase, ctx.workspaceId, { projectedUsd: vidProjected })
+        if (!vidGate.ok) return { type: 'error', error: vidGate.reason, gate: vidGate }
+
         // Canonicalize model path before ANY queue.fal.run call. fal
         // accepts vendor aliases at submit (`bytedance/seedance-2.0/...`)
         // but anchors request_ids on canonical paths (`fal-ai/seedance-2/
@@ -671,6 +687,12 @@ HTML: ${html.slice(0, 22000)}`
           return { type: 'error', error: e.message }
         }
 
+        // Budget gate before falCall — url_marketing fires 1 image gen
+        // per call, gate guards against bulk-runs blowing daily limit.
+        const urlImgProjected = estimateFalCost(imageModel, input || {})
+        const urlImgGate = await assertBudget(ctx.supabase, ctx.workspaceId, { projectedUsd: urlImgProjected })
+        if (!urlImgGate.ok) return { type: 'error', error: urlImgGate.reason, gate: urlImgGate }
+
         const data = await falCall(imageModel, input, falKey)
         const imageUrl = data?.images?.[0]?.url || data?.image?.url
         if (!imageUrl) return { type: 'error', error: 'no image url in fal response' }
@@ -769,6 +791,12 @@ HTML: ${html.slice(0, 22000)}`
           aspect_ratio: finalAr,
           resolution: cfg.resolution,
         })
+        // Budget gate before video submit — url_marketing video is the
+        // most expensive single tool ($0.07-$0.28/dtk × duration).
+        const urlVidProjected = estimateFalCost(videoModel, videoInput || {})
+        const urlVidGate = await assertBudget(ctx.supabase, ctx.workspaceId, { projectedUsd: urlVidProjected })
+        if (!urlVidGate.ok) return { type: 'error', error: urlVidGate.reason, gate: urlVidGate }
+
         // Canonicalize before queue calls — see src/lib/fal-paths.js
         const wireVideoModel = canonicalFalPath(videoModel)
         const submitRes = await fetch(`https://queue.fal.run/${wireVideoModel}`, {
