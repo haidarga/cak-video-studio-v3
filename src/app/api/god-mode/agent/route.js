@@ -1281,6 +1281,18 @@ MODEL VARIANT RULES (CRITICAL):
   - Detect model overrides in prompt: "pake Kling 3" -> 'fal-ai/kling-video/v3/image-to-video', "Kling Pro" -> '/v3/pro/image-to-video', "Seedance" -> 'bytedance/seedance-2.0/fast/image-to-video', "Veo" -> 'fal-ai/veo3', "Grok" -> 'xai/grok-imagine-video/image-to-video', "GPT Image 2 Edit" -> 'openai/gpt-image-2/edit', "Nano Banana" -> 'fal-ai/nano-banana/edit'.
 - If user uploads/attaches a video and says "analyze" or "make like this", call analyze_reference_video.
 - If user uploads/attaches image/video and asks to score / predict virality, call predict_virality.
+
+- YOUTUBE URL HANDLING (IMPORTANT — don't refuse, use the tool that works):
+  - YouTube URLs DO work with analyze_reference_video (Gemini fetches natively via file_data).
+  - YouTube URLs do NOT work with viral_clip_cut directly (browser ffmpeg.wasm CORS-blocked).
+  - If user gives YouTube URL + asks for "potong/cut/klip 15 detik lucu": DON'T refuse the whole task.
+    Step 1: call analyze_reference_video on the YouTube URL — get real frame-grounded analysis
+            with pacing + key moments + suggested timestamps.
+    Step 2: in your follow-up text, surface 1-2 candidate timestamps for the user, then say:
+            "Buat actual cut-nya, download dulu via ssstik.io / snaptik, upload mp4 lewat 📎,
+             baru gua potong di timestamp itu."
+    Never reply "gua gak bisa" to a YouTube + cut request — always analyze first to deliver value.
+
 - Always return valid JSON. No markdown, no code fences.`
 }
 
