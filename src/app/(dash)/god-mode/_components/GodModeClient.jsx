@@ -187,17 +187,24 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
   }
 
   // Action buttons on gen results trigger follow-up gens (regenerate,
-  // animate from image, score virality). Translates the click into a chat
-  // message so the existing send() pipeline handles it.
+  // animate from image, score virality, continue shot). Some actions
+  // (PersonaListPicker, compose-prompt) pass an object instead of
+  // (action, result) — handle both shapes.
   async function handleResultAction(action, result) {
-    if (action === 'regen_image') {
+    // PersonaListPicker compose-prompt action — single object arg
+    if (typeof action === 'object' && action?.type === 'compose-prompt') {
+      setInput(action.text || '')
+      return
+    }
+    if (action === 'continue_shot') {
+      await send('Lanjutin shot ini — sama persona/style/setting tapi advance ke moment berikutnya. Bikin shot 2.')
+    } else if (action === 'regen_image') {
       const p = result.regen_payload || {}
       await send(`Regenerate ulang gambar barusan${p.prompt ? `: ${p.prompt}` : ''}`)
     } else if (action === 'regen_video') {
       const p = result.regen_payload || {}
       await send(`Regenerate ulang video barusan${p.motion_prompt ? `: ${p.motion_prompt}` : ''}`)
     } else if (action === 'animate') {
-      // Animate the image — send instruction to gen_video with image_url.
       await send(`Animate gambar ini jadi video ${genConfig.duration}s, pakai cinematic preset yang aktif. Image URL: ${result.url}`)
     } else if (action === 'predict_virality') {
       await send(`Score virality dari ${result.type === 'gen_video_result' ? 'video' : 'gambar'} ini: ${result.url}`)
@@ -671,29 +678,7 @@ function ToolResult({ result, personas, onPresetUse, onPersonaPick, onProductPic
     )
   }
   if (result.type === 'persona_list') {
-    return (
-      <div className="mt-3">
-        {result.personas.length === 0 ? (
-          <div className="text-xs text-[var(--muted2)]">Belum ada persona di brand ini. Bikin dulu di <Link href="/personas" className="underline">/personas</Link></div>
-        ) : (
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-1.5">
-            {result.personas.map((p) => (
-              <button
-                key={p.id}
-                onClick={() => onPersonaPick && onPersonaPick(p)}
-                className="flex items-center gap-2 bg-[var(--surface)] border border-[var(--border)] rounded p-2 hover:border-[var(--accent)]/50 hover:bg-[var(--surface2)] text-left">
-                {p.avatar_url ? <img src={p.avatar_url} alt="" className="w-8 h-8 rounded-full object-cover" /> : <div className="w-8 h-8 rounded-full bg-[var(--surface2)] flex items-center justify-center text-xs">{p.name?.[0]}</div>}
-                <div className="min-w-0">
-                  <div className="text-xs font-semibold truncate">{p.name}</div>
-                  <div className="text-[10px] text-[var(--muted2)] truncate">@{p.username || '—'}</div>
-                  {p.lora_url && <div className="text-[9px] text-[var(--accent)]">🧬 Soul trained</div>}
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-    )
+    return <PersonaListPicker result={result} onPersonaPick={onPersonaPick} onAction={onAction} />
   }
   if (result.type === 'product_ref_list') {
     return (
@@ -775,6 +760,110 @@ function ToolResult({ result, personas, onPresetUse, onPersonaPick, onProductPic
 // Runs ffmpeg.wasm cuts client-side, uploads each result to R2.
 // Tool returned a "pending" — we do the actual work here in the browser
 // to avoid coupling v3 to v2 HF Space backend (see src/lib/clip-cutter-client.js).
+// Multi-select persona picker. User can:
+//  - Click a card to toggle selection
+//  - "Pick" button: set first selected as activePersona (single-pick)
+//  - "Send N to chat": types the persona names into the chat input so agent
+//    can use them in next gen (e.g. "bikin video dengan Kevin, Marcus, Eric")
+//  - "Clear" resets selection
+function PersonaListPicker({ result, onPersonaPick, onAction }) {
+  const [selected, setSelected] = useState(new Set())
+  const toggle = (id) => {
+    setSelected((s) => {
+      const next = new Set(s)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  const personas = result.personas || []
+  const pickedList = personas.filter((p) => selected.has(p.id))
+  const hasSelection = pickedList.length > 0
+
+  function setAsActive() {
+    if (!pickedList[0]) return
+    onPersonaPick?.(pickedList[0])
+    if (pickedList.length > 1) {
+      // Surface multi-select via chat input
+      onAction?.({
+        type: 'compose-prompt',
+        text: `Pake personas ini buat shots berikutnya: ${pickedList.map((p) => p.name).join(', ')}. Set ${pickedList[0].name} sebagai active dulu, sisanya disebut di prompt biar agent rotate.`,
+      })
+    }
+  }
+  function sendToChat() {
+    onAction?.({
+      type: 'compose-prompt',
+      text: `Bikin video pake ${pickedList.length} persona ini sebagai talents: ${pickedList.map((p) => `${p.name} (@${p.username})`).join(', ')}. Rotate per shot.`,
+    })
+  }
+
+  return (
+    <div className="mt-3">
+      {personas.length === 0 ? (
+        <div className="text-xs text-[var(--muted2)]">Belum ada persona di brand ini. Bikin dulu di <Link href="/personas" className="underline">/personas</Link></div>
+      ) : (
+        <>
+          <div className="text-[10px] uppercase text-[var(--muted)] mb-1.5 flex items-center justify-between">
+            <span>{personas.length} personas — tap to multi-select</span>
+            {hasSelection && (
+              <span className="text-[var(--accent)] font-bold">{pickedList.length} picked</span>
+            )}
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-1.5">
+            {personas.map((p) => {
+              const isOn = selected.has(p.id)
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => toggle(p.id)}
+                  className={`flex items-center gap-2 rounded p-2 text-left transition-all ${
+                    isOn
+                      ? 'bg-[var(--accent)]/15 border border-[var(--accent)] shadow-[0_0_12px_var(--accent-soft)]'
+                      : 'bg-[var(--surface)] border border-[var(--border)] hover:border-[var(--accent)]/50 hover:bg-[var(--surface2)]'
+                  }`}>
+                  <div className="relative shrink-0">
+                    {p.avatar_url ? <img src={p.avatar_url} alt="" className="w-8 h-8 rounded-full object-cover" /> : <div className="w-8 h-8 rounded-full bg-[var(--surface2)] flex items-center justify-center text-xs">{p.name?.[0]}</div>}
+                    {isOn && (
+                      <span className="absolute -top-1 -right-1 w-4 h-4 bg-[var(--accent)] text-white text-[9px] font-bold rounded-full flex items-center justify-center shadow-md">✓</span>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-semibold truncate">{p.name}</div>
+                    <div className="text-[10px] text-[var(--muted2)] truncate">@{p.username || '—'}</div>
+                    {p.lora_url && <div className="text-[9px] text-[var(--accent)]">🧬 Soul trained</div>}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+          {hasSelection && (
+            <div className="mt-2 flex gap-1.5 items-center text-[11px]">
+              <button
+                onClick={setAsActive}
+                className="px-3 py-1.5 rounded bg-[var(--accent)] hover:bg-[var(--accent-bright)] text-white font-semibold">
+                ★ Set {pickedList[0]?.name} active
+              </button>
+              {pickedList.length > 1 && (
+                <button
+                  onClick={sendToChat}
+                  className="px-3 py-1.5 rounded bg-[var(--surface2)] border border-[var(--accent)]/40 hover:bg-[var(--accent-soft)] font-semibold">
+                  💬 Send {pickedList.length} to chat
+                </button>
+              )}
+              <button
+                onClick={() => setSelected(new Set())}
+                className="px-2 py-1.5 rounded text-[var(--muted)] hover:text-white hover:bg-[var(--surface2)]">
+                Clear
+              </button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
 function ViralClipPending({ result }) {
   const [status, setStatus] = useState('init')
   const [progress, setProgress] = useState('')
@@ -1177,9 +1266,10 @@ function GenImageResult({ result, onAction }) {
           {result.ar && <span>📐 {result.ar}</span>}
         </div>
         <div className="flex flex-wrap gap-1">
-          <button onClick={() => onAction?.('animate', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--accent)]/20 border border-[var(--accent)]/40 text-[var(--accent)] font-semibold">🎬 Animate</button>
-          <button onClick={() => onAction?.('regen_image', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)]">↻ Regenerate</button>
-          <button onClick={() => onAction?.('predict_virality', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)]">📊 Score</button>
+          <button type="button" onClick={() => onAction?.('continue_shot', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--accent)]/30 border border-[var(--accent)]/60 text-white font-bold hover:bg-[var(--accent)]/50">🎬 Continue</button>
+          <button type="button" onClick={() => onAction?.('animate', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--accent)]/20 border border-[var(--accent)]/40 text-[var(--accent)] font-semibold">▶ Animate</button>
+          <button type="button" onClick={() => onAction?.('regen_image', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)]">↻ Regenerate</button>
+          <button type="button" onClick={() => onAction?.('predict_virality', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)] cursor-pointer">📊 Score</button>
           <a href={result.url} target="_blank" rel="noreferrer" className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)]">⬇ Download</a>
           {result.result_id && <Link href={`/qc#${result.result_id}`} className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)]">🧪 QC</Link>}
         </div>
@@ -1200,8 +1290,9 @@ function GenVideoResult({ result, onAction }) {
           {result.audio !== undefined && <span>🔊 {result.audio ? 'audio' : 'silent'}</span>}
         </div>
         <div className="flex flex-wrap gap-1">
-          <button onClick={() => onAction?.('regen_video', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--accent)]/20 border border-[var(--accent)]/40 text-[var(--accent)] font-semibold">↻ Regenerate</button>
-          <button onClick={() => onAction?.('predict_virality', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)]">📊 Score</button>
+          <button type="button" onClick={() => onAction?.('continue_shot', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--accent)]/30 border border-[var(--accent)]/60 text-white font-bold hover:bg-[var(--accent)]/50">🎬 Continue</button>
+          <button type="button" onClick={() => onAction?.('regen_video', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--accent)]/20 border border-[var(--accent)]/40 text-[var(--accent)] font-semibold">↻ Regenerate</button>
+          <button type="button" onClick={() => onAction?.('predict_virality', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)] cursor-pointer">📊 Score</button>
           <a href={result.url} target="_blank" rel="noreferrer" className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)]">⬇ Download</a>
           {result.result_id && <Link href={`/qc#${result.result_id}`} className="text-[10px] px-2 py-1 rounded bg-[var(--accent)]/20 border border-[var(--accent)]/40 text-[var(--accent)]">🧪 QC</Link>}
           {result.result_id && <Link href={`/editor`} className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)]">✂ Editor</Link>}
