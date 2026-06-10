@@ -7,7 +7,7 @@
 //   3. Let other endpoints (e.g. mass-variants worker) reuse the same
 //      per-model field-name logic without copy-paste
 
-import { canonicalFalPath } from '@/lib/fal-paths'
+import { canonicalFalPath, candidateFalPaths } from '@/lib/fal-paths'
 
 // ── Product fidelity directive ───────────────────────────────────────
 // Injects the active product's textual knowledge (description, dimensions,
@@ -208,21 +208,43 @@ export function buildImageInputForModel(model, { prompt, refs, ar, quality }) {
 // ── Fal sync helper ──────────────────────────────────────────────────
 // Lightweight wrapper for endpoints that finish quickly (image gen).
 // For video gen which takes 1-3 min, use the queue + webhook pattern
-// (see src/lib/fal-client.js). Always canonicalizes model path first
-// to avoid alias/canonical mismatch bugs (see src/lib/fal-paths.js).
+// (see src/lib/fal-client.js).
+//
+// DEFENSIVE MULTI-PATH submit: tries canonical first, then alias forms,
+// then algorithmic derivations. The catalog has historically had wrong
+// model paths (e.g. `xai/grok-imagine-image/quality/edit` — "/quality"
+// isn't a path segment, it's the resolution PARAMETER `quality: '1k'`).
+// Without multi-path, one bad catalog entry breaks the whole tool.
+// Returns the result from the first path that works. Throws the last
+// error if none work.
 export async function falCall(model, input, falKey) {
-  const wireModel = canonicalFalPath(model)
-  const res = await fetch(`https://fal.run/${wireModel}`, {
-    method: 'POST',
-    headers: { 'Authorization': `Key ${falKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(input),
-  })
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) {
-    const msg = data?.detail || data?.error || `fal.ai ${res.status}`
-    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
+  const candidates = candidateFalPaths(model)
+  let lastError = null
+
+  for (const wireModel of candidates) {
+    try {
+      const res = await fetch(`https://fal.run/${wireModel}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Key ${falKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok) return data
+
+      const msg = data?.detail || data?.error || `fal.ai ${res.status}`
+      const msgStr = typeof msg === 'string' ? msg : JSON.stringify(msg)
+      // Skip "Path /X not found" + 404 to next candidate — that's the
+      // catalog-has-wrong-path bug. For 4xx like 422 (content rejected)
+      // or 5xx, the path was probably correct + retrying won't help.
+      const isPathMiss = res.status === 404 || /path .* not found/i.test(msgStr)
+      lastError = new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
+      if (!isPathMiss) throw lastError
+    } catch (e) {
+      lastError = e
+      if (!/path .* not found|404/i.test(String(e?.message || e))) throw e
+    }
   }
-  return data
+  throw lastError || new Error('all fal path candidates failed')
 }
 
 // ── Fetch URL → trimmed HTML ─────────────────────────────────────────

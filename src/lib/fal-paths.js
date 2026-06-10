@@ -49,6 +49,13 @@ const ALIAS_MAP = {
   // shows fal-ai/xai/reference-to-video and fal-ai/xai/image-to-video.
   'xai/grok-imagine-video/reference-to-video': 'fal-ai/xai/reference-to-video',
   'xai/grok-imagine-video/image-to-video': 'fal-ai/xai/image-to-video',
+
+  // ── xAI Grok Imagine Image Edit ──
+  // Catalog used to have `/quality/edit` but "/quality" isn't a path
+  // segment — it's the resolution parameter (`quality: '1k'|'2k'` in body).
+  // Old broken alias kept here so legacy preferences resolve correctly.
+  'xai/grok-imagine-image/quality/edit': 'fal-ai/xai/grok-imagine-image/edit',
+  'xai/grok-imagine-image/edit': 'fal-ai/xai/grok-imagine-image/edit',
 }
 
 // Reverse lookup so we can also normalize when caller passed canonical.

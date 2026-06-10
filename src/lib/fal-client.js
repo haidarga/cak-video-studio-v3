@@ -439,5 +439,8 @@ export const IMAGE_MODELS = [
   { v: 'fal-ai/nano-banana-2/edit', l: 'Nano Banana 2 — fast multi-ref, outfit adapts' },
   { v: 'openai/gpt-image-2', l: '🆕 GPT Image 2 (generation mode) — refs as hints, NOT pixel-locked' },
   { v: 'openai/gpt-image-2/edit', l: 'GPT Image 2 Edit — best text, pixel-locks refs' },
-  { v: 'xai/grok-imagine-image/quality/edit', l: '🆕 Grok Imagine Edit — multi-ref, $0.05 (1k) / $0.07 (2k) + $0.01/input' },
+  // NOTE: was `xai/grok-imagine-image/quality/edit` — fal rejected
+  // "/quality" as a path segment because it's actually a PARAMETER
+  // (`quality: '1k'` in the request body, not a URL tier).
+  { v: 'xai/grok-imagine-image/edit', l: '🆕 Grok Imagine Edit — multi-ref, $0.05 (1k) / $0.07 (2k) + $0.01/input' },
 ]
