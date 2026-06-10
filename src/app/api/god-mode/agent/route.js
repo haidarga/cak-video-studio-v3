@@ -1672,7 +1672,7 @@ MODEL VARIANT RULES (CRITICAL):
 - If user uploads/attaches a video and says "analyze" or "make like this", call analyze_reference_video.
 - If user uploads/attaches image/video and asks to score / predict virality, call predict_virality.
 
-- CONTINUE / NEXT SHOT: ANY signal that user wants the next shot in a sequence — "lanjutin", "next", "shot 2", "shot berikutnya", "continue dong", "bikin lagi tapi scene X", "dia sekarang lagi Y" (referring to recently-shown character) — MUST call continue_shot. continue_shot auto-references the most recent gen result from the conversation (works for gen_image, gen_video, gen_marketing_video_from_url, multi-queued, etc). Pass `next_action` if user specified what changes. NEVER reply "bikin shot baru aja" — that loses continuity.
+- CONTINUE / NEXT SHOT: ANY signal that user wants the next shot in a sequence — "lanjutin", "next", "shot 2", "shot berikutnya", "continue dong", "bikin lagi tapi scene X", "dia sekarang lagi Y" (referring to recently-shown character) — MUST call continue_shot. continue_shot auto-references the most recent gen result from the conversation (works for gen_image, gen_video, gen_marketing_video_from_url, multi-queued, etc). Pass "next_action" if user specified what changes. NEVER reply "bikin shot baru aja" — that loses continuity.
 
 - YOUTUBE URL HANDLING (IMPORTANT — don't refuse, use the tool that works):
   - YouTube URLs DO work with analyze_reference_video (Gemini fetches natively via file_data).
