@@ -190,25 +190,35 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
   // animate from image, score virality, continue shot). Some actions
   // (PersonaListPicker, compose-prompt) pass an object instead of
   // (action, result) — handle both shapes.
+  // UX: pre-fill input so user SEES the action firing, then send.
+  // Without this, click feels broken (~3s LLM latency before bubble appears).
   async function handleResultAction(action, result) {
-    // PersonaListPicker compose-prompt action — single object arg
     if (typeof action === 'object' && action?.type === 'compose-prompt') {
       setInput(action.text || '')
       return
     }
+    if (busy) return // double-click guard
+
+    let prompt = null
     if (action === 'continue_shot') {
-      await send('Lanjutin shot ini — sama persona/style/setting tapi advance ke moment berikutnya. Bikin shot 2.')
+      prompt = 'Lanjutin shot ini — sama persona/style/setting tapi advance ke moment berikutnya. Bikin shot 2.'
     } else if (action === 'regen_image') {
       const p = result.regen_payload || {}
-      await send(`Regenerate ulang gambar barusan${p.prompt ? `: ${p.prompt}` : ''}`)
+      prompt = `Regenerate ulang gambar barusan${p.prompt ? `: ${p.prompt}` : ''}`
     } else if (action === 'regen_video') {
       const p = result.regen_payload || {}
-      await send(`Regenerate ulang video barusan${p.motion_prompt ? `: ${p.motion_prompt}` : ''}`)
+      prompt = `Regenerate ulang video barusan${p.motion_prompt ? `: ${p.motion_prompt}` : ''}`
     } else if (action === 'animate') {
-      await send(`Animate gambar ini jadi video ${genConfig.duration}s, pakai cinematic preset yang aktif. Image URL: ${result.url}`)
+      prompt = `Animate gambar ini jadi video ${genConfig.duration}s, pakai cinematic preset yang aktif. Image URL: ${result.url}`
     } else if (action === 'predict_virality') {
-      await send(`Score virality dari ${result.type === 'gen_video_result' ? 'video' : 'gambar'} ini: ${result.url}`)
+      prompt = `Score virality dari ${result.type === 'gen_video_result' ? 'video' : 'gambar'} ini: ${result.url}`
     }
+    if (!prompt) return
+
+    // Show prompt in input briefly so user sees the action firing.
+    setInput(prompt)
+    await new Promise((r) => requestAnimationFrame(r))
+    await send(prompt)
   }
 
   async function send(textOverride) {
@@ -1266,7 +1276,7 @@ function GenImageResult({ result, onAction }) {
           {result.ar && <span>📐 {result.ar}</span>}
         </div>
         <div className="flex flex-wrap gap-1">
-          <button type="button" onClick={() => onAction?.('continue_shot', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--accent)]/30 border border-[var(--accent)]/60 text-white font-bold hover:bg-[var(--accent)]/50">🎬 Continue</button>
+          <button type="button" onClick={() => onAction?.('continue_shot', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--accent)]/30 border border-[var(--accent)]/60 text-white font-bold hover:bg-[var(--accent)]/50 disabled:opacity-40 disabled:cursor-not-allowed" disabled={busy}>🎬 Continue</button>
           <button type="button" onClick={() => onAction?.('animate', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--accent)]/20 border border-[var(--accent)]/40 text-[var(--accent)] font-semibold">▶ Animate</button>
           <button type="button" onClick={() => onAction?.('regen_image', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)]">↻ Regenerate</button>
           <button type="button" onClick={() => onAction?.('predict_virality', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)] cursor-pointer">📊 Score</button>
@@ -1290,7 +1300,7 @@ function GenVideoResult({ result, onAction }) {
           {result.audio !== undefined && <span>🔊 {result.audio ? 'audio' : 'silent'}</span>}
         </div>
         <div className="flex flex-wrap gap-1">
-          <button type="button" onClick={() => onAction?.('continue_shot', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--accent)]/30 border border-[var(--accent)]/60 text-white font-bold hover:bg-[var(--accent)]/50">🎬 Continue</button>
+          <button type="button" onClick={() => onAction?.('continue_shot', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--accent)]/30 border border-[var(--accent)]/60 text-white font-bold hover:bg-[var(--accent)]/50 disabled:opacity-40 disabled:cursor-not-allowed" disabled={busy}>🎬 Continue</button>
           <button type="button" onClick={() => onAction?.('regen_video', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--accent)]/20 border border-[var(--accent)]/40 text-[var(--accent)] font-semibold">↻ Regenerate</button>
           <button type="button" onClick={() => onAction?.('predict_virality', result)} className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)] cursor-pointer">📊 Score</button>
           <a href={result.url} target="_blank" rel="noreferrer" className="text-[10px] px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] hover:bg-[var(--border)]">⬇ Download</a>
