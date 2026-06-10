@@ -729,7 +729,6 @@ HTML: ${html.slice(0, 22000)}`
     handler: async ({ video_url, attachment_index }, ctx) => {
       // Resolve source — explicit tool_input.video_url first, then recent
       // attachment, then any URL pasted earlier in the conversation
-      // (handles "analisis video diatas" / "video dari link tadi").
       let urlToAnalyze = video_url
       if (!urlToAnalyze && Array.isArray(ctx.recentAttachments)) {
         const att = ctx.recentAttachments[parseInt(attachment_index) || 0]
@@ -740,9 +739,51 @@ HTML: ${html.slice(0, 22000)}`
       }
       if (!urlToAnalyze) return { type: 'error', error: 'gak nemu URL video atau attachment buat dianalisis. Paste link video atau upload langsung.' }
 
-      const analyzePrompt = `Analyze this video reference and extract its production strategy so the user can replicate similar content. Reply in Bahasa Indonesia.
+      // ── DETECT URL KIND ──
+      // The old version blindly sent the URL text to Gemini, which DOES
+      // NOT fetch URLs. Gemini would hallucinate an analysis from training
+      // data (or pure guess) — user got bogus "2D animation cartoon"
+      // analysis on a live-action talk show. Now we route by URL kind:
+      //   1. YouTube/TikTok/IG → can't fetch frames, return explicit
+      //      warning + actionable workaround. NO hallucinated analysis.
+      //   2. Direct video file URL (.mp4/.mov/.webm) <20MB → fetch bytes,
+      //      pass to Gemini as inline_data so it sees actual frames.
+      //   3. Direct video file URL >20MB → can't inline, fall back to
+      //      metadata-only with the same warning as #1.
+      const isYouTube = /youtube\.com|youtu\.be/i.test(urlToAnalyze)
+      const isTikTok = /tiktok\.com/i.test(urlToAnalyze)
+      const isInstagram = /instagram\.com/i.test(urlToAnalyze)
+      const isPlatformURL = isYouTube || isTikTok || isInstagram
 
-Video URL: ${urlToAnalyze}
+      if (isPlatformURL) {
+        const platform = isYouTube ? 'YouTube' : isTikTok ? 'TikTok' : 'Instagram'
+        return {
+          type: 'error',
+          error: `Sori bro, gua gak bisa langsung tonton ${platform} video dari URL — Gemini gak punya akses fetch URL eksternal. Workaround: download videonya (pakai ssstik / yt-dlp / snaptik), upload mp4-nya ke chat ini lewat tombol 📎, lalu suruh gua "analisis video di atas". Cara itu gua dapet frame asli, bukan ngarang dari training data.`,
+        }
+      }
+
+      // Direct video URL — try to fetch + analyze with real frames.
+      try {
+        const head = await fetch(urlToAnalyze, { method: 'HEAD' })
+        const sizeHeader = head.headers.get('content-length')
+        const sizeMb = sizeHeader ? parseInt(sizeHeader) / 1024 / 1024 : null
+        if (sizeMb != null && sizeMb > 20) {
+          return {
+            type: 'error',
+            error: `Video ${sizeMb.toFixed(1)}MB — Gemini inline limit 20MB. Trim videonya dulu atau upload yang lebih kecil.`,
+          }
+        }
+
+        const videoRes = await fetch(urlToAnalyze)
+        if (!videoRes.ok) {
+          return { type: 'error', error: `Gagal fetch video (${videoRes.status}). Cek URL-nya valid + accessible.` }
+        }
+        const videoBuf = Buffer.from(await videoRes.arrayBuffer())
+        const mimeType = head.headers.get('content-type') || 'video/mp4'
+        const videoBase64 = videoBuf.toString('base64')
+
+        const analyzePrompt = `Analyze the attached video reference and extract its production strategy so the user can replicate similar content. Reply in Bahasa Indonesia. Base your analysis on what you actually SEE in the video frames, not assumptions from the URL.
 
 Return JSON only with these fields:
 {
@@ -750,21 +791,26 @@ Return JSON only with these fields:
   "camera": "primary camera moves used (e.g. medium shot static, push-in, handheld POV)",
   "mood": "emotional tone (e.g. authentic casual, dramatic tense, lighthearted comedy)",
   "pacing": "edit pace (e.g. 3 beats in 15s, slow contemplative, fast cuts)",
-  "character_notes": "character appearance and behavior summary",
+  "character_notes": "character appearance and behavior summary based on what you see",
   "suggested_model": "which fal.ai model is best for replicating (e.g. Grok i2v + iPhone preset, Seedance ref-to-video)",
   "replication_strategy": "step-by-step strategy to replicate this style in 1-2 paragraphs"
 }`
 
-      try {
         const result = await callLLMJSON({
           workspaceId: ctx.workspaceId,
-          contents: [{ role: 'user', parts: [{ text: analyzePrompt }] }],
+          contents: [{
+            role: 'user',
+            parts: [
+              { text: analyzePrompt },
+              { inline_data: { mime_type: mimeType, data: videoBase64 } },
+            ],
+          }],
           temperature: 0.4,
           maxOutputTokens: 3000,
         })
-        return { type: 'video_analysis', ...(result.parsed || {}) }
+        return { type: 'video_analysis', source_url: urlToAnalyze, ...(result.parsed || {}) }
       } catch (e) {
-        return { type: 'error', error: e.message }
+        return { type: 'error', error: `Analisis gagal: ${e.message}. Coba upload video lewat 📎 langsung.` }
       }
     },
   },
