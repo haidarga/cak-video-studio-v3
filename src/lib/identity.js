@@ -24,18 +24,39 @@ export function buildIdentitySentence(charsInShot = [], personas = []) {
   return parts.length ? parts.join(' and ') : null
 }
 
-// Trim brand notes to <=200 chars of visual cues only. Brand "notes" fields
-// tend to be marketing copy — most of it is irrelevant to the image model
-// (mission statements, target audience, etc). We keep the first sentence
-// plus any obvious visual descriptors (colors, shapes, materials).
+// Build a product brief for image gen. Caller passes EITHER a brand
+// object (with .notes) OR a concatenated product knowledge string.
+// Returns up to ~500 chars of relevant content.
+//
+// Previously this truncated to 200 chars + cherry-picked a hardcoded list
+// of visual keywords (red/blue/black/sachet/...). For products with rich
+// spec (UGREEN: GaN, 65W, 2x USB-C, 1x USB-A, foldable plug, matte
+// black, 5x3x2 cm), that 200-char + keyword filter DROPPED dimensions,
+// port counts, model numbers, brand text — everything the model needs
+// to render the product correctly. Result: drift across shots.
+//
+// New behavior:
+//   1. Cap at 500 chars (was 200) — still trimmed enough to not blow
+//      the diffusion token budget, but room for one paragraph of spec.
+//   2. No keyword filter — preserve user's literal description. The
+//      model is better at extracting visual cues from natural language
+//      than our regex was at second-guessing what's "visual".
+//   3. Collapse whitespace + dedupe lines so concatenated knowledge
+//      from multiple refs doesn't have repeated boilerplate.
 export function productNotesShort(brand) {
   if (!brand) return null
-  const notes = (brand.notes || brand.toString() || '').trim()
-  if (!notes) return null
-  const firstSentence = notes.split(/[.!?]\s/)[0] || ''
-  const visualCues = (notes.match(/(red|blue|green|gold|silver|black|white|matte|glossy|round|square|cylindrical|sachet|bottle|tube|jar|can|pouch|label|logo|kemasan|botol|kaleng|tube|sachet)[^.,]{0,40}/gi) || [])
-    .slice(0, 4)
-    .map((s) => s.trim())
-    .join(', ')
-  return [firstSentence, visualCues].filter(Boolean).join('. ').slice(0, 200)
+  const raw = (typeof brand === 'string' ? brand : (brand.notes || brand.description || '')).trim()
+  if (!raw) return null
+
+  // Normalize whitespace; dedupe identical lines (multi-ref concat often
+  // repeats the same brand boilerplate).
+  const lines = raw.split(/\n+/).map((l) => l.trim()).filter(Boolean)
+  const seen = new Set()
+  const unique = []
+  for (const l of lines) {
+    const key = l.toLowerCase()
+    if (!seen.has(key)) { seen.add(key); unique.push(l) }
+  }
+  const cleaned = unique.join('. ').replace(/\s+/g, ' ').trim()
+  return cleaned.slice(0, 500)
 }

@@ -215,7 +215,14 @@ export function compileImagePrompt(spec) {
   const L3_wardrobe = wardrobe ? `Wardrobe: ${wardrobe}.` : ''
   const L4_environment = environment ? `Setting: ${environment}.` : ''
   const L5_action = action || ''
-  const L6_brand = (!skipProduct && brand) ? `Product: ${brand}.` : ''
+  // L6_brand — strong product fidelity directive when a product brief is
+  // attached. Previously this was just `Product: ${brand}` which the model
+  // treated as a soft hint -> drift across shots (UGREEN turns into
+  // generic black charger by panel 5). CRITICAL anchor language + "exactly
+  // as specified" lifts compliance significantly.
+  const L6_brand = (!skipProduct && brand)
+    ? `CRITICAL PRODUCT FIDELITY: render the product EXACTLY as described, identical across every shot. ${brand}. Product label text must be sharp, legible, correctly spelled. Do NOT substitute or vary the product.`
+    : ''
   const L7_format = `${ar} composition.`
   const L8_continuity = refsCount ? 'Keep character identity consistent with references.' : ''
   // L8b — STYLE reference anchor. Tells the model the trailing N images are

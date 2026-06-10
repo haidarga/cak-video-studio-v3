@@ -23,6 +23,7 @@ import {
   buildImageInputForModel,
   falCall,
   fetchUrlAsHtml,
+  buildProductFidelityDirective,
 } from '@/lib/god-mode-builders'
 
 export const runtime = 'nodejs'
@@ -154,6 +155,15 @@ const TOOLS = {
       }
       if (!model) model = cfg.image_model || 'fal-ai/nano-banana/edit'
 
+      // ── Product fidelity directive ──
+      // Append the pinned product's textual knowledge (description, dimensions,
+      // features, label text) as a STRONG directive. Without this, the model
+      // only sees the product as a fuzzy image ref + drifts across shots.
+      // With this, the model has both visual + textual anchors -> stays
+      // consistent. Critical for branded campaigns (UGREEN, ACEKID, etc).
+      const productDirective = buildProductFidelityDirective(ctx.activeProduct)
+      if (productDirective) finalPrompt += productDirective
+
       // Auto-switch /edit variants to their text-to-image counterpart when
       // no source images are available. User asked "bikin foto X" without
       // uploading or pinning — they want pure generation, not edit.
@@ -242,6 +252,13 @@ const TOOLS = {
         finalMotion += `\n\n[Cinematic preset: ${ctx.activePreset.label}] ${ctx.activePreset.prompt}`
       }
       if (!audioOn) finalMotion += '\n\nNO dialogue, NO speech, silent ambient only.'
+
+      // Product fidelity directive — same anti-drift mechanism as gen_image.
+      // Video gen is even more prone to product drift since each frame is
+      // generated semi-independently. Strong textual anchor + image ref =
+      // best chance of identical product across all frames.
+      const vidProductDirective = buildProductFidelityDirective(ctx.activeProduct)
+      if (vidProductDirective) finalMotion += vidProductDirective
 
       // Build refs from active context. PRIORITY ORDER:
       //   1. Chat attachments (images user uploaded in this turn — primary
@@ -892,9 +909,13 @@ Be specific to Indonesian / SEA market. Make brand names that sound natural in I
       const CONCURRENCY = 5
       for (let batchStart = 0; batchStart < variations.length; batchStart += CONCURRENCY) {
         const batch = variations.slice(batchStart, batchStart + CONCURRENCY)
+        const massProductDirective = buildProductFidelityDirective(ctx.activeProduct)
         const batchResults = await Promise.all(batch.map(async (v) => {
           const productHint = ctx.activeProduct ? `${ctx.activeProduct.label}` : 'the product'
-          const prompt = `${v.hook} of ${productHint} ${v.scene}, professional photography, ${cfg.resolution === '1080p' ? 'highly detailed' : 'clean composition'}`
+          // Append the full fidelity directive so every variant gets the
+          // same product spec — without this, 20 variants drift wildly
+          // (different colors, wrong port counts, mangled label text).
+          const prompt = `${v.hook} of ${productHint} ${v.scene}, professional photography, ${cfg.resolution === '1080p' ? 'highly detailed' : 'clean composition'}${massProductDirective}`
           try {
             const data = await falCall(model, {
               prompt,

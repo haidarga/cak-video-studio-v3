@@ -9,6 +9,63 @@
 
 import { canonicalFalPath } from '@/lib/fal-paths'
 
+// ── Product fidelity directive ───────────────────────────────────────
+// Injects the active product's textual knowledge (description, dimensions,
+// features, label text, etc) into a prompt as a STRONG fidelity directive.
+// Without this, the diffusion model only sees the product as a fuzzy image
+// reference and drifts across shots — colors change, labels disappear,
+// proportions shift. With this, the model has BOTH the image AND the
+// textual spec, which dramatically reduces multi-shot drift.
+//
+// Why this exists at all:
+// The user fills out product detail with description / dimensions / features
+// in the product modal — that data goes into products.knowledge (jsonb).
+// But god-mode tools previously only sent the image ref to fal, never the
+// text. That's why "UGREEN charger" became "generic black charger" by
+// shot 3 — model had no anchor beyond the drifting visual cue.
+//
+// Output: a string fragment ready to append to the user-supplied prompt.
+// Returns '' when there's nothing useful to add (no active product, empty
+// knowledge), so callers can blindly concatenate.
+export function buildProductFidelityDirective(activeProduct) {
+  if (!activeProduct) return ''
+  const k = activeProduct.knowledge
+  const label = activeProduct.label || ''
+
+  // `knowledge` in v3 refs table is plain TEXT (see migrations/0001_init.sql).
+  // Older god-mode code stringified it as JSON, suggesting some product
+  // sources might store an object. Handle both shapes.
+  const parts = []
+  if (label) parts.push(`product name: "${label}"`)
+
+  if (typeof k === 'string') {
+    const note = k.trim().slice(0, 600)
+    if (note) parts.push(`details: ${note}`)
+  } else if (k && typeof k === 'object') {
+    if (k.description) parts.push(`description: ${String(k.description).slice(0, 400)}`)
+    if (k.dimensions) parts.push(`dimensions: ${k.dimensions}`)
+    if (k.color) parts.push(`color: ${k.color}`)
+    if (k.material) parts.push(`material: ${k.material}`)
+    if (Array.isArray(k.features) && k.features.length) {
+      parts.push(`key features: ${k.features.slice(0, 5).join(', ')}`)
+    }
+    if (k.label_text) parts.push(`label/branding text: "${k.label_text}"`)
+    if (k.shape) parts.push(`shape: ${k.shape}`)
+    if (parts.length <= 1 && (k.notes || k.description)) {
+      const note = String(k.notes || k.description).slice(0, 500)
+      if (note) parts.push(note)
+    }
+  }
+
+  if (parts.length === 0) return ''
+
+  // Strong directive language so the model treats this as binding spec.
+  // Mirrors v2's productDirective in fal-client.js (which was never wired
+  // up in v3 — this replaces it). Phrasing chosen to survive diffusion
+  // token-budget pressure: "CRITICAL" + "EXACTLY" anchors the model.
+  return `\n\nCRITICAL PRODUCT FIDELITY — render the product EXACTLY as specified, identical across every shot: ${parts.join('; ')}. Product label text must be sharp, legible, correctly spelled. Do NOT substitute, abstract, or vary the product between shots.`
+}
+
 // ── Video input builder ──────────────────────────────────────────────
 // Per-model branches that hand fal.ai the right field names. The trap
 // this exists to avoid: each video family uses a DIFFERENT field name
