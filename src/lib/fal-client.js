@@ -51,23 +51,59 @@ function isFlakyFalError(err) {
   )
 }
 
+// Route by model kind: image gen takes the SYNC path (fal.run/<model>
+// blocks until done, single HTTP response — ~15s for nano-banana),
+// video gen takes the WEBHOOK path (queue + Supabase realtime — required
+// since video gen >60s would hit Vercel function timeout).
+//
+// Why this exists: webhook overhead is real — ~45-80s extra on top of
+// the actual gen time (fal queue + webhook POST + realtime broadcast +
+// browser subscribe). For 15s image gens, that's 5-6x slower than sync.
+// User noticed god-mode (sync) finishes in 10-15s while /generate
+// (webhook) takes 100s for the same model.
+function isVideoModel(model) {
+  if (!model) return false
+  return /video|veo3|kling|seedance|wan|grok-imagine-video|happy-horse/i.test(model)
+}
+
 export async function falRun(model, input, opts = {}) {
   const { onProgress, maxRetries = 3 } = opts
+  const useSync = !isVideoModel(model)
+  const runner = useSync ? falRunSync : falRunOnce
   let lastErr
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       if (attempt > 0) onProgress?.(`retry ${attempt}/${maxRetries - 1} (flaky content check)...`)
-      return await falRunOnce(model, input, opts)
+      return await runner(model, input, opts)
     } catch (e) {
       lastErr = e
-      // Only retry on flaky errors — real bugs (auth, invalid input) bail out immediately.
       if (!isFlakyFalError(e)) throw e
       if (attempt === maxRetries - 1) throw e
-      // Brief backoff before retry — gives Grok's content checker a moment.
       await new Promise((r) => setTimeout(r, 2000 + attempt * 1500))
     }
   }
   throw lastErr
+}
+
+// Sync path — POST to /api/fal/sync which calls fal.run inline + returns
+// the result in a single HTTP response. No queue, no webhook, no realtime.
+// Server still does budget gate + gen_jobs insert for usage tracking.
+async function falRunSync(model, input, { onProgress, workspaceId, duration, meta } = {}) {
+  onProgress?.('submitting (sync)...')
+  const t0 = Date.now()
+  const res = await fetch('/api/fal/sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, input, meta: meta || { duration, workspaceId } }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok || !data.ok) {
+    throw new Error(data.error || `sync fal call failed (${res.status})`)
+  }
+  const elapsed = Math.round((Date.now() - t0) / 1000)
+  onProgress?.(`completed (${elapsed}s)`)
+  // Return the raw fal payload (callers destructure data.images / data.video).
+  return data
 }
 
 // Default timeout — kind-aware. Video gen with Grok ref-to-video or
