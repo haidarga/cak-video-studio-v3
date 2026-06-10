@@ -18,6 +18,12 @@ import { CINEMATIC_PRESETS, CINEMATIC_CATEGORIES, getPresetById } from '@/lib/ci
 import { IMAGE_MODELS, VIDEO_MODELS } from '@/lib/fal-client'
 import { canonicalFalPath, candidateFalPaths } from '@/lib/fal-paths'
 import { assertBudget, estimateFalCost } from '@/lib/budget-gate'
+import {
+  buildVideoInputForModel,
+  buildImageInputForModel,
+  falCall,
+  fetchUrlAsHtml,
+} from '@/lib/god-mode-builders'
 
 export const runtime = 'nodejs'
 export const maxDuration = 120
@@ -30,184 +36,6 @@ async function getFalKey(supabase, workspaceId) {
   return data?.fal_key || process.env.FAL_KEY || ''
 }
 
-// Build a video gen input shape per-model. Each fal.ai video model has its
-// own field names — Kling v3 standard wants `start_image_url`, Seedance
-// wants `image_urls` array, Grok wants `reference_image_urls`, etc. Failing
-// to send the right key returns a 422 "Field required" client error.
-function buildVideoInputForModel(model, { motion_prompt, image_url, image_urls, duration, aspect_ratio, resolution }) {
-  const dur = String(Math.max(3, Math.min(15, parseInt(duration) || 5)))
-  const ar = aspect_ratio || '9:16'
-
-  // Variant detection driven by MODEL URL, not by which inputs we have.
-  // Previously: `if (image_url)` would route a ref-to-video model into the
-  // i2v shape because we'd auto-promoted chat attachment as image_url. That
-  // sent `image_url` to a ref-to-video endpoint, which 422s on missing
-  // `reference_image_urls`. Fix: variant decides shape; inputs feed into
-  // whichever fields that variant expects.
-  const isI2V = model.includes('image-to-video')
-  const isR2V = model.includes('reference-to-video')
-  const isT2V = model.includes('text-to-video')
-
-  // Build a unified refs array — if explicit image_urls passed, use those,
-  // else fall back to single image_url as a 1-element array.
-  const refsArr = (image_urls && image_urls.length > 0)
-    ? image_urls.filter(Boolean)
-    : (image_url ? [image_url] : [])
-
-  if (model.includes('kling-video')) {
-    if (isI2V) {
-      return { prompt: motion_prompt, start_image_url: image_url || refsArr[0], duration: dur, aspect_ratio: ar }
-    }
-    if (isR2V) {
-      const elements = refsArr.slice(0, 4).map((u) => ({ frontal_image_url: u }))
-      return { prompt: motion_prompt, ...(elements.length ? { elements } : {}), duration: dur, aspect_ratio: ar }
-    }
-    return { prompt: motion_prompt, duration: dur, aspect_ratio: ar }
-  }
-
-  if (model.includes('seedance')) {
-    const okAR = ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16']
-    const finalAR = okAR.includes(ar) ? ar : 'auto'
-    if (isI2V) {
-      return { prompt: motion_prompt, image_url: image_url || refsArr[0], duration: dur, resolution: resolution || '720p', aspect_ratio: finalAR }
-    }
-    if (isR2V) {
-      return { prompt: motion_prompt, image_urls: refsArr.slice(0, 9), duration: dur, resolution: resolution || '720p', aspect_ratio: finalAR }
-    }
-    return { prompt: motion_prompt, duration: dur, resolution: resolution || '720p', aspect_ratio: finalAR }
-  }
-
-  if (model.includes('happy-horse')) {
-    if (isI2V) {
-      return { prompt: motion_prompt, image_url: image_url || refsArr[0], duration: parseInt(dur), aspect_ratio: ar, resolution: '720p' }
-    }
-    if (isR2V) {
-      return { prompt: motion_prompt, image_urls: refsArr.slice(0, 9), duration: parseInt(dur), aspect_ratio: ar, resolution: '720p' }
-    }
-    return { prompt: motion_prompt, duration: parseInt(dur), aspect_ratio: ar, resolution: '720p' }
-  }
-
-  if (model.includes('grok-imagine')) {
-    if (isI2V) {
-      return { prompt: motion_prompt, image_url: image_url || refsArr[0], duration: parseInt(dur), aspect_ratio: ar }
-    }
-    if (isR2V) {
-      // Field name `reference_image_urls` (NOT image_urls) — fal returned 422
-      // "reference_image_urls: Field required" when we sent image_urls.
-      return { prompt: motion_prompt, reference_image_urls: refsArr.slice(0, 6), duration: parseInt(dur), aspect_ratio: ar }
-    }
-    return { prompt: motion_prompt, duration: parseInt(dur), aspect_ratio: ar }
-  }
-
-  if (model.includes('veo3')) {
-    return { prompt: motion_prompt, ...(image_url ? { image_url } : {}), duration: parseInt(dur), aspect_ratio: ar }
-  }
-
-  // Generic fallback — pick shape by variant if detectable, else send both.
-  if (isI2V) {
-    return { prompt: motion_prompt, image_url: image_url || refsArr[0], duration: parseInt(dur), aspect_ratio: ar }
-  }
-  if (isR2V) {
-    return { prompt: motion_prompt, image_urls: refsArr.slice(0, 6), duration: parseInt(dur), aspect_ratio: ar }
-  }
-  if (isT2V) {
-    return { prompt: motion_prompt, duration: parseInt(dur), aspect_ratio: ar }
-  }
-  return {
-    prompt: motion_prompt,
-    ...(image_url ? { image_url, start_image_url: image_url } : {}),
-    ...(image_urls?.length ? { image_urls: image_urls.slice(0, 6) } : {}),
-    duration: parseInt(dur),
-    aspect_ratio: ar,
-  }
-}
-
-// Build image gen input per-model.
-function buildImageInputForModel(model, { prompt, refs, ar, quality }) {
-  const refList = (refs || []).filter(Boolean).slice(0, 8)
-
-  if (model.includes('nano-banana')) {
-    const isEdit = model.includes('edit')
-    // text-to-image variant doesn't accept image_urls; only edit variant uses it.
-    return {
-      prompt,
-      ...(isEdit ? { image_urls: refList } : {}),
-      output_format: 'jpeg',
-    }
-  }
-
-  if (model.includes('gpt-image')) {
-    // /edit takes image_urls (required, min 1). /generation = pure t2i, no image_urls.
-    const isEdit = model.includes('edit')
-    if (isEdit && refList.length === 0) {
-      throw new Error('GPT Image 2 Edit mode butuh minimal 1 source image. Upload gambar ke chat dulu.')
-    }
-    return {
-      prompt,
-      ...(isEdit ? { image_urls: refList } : {}),
-      quality: quality === '1080p' ? 'high' : 'medium',
-      aspect_ratio: ar || '1:1',
-    }
-  }
-
-  if (model.includes('grok-imagine')) {
-    return { prompt, image_urls: refList, aspect_ratio: ar || '1:1' }
-  }
-
-  if (model.includes('flux-lora')) {
-    const arMap = { '9:16': 'portrait_16_9', '16:9': 'landscape_16_9', '1:1': 'square_hd', '4:5': 'portrait_4_3', '3:4': 'portrait_4_3' }
-    return {
-      prompt,
-      loras: [], // caller must inject if available
-      image_size: arMap[ar] || 'square_hd',
-    }
-  }
-
-  // Generic fallback — refList as image_urls.
-  return { prompt, image_urls: refList }
-}
-
-// Call a fal.ai sync endpoint. Returns the result JSON.
-async function falCall(model, input, falKey) {
-  // Use queue endpoint for long-running gens; this helper waits inline. For
-  // gen_video which takes 1-3 min, prefer the queue + poll pattern via the
-  // existing falRun helper from src/lib/fal-client.js. Keeping this lightweight
-  // here for image gen which is usually <30s.
-  const wireModel = canonicalFalPath(model)
-  const res = await fetch(`https://fal.run/${wireModel}`, {
-    method: 'POST',
-    headers: { 'Authorization': `Key ${falKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(input),
-  })
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) {
-    const msg = data?.detail || data?.error || `fal.ai ${res.status}`
-    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
-  }
-  return data
-}
-
-// Fetch arbitrary URL and return a trimmed HTML string we can feed to
-// Gemini for product extraction. Strips <script>/<style> to save tokens.
-async function fetchUrlAsHtml(url) {
-  const res = await fetch(url, {
-    headers: { 'User-Agent': 'Mozilla/5.0 CAK-Video-GodMode/1.0' },
-    redirect: 'follow',
-  })
-  if (!res.ok) throw new Error(`URL fetch failed: ${res.status}`)
-  let html = await res.text()
-  // Tight clean: drop scripts/styles + noscript, then collapse whitespace.
-  html = html
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-  // Cap HTML length sent to LLM — most product pages have what we need in
-  // the first 30k chars (meta tags + visible content).
-  return html.slice(0, 30000)
-}
 
 // ── TOOL REGISTRY ────────────────────────────────────────────────────
 
