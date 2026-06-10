@@ -872,19 +872,25 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
         refsCount: refUrls.length,
         userPresets: userCameraPresets,
       })
-      // Storyboard + reference-to-video: prepend the approved 3x3 grid as the
-      // FIRST reference. Direct mode: NO image at all — refs only. Other modes
-      // (shots + image-to-video): image is the source, refs are character
-      // anchors via reference_urls.
+      // Storyboard + reference-to-video routing.
+      // Old behavior: prepend the approved 3x3 grid as the FIRST reference,
+      // hoping model would treat it as "sequence map". REALITY: every fal
+      // r2v model (Grok / Seedance / Kling / Happy Horse) instead tries to
+      // ANIMATE the grid composition — panels visibly rocking, faces
+      // morphing across grid cells, output looks glitched. User-reported
+      // "hasilnya ngawur" on /generate ref-to-video.
+      //
+      // New behavior: SKIP the grid in refs entirely for r2v + storyboard.
+      // Just use the character+product refs as anchors. Motion prompt
+      // describes the sequence in text. Trade-off: lose the grid's
+      // visual sequence hint, but gain clean output without rocking-grid
+      // glitch. The text prompt + character refs are enough for the
+      // model to produce a coherent take.
+      // For i2v (image-to-video) + storyboard, the grid still goes in
+      // as the source image (different mechanism, not ref-array).
       const isRefVid = vidModel.includes('reference-to-video') || vidModel.includes('ref-to-video')
-      // shot.additional_ref_urls — populated by "Continue Storyboard" button.
-      // These are last-frame anchors from previous storyboard segments; they
-      // ride along at the END of reference_image_urls so the model sees them
-      // as recent context (most-recent ref = strongest continuity hint).
       const continuationRefs = Array.isArray(shot.additional_ref_urls) ? shot.additional_ref_urls : []
-      const vidRefUrls = (isGrid && isRefVid && shot.image?.url)
-        ? [shot.image.url, ...refUrls, ...continuationRefs].filter(Boolean)
-        : [...refUrls, ...continuationRefs].filter(Boolean)
+      const vidRefUrls = [...refUrls, ...continuationRefs].filter(Boolean)
       // Role-identification prompt for storyboard ref-to-video. The model has
       // a strong default behavior of "animate the input image" — when handed
       // a 3x3 grid, it tends to animate the GRID composition itself (panels
@@ -897,28 +903,41 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       // frame), tell the model the LAST ref is the final frame of the
       // previous segment and the new sequence should start where it ended.
       let finalMotion = motion
-      if (isGrid && isRefVid && shot.image?.url) {
+      if (isGrid && isRefVid) {
+        // Storyboard + r2v: grid NO LONGER passed as a ref (caused
+        // glitched panel-rocking output). Instead, we encode the panel
+        // sequence into the motion prompt as text. Model sees character
+        // refs as identity anchors, panel beats as motion script.
         let cont = ''
-        // Branch on continuity_fallback flag (set by continueStoryboard when
-        // the last-frame extract failed and we fell back to the prev shot's
-        // approved image). Misinforming the model that there's a "final frame"
-        // when the ref is actually a storyboard grid hurts more than helps.
-        const fallback = !!shot.continuity_fallback
-        if (continuationRefs.length === 1 && fallback) {
-          cont = `\n- The LAST reference image is the previous segment's storyboard grid (frame-level handoff unavailable). Match its art style and character look exactly. Treat this as a strong style anchor.`
-        } else if (continuationRefs.length === 1) {
+        if (continuationRefs.length === 1) {
           cont = `\n- The LAST reference image is the final frame of the PREVIOUS segment. START the new sequence from a pose/setting/lighting that smoothly continues from it. The first second of output should look like a natural continuation of that frame.`
         } else if (continuationRefs.length >= 2) {
-          cont = `\n- The SECOND-TO-LAST reference image is the previous segment's storyboard grid — match its art style and character look exactly. The LAST reference image is the final frame of the previous segment — START the new sequence from that pose/setting. The first second of output should look like a natural continuation of that frame.`
+          cont = `\n- The LAST reference image is the final frame of the PREVIOUS segment — START the new sequence from that pose/setting. The first second of output should look like a natural continuation of that frame.`
         }
+
+        // Build the panel beat list from shot.raw.panels (the parsed
+        // 9-cell storyboard). Each cell becomes one "BEAT" in the motion
+        // script. Model treats this as a temporal sequence, not as a
+        // single grid to animate.
+        const panels = Array.isArray(shot.raw?.panels) ? shot.raw.panels.slice(0, 9) : []
+        const beats = panels.map((p, i) => {
+          const dur = Math.max(1, parseInt(p.seconds) || 2)
+          const shot_type = p.shot_type ? `[${p.shot_type}] ` : ''
+          const action = (p.visual || p.scene || '').trim()
+          let line = `BEAT ${i + 1} (~${dur}s): ${shot_type}${action}`
+          if (p.dialog) line += ` (says: "${p.dialog.trim()}")`
+          return line
+        }).join('\n')
+
         finalMotion = `IMAGE ROLES:
-- Image 1 = a 3x3 storyboard GRID showing 9 sequential keyframes (panels) read left-to-right, top-to-bottom. It is a SEQUENCE MAP, NOT a frame to animate.
-- Images 2 onwards = subject/character/style references to render.${cont}
+- All reference images = subject/character/style identity anchors. Use them to lock the character look across the video. NO grid layout. NO panel borders.${cont}
 
 INSTRUCTIONS:
-- Animate the SUBJECTS (not the grid) performing the actions shown in each panel of Image 1, panel-by-panel, smoothly transitioning scene-to-scene as one continuous take.
-- ABSOLUTELY DO NOT show grid lines, panel borders, panel numbers, or 3x3 layout in the output video. The output is a normal full-frame video of the subjects.
+- Render a SINGLE continuous take (no cuts, no panel transitions, no grid lines visible) that performs the BEATS below in order. Each beat lasts roughly its noted duration; total = sum of beats.
 - Maintain the SAME character identity, outfit, and art style from the reference images across the entire video. No mid-video morphing.
+
+BEAT SCRIPT (perform in order, one seamless take):
+${beats}
 
 MOTION DETAILS:
 ${motion}`
