@@ -38,11 +38,18 @@ export async function POST(req) {
     const r2Key = `cloned-voice/${wsId}/${voice_id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp3`
     const publicUrl = await uploadToR2(r2Key, Buffer.from(new Uint8Array(convertedBuf)), 'audio/mpeg')
 
-    // 4. Patch result row if caller provided one
+    // 4. Patch result row if caller provided one. Workspace-scope the
+    // read AND update to prevent cross-tenant result hijacking — without
+    // these filters, a user could overwrite another workspace's result
+    // meta by guessing the id.
     if (result_id) {
-      const { data: row } = await supabase.from('results').select('meta').eq('id', result_id).maybeSingle()
-      const meta = { ...(row?.meta || {}), cloned_audio_url: publicUrl, voice_id }
-      await supabase.from('results').update({ meta }).eq('id', result_id)
+      const { data: row } = await supabase.from('results').select('meta')
+        .eq('id', result_id).eq('workspace_id', wsId).maybeSingle()
+      if (row) {
+        const meta = { ...(row?.meta || {}), cloned_audio_url: publicUrl, voice_id }
+        await supabase.from('results').update({ meta })
+          .eq('id', result_id).eq('workspace_id', wsId)
+      }
     }
 
     return NextResponse.json({ ok: true, audio_url: publicUrl })

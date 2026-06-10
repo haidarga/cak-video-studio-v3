@@ -1157,8 +1157,13 @@ Return JSON only, no prose. No markdown fences. Be specific, no generic filler.`
       }
       if (urls.length < 4) return { type: 'error', error: 'minimum 4 reference images needed (attach or add to persona refs first)' }
 
+      // Scope to caller's workspace — persona_id is user-supplied so
+      // without the filter, the agent could leak persona metadata
+      // (name + username) from another tenant's workspace via the
+      // soul_training_result response.
       const { data: persona } = await ctx.supabase
-        .from('personas').select('id, name, username, workspace_id').eq('id', persona_id).maybeSingle()
+        .from('personas').select('id, name, username, workspace_id')
+        .eq('id', persona_id).eq('workspace_id', ctx.workspaceId).maybeSingle()
       if (!persona) return { type: 'error', error: 'persona not found' }
 
       // Kick off via the dedicated train-soul endpoint internally.

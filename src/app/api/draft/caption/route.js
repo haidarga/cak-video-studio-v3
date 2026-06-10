@@ -14,11 +14,13 @@ export async function POST(req) {
   const { result_id } = await req.json()
   if (!result_id) return NextResponse.json({ ok: false, error: 'result_id required' }, { status: 400 })
 
-  // Fetch result + persona (via FK) in one query
+  // Workspace-scope to prevent caption drafting from another tenant's
+  // result (which would leak result.label + result.meta + persona data
+  // through the Gemini prompt response).
   const { data: result, error } = await supabase
     .from('results')
     .select('id, label, type, ar, meta, workspace_id, group_label, persona_id, personas(id, name, username, role_label, postiz_platform, character_prompt, emotional_angle)')
-    .eq('id', result_id).single()
+    .eq('id', result_id).eq('workspace_id', wsId).single()
   if (error || !result) return NextResponse.json({ ok: false, error: 'result not found' }, { status: 404 })
 
   const persona = result.personas

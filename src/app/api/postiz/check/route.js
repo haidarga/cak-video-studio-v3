@@ -18,11 +18,14 @@ export async function GET(req) {
   const scheduledPostId = searchParams.get('scheduled_post_id')
   if (!scheduledPostId) return NextResponse.json({ ok: false, error: 'scheduled_post_id required' }, { status: 400 })
 
-  // Pull our row to get external_id (postiz postId) + channel id
+  // Workspace-scope BEFORE fetching — without filter, any user could
+  // query another tenant's post state (including external_response which
+  // contains Postiz response payloads with channel metadata).
+  const wsId = await getActiveWorkspace(supabase, user)
   const { data: sp, error } = await supabase
     .from('scheduled_posts')
     .select('id, workspace_id, external_id, external_response, status, target_postiz_account_id, personas(postiz_channel_id, postiz_platform, postiz_account_id)')
-    .eq('id', scheduledPostId).single()
+    .eq('id', scheduledPostId).eq('workspace_id', wsId).single()
   if (error || !sp) return NextResponse.json({ ok: false, error: 'scheduled post not found' }, { status: 404 })
 
   // Try to dig postId out of external_response (Postiz response shape varies)

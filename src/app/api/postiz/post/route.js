@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createPostizPost } from '@/lib/postiz'
+import { getActiveWorkspace } from '@/lib/workspace'
 
 // Vercel Pro: allow up to 60s — butuh waktu buat download media + relay-upload.
 export const maxDuration = 60
@@ -19,10 +20,14 @@ export async function POST(req) {
   const { scheduled_post_id } = await req.json()
   if (!scheduled_post_id) return NextResponse.json({ ok: false, error: 'scheduled_post_id required' }, { status: 400 })
 
+  // Workspace-scope BEFORE fetching so a user can't trigger Postiz posts on
+  // another workspace's scheduled_posts (which would burn their Postiz
+  // quota AND publish content under their channel creds).
+  const wsId = await getActiveWorkspace(supabase, user)
   const { data: sp, error } = await supabase
     .from('scheduled_posts')
     .select('*, results(id, type, url, label), personas(id, name, postiz_channel_id, postiz_platform, postiz_account_id, persona_channels(channel_id, channel_label, platform, postiz_account_id, is_default))')
-    .eq('id', scheduled_post_id).single()
+    .eq('id', scheduled_post_id).eq('workspace_id', wsId).single()
   if (error || !sp) return NextResponse.json({ ok: false, error: 'scheduled post not found' }, { status: 404 })
 
   // Workspace-level toggle for TikTok's auto-add-music. Read once and pass

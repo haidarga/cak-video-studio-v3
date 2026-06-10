@@ -15,6 +15,7 @@
 
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { getActiveWorkspace } from '@/lib/workspace'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -43,11 +44,15 @@ export async function POST(req) {
     return NextResponse.json({ ok: false, error: 'max 20 images per training' }, { status: 400 })
   }
 
-  // Verify ownership + load workspace + persona
+  // Verify ownership + load workspace + persona. Workspace filter prevents
+  // cross-tenant access — without it, any authed user could enqueue
+  // training on another workspace's persona by guessing the persona_id.
+  const wsId = await getActiveWorkspace(supabase, user)
   const { data: persona, error: pErr } = await supabase
     .from('personas')
     .select('id, name, username, workspace_id, lora_training_status')
     .eq('id', persona_id)
+    .eq('workspace_id', wsId)
     .maybeSingle()
   if (pErr || !persona) return NextResponse.json({ ok: false, error: 'persona not found' }, { status: 404 })
 
@@ -123,10 +128,15 @@ export async function GET(req) {
   const personaId = url.searchParams.get('persona_id')
   if (!personaId) return NextResponse.json({ ok: false, error: 'persona_id required' }, { status: 400 })
 
+  // Scope by workspace to prevent cross-tenant persona access. The user
+  // could otherwise pass any persona_id and get back its workspace's
+  // training state.
+  const wsId = await getActiveWorkspace(supabase, user)
   const { data: persona } = await supabase
     .from('personas')
     .select('id, workspace_id, lora_url, lora_training_status, lora_training_request_id, lora_trigger_word')
     .eq('id', personaId)
+    .eq('workspace_id', wsId)
     .maybeSingle()
   if (!persona) return NextResponse.json({ ok: false, error: 'persona not found' }, { status: 404 })
 
