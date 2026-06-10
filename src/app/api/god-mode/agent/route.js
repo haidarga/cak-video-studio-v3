@@ -936,12 +936,28 @@ ${html.slice(0, 22000)}`
 
   // ─ Video analyzer ────────────────────────────────────────────────
   analyze_reference_video: {
-    description: 'Analyze a reference video to extract style, camera, mood, pacing, suggested replication strategy. Use when user uploads a video as attachment OR provides a URL (TikTok / IG / YouTube) and asks "make like this" / "analyze this video" / "analisis video diatas".',
+    description: 'Analyze a reference video to extract style, camera, mood, pacing, suggested replication strategy. Use when user uploads a video as attachment OR provides a URL (YouTube native; TikTok/IG only if downloaded mp4 uploaded). CRITICAL: if user uploaded a video file, DO NOT pass video_url — leave it empty so server auto-picks the attachment. NEVER infer a TikTok/IG URL from filename hints like "ssstik.io_xxx.mp4" or "snaptik_xxx.mp4" — those are LOCAL FILES, not URLs. Use the attachment bytes directly.',
     handler: async ({ video_url, attachment_index }, ctx) => {
       // Resolve source — explicit tool_input.video_url first, then recent
       // attachment, then any URL pasted earlier in the conversation
-      let urlToAnalyze = video_url
-      if (!urlToAnalyze && Array.isArray(ctx.recentAttachments)) {
+      // ── Source resolution (PRIORITY ORDER) ──
+      // Original priority was: tool_input.video_url > attachment > recentUrls.
+      // But agent kept hallucinating TikTok URLs from filename hints
+      // (e.g. "ssstik.io_@username.mp4" -> agent passes
+      // "https://tiktok.com/@username/..." as video_url even though the
+      // ACTUAL VIDEO BYTES are right there as an R2 attachment). My
+      // platform-block then refused, wasting the attachment.
+      // New priority: VIDEO ATTACHMENT ALWAYS WINS if present. Agent
+      // can only override with URL when no video uploaded.
+      let urlToAnalyze = null
+      const videoAtt = Array.isArray(ctx.recentAttachments)
+        ? ctx.recentAttachments.find((a) => a?.type === 'video' && a?.url)
+        : null
+      if (videoAtt) {
+        urlToAnalyze = videoAtt.url
+      } else if (video_url) {
+        urlToAnalyze = video_url
+      } else if (Array.isArray(ctx.recentAttachments)) {
         const att = ctx.recentAttachments[parseInt(attachment_index) || 0]
         if (att?.url) urlToAnalyze = att.url
       }
