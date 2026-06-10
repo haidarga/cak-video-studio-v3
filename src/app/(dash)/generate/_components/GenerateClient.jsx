@@ -477,7 +477,13 @@ function friendlyFalError(raw) {
     return 'Model gak terima input (kemungkinan reject moderation). Coba ganti model atau ubah prompt.'
   }
   if (/timeout/i.test(s)) {
-    return 'Job timeout — fal.ai gak balas dalam 10 menit. Coba lagi atau ganti model yang lebih cepet.'
+    // Match the bumped fal-client default — video 20min, image 10min.
+    // Hint user to click Re-Img/Re-vid (cheaper than re-submitting whole
+    // shot since refs+prompt cached) before assuming model dead.
+    const isVideo = /vid|video/i.test(s)
+    return isVideo
+      ? 'Job timeout — fal.ai gak balas dalam 20 menit. Click Re-vid buat retry, atau pindah ke model lebih cepet (Kling v3 standard / Seedance Fast).'
+      : 'Job timeout — fal.ai gak balas dalam 10 menit. Click Re-Img buat retry, atau pindah ke model lebih cepet (nano-banana).'
   }
   if (s.length > 120) return s.slice(0, 120) + '...'
   return s

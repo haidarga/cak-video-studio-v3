@@ -70,7 +70,20 @@ export async function falRun(model, input, opts = {}) {
   throw lastErr
 }
 
-async function falRunOnce(model, input, { onProgress, maxWaitMs = 600000, workspaceId, duration, meta } = {}) {
+// Default timeout — kind-aware. Video gen with Grok ref-to-video or
+// Kling Pro can legit take 12-18 minutes when fal's queue is busy. Image
+// gen finishes in <30s so a tighter cap there catches stuck jobs faster.
+function defaultMaxWait(model) {
+  if (!model) return 600000
+  if (/video|veo3|kling|seedance|wan|grok-imagine-video|happy-horse/i.test(model)) {
+    return 1200000 // 20 min
+  }
+  return 600000 // 10 min
+}
+
+async function falRunOnce(model, input, { onProgress, maxWaitMs, workspaceId, duration, meta } = {}) {
+  // Resolve timeout AFTER we know the model. Caller can still override.
+  const effectiveMaxWait = maxWaitMs || defaultMaxWait(model)
   // ── Submit ─────────────────────────────────────────────────────────────
   const submitRes = await fetch('/api/fal/submit', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -139,12 +152,14 @@ async function falRunOnce(model, input, { onProgress, maxWaitMs = 600000, worksp
     }, 45000)
 
     // Hard timeout — if no webhook AND fallback never sees done, give up.
-    // 10 minutes is generous for video gen (Kling pro ~3min, Seedance ~2min).
+    // Video gen defaults to 20 min (Grok ref-to-video + Kling Pro under
+    // queue load can legit hit 15+ min). Image gen stays at 10 min.
+    // Caller can override via maxWaitMs.
     timeoutHandle = setTimeout(() => {
       if (settled) return
       settled = true; cleanup()
-      reject(new Error(`timeout after ${Math.round(maxWaitMs / 1000)}s waiting for fal job ${requestId}`))
-    }, maxWaitMs)
+      reject(new Error(`timeout after ${Math.round(effectiveMaxWait / 1000)}s waiting for fal job ${requestId} — job may still complete on fal side, check the gen_jobs row or click Re-vid to retry`))
+    }, effectiveMaxWait)
   })
 }
 

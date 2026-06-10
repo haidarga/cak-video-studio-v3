@@ -1029,26 +1029,23 @@ Return JSON only, no prose. No markdown fences. Be specific, no generic filler.`
         clips = [{ start: 0, duration: 60, preset: 'tiktok', label: 'TikTok cut' }]
       }
 
-      try {
-        const proto = ctx.req?.headers?.get?.('x-forwarded-proto') || 'https'
-        const host = ctx.req?.headers?.get?.('host') || 'localhost:3000'
-        const cookie = ctx.req?.headers?.get?.('cookie') || ''
-        const r = await fetch(`${proto}://${host}/api/viral-clip/cut`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Cookie: cookie },
-          body: JSON.stringify({ video_url, clips, result_id }),
-        })
-        const j = await r.json()
-        if (!j.ok) return { type: 'error', error: j.error || 'clip cut failed' }
-        return {
-          type: 'viral_clip_result',
-          source: j.source,
-          clips: j.clips,
-          count: j.count,
-          failed: j.failed,
-        }
-      } catch (e) {
-        return { type: 'error', error: e.message }
+      // ── "Akalin" approach ── Cutting happens CLIENT-SIDE via ffmpeg.wasm
+      // (see src/lib/clip-cutter-client.js). The tool just validates +
+      // normalizes the request, the frontend renderer runs the actual
+      // cuts then uploads results to R2.
+      // Why client-side: Vercel has no ffmpeg, and routing through v2 HF
+      // Space couples v3's uptime to v2's. Browser ffmpeg.wasm runs on
+      // the user's machine for free.
+      return {
+        type: 'viral_clip_pending',
+        source: video_url,
+        clips: clips.map((c, i) => ({
+          start: parseFloat(c.start) || 0,
+          duration: parseFloat(c.duration) || (c.preset === 'reels' || c.preset === 'ig' ? 90 : 60),
+          preset: c.preset || null,
+          label: c.label || `Clip ${i + 1}`,
+        })),
+        result_id: result_id || null,
       }
     },
   },

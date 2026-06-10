@@ -737,7 +737,134 @@ function ToolResult({ result, personas, onPresetUse, onPersonaPick, onProductPic
   if (result.type === 'viral_clip_result') {
     return <ViralClipResult result={result} />
   }
+  if (result.type === 'viral_clip_pending') {
+    return <ViralClipPending result={result} />
+  }
   return null
+}
+
+// Runs ffmpeg.wasm cuts client-side, uploads each result to R2.
+// Tool returned a "pending" — we do the actual work here in the browser
+// to avoid coupling v3 to v2 HF Space backend (see src/lib/clip-cutter-client.js).
+function ViralClipPending({ result }) {
+  const [status, setStatus] = useState('init')
+  const [progress, setProgress] = useState('')
+  const [completed, setCompleted] = useState([])
+  const startedRef = useRef(false)
+
+  useEffect(() => {
+    if (startedRef.current) return
+    startedRef.current = true
+
+    async function run() {
+      try {
+        setStatus('loading-ffmpeg')
+        setProgress('Loading ffmpeg.wasm (~10s first run, then cached)...')
+        // Lazy import — these are heavy + only used here.
+        const { cutClipClientSide } = await import('@/lib/clip-cutter-client')
+        const { uploadFile } = await import('@/lib/upload-client')
+
+        const out = []
+        for (let i = 0; i < result.clips.length; i++) {
+          const clip = result.clips[i]
+          setStatus('cutting')
+          setProgress(`Cutting clip ${i + 1}/${result.clips.length} — ${clip.preset?.toUpperCase() || 'CUSTOM'} ${clip.duration}s...`)
+          try {
+            const blob = await cutClipClientSide(result.source, {
+              start: clip.start, duration: clip.duration, preset: clip.preset,
+              onLog: () => { /* swallow per-frame logs */ },
+            })
+            setProgress(`Uploading clip ${i + 1}/${result.clips.length} to R2...`)
+            // Wrap Blob as File so uploadFile gets a name.
+            const file = new File(
+              [blob],
+              `${clip.preset || 'clip'}-${clip.start}s-${clip.duration}s.mp4`,
+              { type: 'video/mp4' }
+            )
+            const { url } = await uploadFile(file, 'viral-clips')
+            const completedClip = { ok: true, ...clip, url, size_mb: (blob.size / 1024 / 1024).toFixed(1) }
+            out.push(completedClip)
+            setCompleted([...out])
+          } catch (e) {
+            out.push({ ok: false, ...clip, error: String(e?.message || e) })
+            setCompleted([...out])
+          }
+        }
+        setStatus('done')
+        setProgress('')
+      } catch (e) {
+        setStatus('failed')
+        setProgress(String(e?.message || e))
+      }
+    }
+    run()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  return (
+    <div className="mt-3 bg-[var(--surface)] border border-[var(--border)] rounded-lg p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="text-[10px] uppercase font-bold text-[var(--accent)]">
+          ✂ Viral Clip Cutter · client-side
+        </div>
+        <div className="text-[10px] text-[var(--muted)]">
+          {status === 'done' ? `${completed.filter((c) => c.ok).length}/${result.clips.length} done` : `${completed.length}/${result.clips.length}`}
+        </div>
+      </div>
+
+      {status !== 'done' && status !== 'failed' && (
+        <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
+          <span className="inline-block w-2 h-2 rounded-full bg-[var(--accent)] animate-pulse" />
+          {progress}
+        </div>
+      )}
+      {status === 'failed' && (
+        <div className="text-xs text-red-400">{progress}</div>
+      )}
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {result.clips.map((clip, i) => {
+          const done = completed[i]
+          return (
+            <div
+              key={i}
+              className={`rounded p-2 border text-[11px] ${
+                !done ? 'bg-[var(--surface2)] border-[var(--border)] opacity-50' :
+                done.ok ? 'bg-[var(--surface2)] border-[var(--border)]' :
+                'bg-red-500/10 border-red-500/30'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="font-bold truncate">
+                  {clip.preset && <span className="text-[var(--accent)]">{clip.preset.toUpperCase()}</span>} {clip.label}
+                </div>
+                <div className="text-[10px] text-[var(--muted)] tabular-nums shrink-0">
+                  {clip.start}s + {clip.duration}s
+                </div>
+              </div>
+              {done?.ok && done.url ? (
+                <>
+                  <video src={done.url} controls preload="metadata" className="mt-1 w-full rounded bg-black aspect-video object-contain" />
+                  <div className="mt-1 flex items-center gap-2 text-[10px]">
+                    <a href={done.url} target="_blank" rel="noreferrer" download className="text-[var(--accent)] hover:underline">↓ Download mp4</a>
+                    <span className="text-[var(--muted2)]">· {done.size_mb}MB · stored R2</span>
+                  </div>
+                </>
+              ) : done?.ok === false ? (
+                <div className="text-[10px] text-red-400 mt-1">{done.error}</div>
+              ) : (
+                <div className="text-[10px] text-[var(--muted2)] mt-1">waiting...</div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      <div className="text-[10px] text-[var(--muted2)] italic">
+        Cut di browser pakai ffmpeg.wasm. Hasil otomatis ke-upload ke R2 (permanent storage).
+      </div>
+    </div>
+  )
 }
 
 function ViralClipResult({ result }) {
