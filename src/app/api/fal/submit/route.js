@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { getActiveWorkspace } from '@/lib/workspace'
 import { assertBudget, estimateFalCost } from '@/lib/budget-gate'
+import { canonicalFalPath } from '@/lib/fal-paths'
 
 // Compose the absolute webhook URL fal will POST to when the job finishes.
 // We derive from req headers so this works on any Vercel preview / prod deploy
@@ -35,8 +36,14 @@ export async function POST(req) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
   try {
-    const { model, input, meta } = await req.json()
-    if (!model) throw new Error('model required')
+    const { model: rawModel, input, meta } = await req.json()
+    if (!rawModel) throw new Error('model required')
+
+    // Canonicalize at submit so gen_jobs.model is ALWAYS the wire-correct
+    // path. Later status pollers (webhook, gen-status, manual fetches) can
+    // trust this row's `model` column without re-running alias resolution.
+    // See src/lib/fal-paths.js for the alias→canonical map and rationale.
+    const model = canonicalFalPath(rawModel)
 
     // Hard budget gate — refuse expensive gens once limit is hit.
     const wsId = await getActiveWorkspace(supabase, user)
@@ -60,7 +67,7 @@ export async function POST(req) {
       kind, model,
       status: 'pending',
       duration_seconds,
-      meta: meta || {},
+      meta: { ...(meta || {}), raw_model: rawModel !== model ? rawModel : undefined },
     })
 
     return NextResponse.json({ ok: true, ...result })

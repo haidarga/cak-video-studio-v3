@@ -16,6 +16,7 @@ import { createClient } from '@/lib/supabase/server'
 import { callLLMJSON, callLLM } from '@/lib/llm-server'
 import { CINEMATIC_PRESETS, CINEMATIC_CATEGORIES, getPresetById } from '@/lib/cinematic-presets'
 import { IMAGE_MODELS, VIDEO_MODELS } from '@/lib/fal-client'
+import { canonicalFalPath, candidateFalPaths } from '@/lib/fal-paths'
 
 export const runtime = 'nodejs'
 export const maxDuration = 120
@@ -171,7 +172,8 @@ async function falCall(model, input, falKey) {
   // gen_video which takes 1-3 min, prefer the queue + poll pattern via the
   // existing falRun helper from src/lib/fal-client.js. Keeping this lightweight
   // here for image gen which is usually <30s.
-  const res = await fetch(`https://fal.run/${model}`, {
+  const wireModel = canonicalFalPath(model)
+  const res = await fetch(`https://fal.run/${wireModel}`, {
     method: 'POST',
     headers: { 'Authorization': `Key ${falKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
@@ -466,6 +468,13 @@ const TOOLS = {
       })
 
       try {
+        // Canonicalize model path before ANY queue.fal.run call. fal
+        // accepts vendor aliases at submit (`bytedance/seedance-2.0/...`)
+        // but anchors request_ids on canonical paths (`fal-ai/seedance-2/
+        // ...`). Polling status on the alias returns empty forever. See
+        // src/lib/fal-paths.js.
+        const wireModel = canonicalFalPath(model)
+
         // Submit to fal.ai queue. Return request_id immediately so the agent
         // route doesn't hold the Vercel function open past the 60s limit
         // (Hobby tier). Frontend polls via /api/god-mode/gen-status?
@@ -474,7 +483,7 @@ const TOOLS = {
         // Earlier version polled inline up to 100s, which killed the Vercel
         // function and returned HTML to the frontend (user saw "Unexpected
         // token 'A'... is not valid JSON" error). Async pattern fixes this.
-        const submitRes = await fetch(`https://queue.fal.run/${model}`, {
+        const submitRes = await fetch(`https://queue.fal.run/${wireModel}`, {
           method: 'POST',
           headers: { 'Authorization': `Key ${falKey}`, 'Content-Type': 'application/json' },
           body: JSON.stringify(input),
@@ -491,12 +500,12 @@ const TOOLS = {
         const start = Date.now()
         while (Date.now() - start < 30000) {
           await new Promise((r) => setTimeout(r, 4000))
-          const stRes = await fetch(`https://queue.fal.run/${model}/requests/${requestId}/status`, {
+          const stRes = await fetch(`https://queue.fal.run/${wireModel}/requests/${requestId}/status`, {
             headers: { 'Authorization': `Key ${falKey}` },
           })
           const st = await stRes.json().catch(() => ({}))
           if (st?.status === 'COMPLETED') {
-            const fullRes = await fetch(`https://queue.fal.run/${model}/requests/${requestId}`, {
+            const fullRes = await fetch(`https://queue.fal.run/${wireModel}/requests/${requestId}`, {
               headers: { 'Authorization': `Key ${falKey}` },
             })
             done = await fullRes.json().catch(() => ({}))
@@ -514,13 +523,13 @@ const TOOLS = {
             persona_id: ctx.activePersona?.id || null,
             type: 'video', url, label: `God Mode — video`,
             ar: finalAr,
-            meta: { source: 'god-mode', motion: finalMotion, model, image_url: finalImageUrl, refs: refUrls },
+            meta: { source: 'god-mode', motion: finalMotion, model: wireModel, image_url: finalImageUrl, refs: refUrls },
             created_by: ctx.userId,
           }).select('id').single()
 
           return {
             type: 'gen_video_result',
-            url, model, ar: finalAr, duration: dur, result_id: row?.id, motion: finalMotion,
+            url, model: wireModel, ar: finalAr, duration: dur, result_id: row?.id, motion: finalMotion,
             audio: audioOn,
             regen_payload: { motion_prompt, duration, image_url, ar, model: modelOverride },
           }
@@ -533,7 +542,7 @@ const TOOLS = {
         return {
           type: 'gen_video_queued',
           request_id: requestId,
-          model,
+          model: wireModel,
           ar: finalAr,
           duration: dur,
           motion: finalMotion,
@@ -752,7 +761,9 @@ HTML: ${html.slice(0, 22000)}`
           aspect_ratio: finalAr,
           resolution: cfg.resolution,
         })
-        const submitRes = await fetch(`https://queue.fal.run/${videoModel}`, {
+        // Canonicalize before queue calls — see src/lib/fal-paths.js
+        const wireVideoModel = canonicalFalPath(videoModel)
+        const submitRes = await fetch(`https://queue.fal.run/${wireVideoModel}`, {
           method: 'POST',
           headers: { 'Authorization': `Key ${falKey}`, 'Content-Type': 'application/json' },
           body: JSON.stringify(videoInput),
@@ -767,12 +778,12 @@ HTML: ${html.slice(0, 22000)}`
         const start = Date.now()
         while (Date.now() - start < 30000) {
           await new Promise((r) => setTimeout(r, 4000))
-          const stRes = await fetch(`https://queue.fal.run/${videoModel}/requests/${requestId}/status`, {
+          const stRes = await fetch(`https://queue.fal.run/${wireVideoModel}/requests/${requestId}/status`, {
             headers: { 'Authorization': `Key ${falKey}` },
           })
           const st = await stRes.json().catch(() => ({}))
           if (st?.status === 'COMPLETED') {
-            const fullRes = await fetch(`https://queue.fal.run/${videoModel}/requests/${requestId}`, {
+            const fullRes = await fetch(`https://queue.fal.run/${wireVideoModel}/requests/${requestId}`, {
               headers: { 'Authorization': `Key ${falKey}` },
             })
             done = await fullRes.json().catch(() => ({}))
@@ -789,12 +800,12 @@ HTML: ${html.slice(0, 22000)}`
             type: 'video', url: videoUrl,
             label: `God Mode — ${p.title || 'marketing video'}`,
             ar: finalAr,
-            meta: { source: 'god-mode', source_url: url, motion: finalMotion, model: videoModel, theme: finalTheme, product_image: p.image_url },
+            meta: { source: 'god-mode', source_url: url, motion: finalMotion, model: wireVideoModel, theme: finalTheme, product_image: p.image_url },
             created_by: ctx.userId,
           }).select('id').single()
           return {
             type: 'gen_video_result',
-            url: videoUrl, model: videoModel, ar: finalAr, duration: finalDuration,
+            url: videoUrl, model: wireVideoModel, ar: finalAr, duration: finalDuration,
             result_id: row?.id, motion: finalMotion,
             regen_payload: { url, duration: finalDuration, theme: finalTheme, model: modelOverride, ar: finalAr },
           }
@@ -802,7 +813,7 @@ HTML: ${html.slice(0, 22000)}`
 
         return {
           type: 'gen_video_queued',
-          request_id: requestId, model: videoModel, ar: finalAr, duration: finalDuration,
+          request_id: requestId, model: wireVideoModel, ar: finalAr, duration: finalDuration,
           motion: finalMotion, image_url: p.image_url,
           regen_payload: { url, duration: finalDuration, theme: finalTheme, model: modelOverride, ar: finalAr },
         }

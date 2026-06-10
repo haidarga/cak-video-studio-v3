@@ -11,6 +11,7 @@
 
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { candidateFalPaths } from '@/lib/fal-paths'
 
 export const runtime = 'nodejs'
 
@@ -47,26 +48,11 @@ export async function GET(req) {
   const motion = url.searchParams.get('motion') || ''
   const personaId = url.searchParams.get('persona_id') || null
 
-  // Build candidate model paths — fal accepts aliases at submit time but
-  // queue status/result endpoints are anchored at the CANONICAL path. If
-  // our catalog uses `bytedance/seedance-2.0/...` while fal's canonical is
-  // `fal-ai/seedance-2/...`, status calls return empty and we loop forever
-  // on "unknown". Try every plausible alias before giving up.
-  const candidates = [model]
-  const aliasMap = {
-    'bytedance/seedance-2.0/fast/reference-to-video': 'fal-ai/seedance-2/fast/reference-to-video',
-    'bytedance/seedance-2.0/fast/image-to-video': 'fal-ai/seedance-2/fast/image-to-video',
-    'bytedance/seedance-2.0/fast/text-to-video': 'fal-ai/seedance-2/fast/text-to-video',
-    'xai/grok-imagine-video/reference-to-video': 'fal-ai/xai/reference-to-video',
-    'xai/grok-imagine-video/image-to-video': 'fal-ai/xai/image-to-video',
-    'fal-ai/kling-video/v3/image-to-video': 'fal-ai/kling-video/v3/standard/image-to-video',
-  }
-  if (aliasMap[model]) candidates.push(aliasMap[model])
-  // Also flip: if model is canonical, try the alias too (some submits may
-  // have used the alias path).
-  for (const [alias, canonical] of Object.entries(aliasMap)) {
-    if (model === canonical && !candidates.includes(alias)) candidates.push(alias)
-  }
+  // Build candidate model paths via centralized helper. See src/lib/fal-paths.js
+  // for the full rationale — TL;DR fal queue routing anchors request_ids on
+  // CANONICAL paths but accepts aliases at submit, so we may need to probe
+  // both directions to find where the request lives.
+  const candidates = candidateFalPaths(model)
 
   async function tryResultFetch(m) {
     const fullRes = await fetch(`https://queue.fal.run/${m}/requests/${requestId}`, {
