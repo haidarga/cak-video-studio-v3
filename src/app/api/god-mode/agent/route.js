@@ -477,7 +477,7 @@ const TOOLS = {
     handler: async ({ url, duration = 25, theme = '' }, ctx) => {
       if (!url || !/^https?:\/\//i.test(url)) return { type: 'error', error: 'valid URL required' }
       try {
-        const html = await fetchUrlAsHtml(url)
+        const html = await fetchUrlAsHtml(url, { cookie: ctx.req?.headers?.get?.('cookie') || '' })
         const shotCount = Math.max(3, Math.min(6, Math.ceil(duration / 5)))
         const extractPrompt = `You are scraping a product page to propose a marketing video naskah. Extract product info + write naskah at the user's requested duration + theme.
 
@@ -533,7 +533,7 @@ Match the theme vibe in the naskah tone. Keep timestamps consistent with ${durat
 
   // ─ URL → Image (scrape + gen single image) ──────────────────────
   gen_image_from_url: {
-    description: 'Generate a SINGLE marketing IMAGE from a product URL. Scrapes product, gens styled image using the product photo as reference. Use when user pastes URL + asks for IMAGE: "bikin foto dari URL", "listing photo dari link", "image saja jangan video". URL fallback: if user references "link itu" without re-pasting, auto-resolves from recent messages. **IMPORTANT**: if user already uploaded an image to chat instead of URL, use gen_image (not this) — gen_image picks up chat attachments automatically.',
+    description: 'Generate a SINGLE marketing IMAGE from a product URL. Scrapes product, gens styled image using the product photo as reference. Use when user pastes URL + asks for IMAGE: "bikin foto/poster dari URL", "listing photo dari link", "image saja jangan video". MODEL CHOICE: if user wants TEXT/copy/CTA/ajakan/kata-kata ON the image (poster ads, sale banner, promo with headline), PASS model="openai/gpt-image-2/edit" — gpt-image-2 is the only model that renders legible text consistently. Default nano-banana is great for clean product shots but butchers text. URL fallback: auto-resolves from recent messages. **IMPORTANT**: if user uploaded image to chat instead of URL, use gen_image (not this).',
     handler: async ({ url, theme, ar, model: modelOverride }, ctx) => {
       if (!url && Array.isArray(ctx.recentUrls) && ctx.recentUrls.length > 0) {
         url = ctx.recentUrls[0]
@@ -547,7 +547,7 @@ Match the theme vibe in the naskah tone. Keep timestamps consistent with ${durat
       const finalTheme = theme || 'clean studio product photography'
 
       try {
-        const html = await fetchUrlAsHtml(url)
+        const html = await fetchUrlAsHtml(url, { cookie: ctx.req?.headers?.get?.('cookie') || '' })
         const extractPrompt = `Extract product info from this e-commerce page for a marketing image. The page content has TWO blocks:
 - Top: STRUCTURED DATA (OG_META + JSON_LD_PRODUCT) — trust this FIRST for reliable title + image.
 - Bottom: HTML BODY (fallback) — often empty shell on JS-SPAs (Shopee, Sociolla, Tokopedia).
@@ -556,8 +556,11 @@ Return JSON only:
 {
   "title": "product name (prefer og:title / JSON-LD name)",
   "image_url": "best primary product image URL (prefer og:image / JSON-LD image — absolute)",
-  "image_prompt": "detailed visual prompt in English for a marketing/listing photo of the product, matching theme '${finalTheme}'. Describe composition, lighting, mood, props. 2-3 sentences."
+  "image_prompt": "detailed visual prompt in English for a marketing/listing photo of the product, matching theme '${finalTheme}'. CRITICAL: bake the user's literal intent into the prompt — if they asked for text/copy/CTA/captions/ajakan/kata-kata on the image, EXPLICITLY include 'with on-image text/headline reading X', 'CTA button reading Y', 'tagline visible on poster', etc. Describe composition, lighting, mood, props. 3-4 sentences if user wanted text overlays."
 }
+
+USER ORIGINAL REQUEST (preserve literally — bake into image_prompt verbatim if it mentions text/copy/CTA/ajakan/kata-kata):
+${(ctx.lastUserText || '').slice(0, 500)}
 
 PAGE CONTENT:
 ${html.slice(0, 22000)}`
@@ -653,7 +656,7 @@ ${html.slice(0, 22000)}`
 
       try {
         // STEP 1 — Scrape + extract product info via Gemini.
-        const html = await fetchUrlAsHtml(url)
+        const html = await fetchUrlAsHtml(url, { cookie: ctx.req?.headers?.get?.('cookie') || '' })
         const extractPrompt = `Extract product info from this e-commerce page to build a marketing video. The page content has TWO blocks:
 - Top: STRUCTURED DATA (OG_META + JSON_LD_PRODUCT) — extracted before HTML strip. Trust this FIRST. og:image / og:title / og:description / JSON-LD image+name+description are reliable.
 - Bottom: HTML BODY (fallback) — visible markup. Use only if structured data is missing.
@@ -665,8 +668,11 @@ Return JSON only:
   "title": "product name (prefer og:title / JSON-LD name)",
   "image_url": "best primary product image URL (prefer og:image / JSON-LD image — absolute URL)",
   "key_features": ["feature 1", "feature 2", "feature 3"],
-  "motion_prompt": "${finalDuration}s video motion description in English, matching theme '${finalTheme}'. Describe what happens, camera moves, mood. Be cinematic. Bake in product showcase. Single block of text, no timestamps."
+  "motion_prompt": "${finalDuration}s video motion description in English, matching theme '${finalTheme}'. CRITICAL: if user's original request mentions specific things they want (ajakan/CTA/text overlay/scene transitions/specific actions/voiceover style/mood), BAKE THOSE LITERALLY into motion_prompt — don't abstract them away. Describe what happens, camera moves, mood. Be cinematic. Bake in product showcase. Single block of text, no timestamps."
 }
+
+USER ORIGINAL REQUEST (preserve literally — bake into motion_prompt verbatim):
+${(ctx.lastUserText || '').slice(0, 500)}
 
 If you cannot find image_url anywhere, return image_url=null and the caller will surface a clearer error.
 

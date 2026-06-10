@@ -312,7 +312,12 @@ export async function mirrorToR2(externalUrl, folder = 'mirrored') {
 //   4. Return preamble + clean HTML (capped 30k) — Gemini sees the
 //      reliable structured data FIRST + can fall back to visible
 //      HTML for context
-export async function fetchUrlAsHtml(url) {
+export async function fetchUrlAsHtml(url, opts = {}) {
+  // opts: { cookie?: string, _noRetry?: boolean }
+  // cookie is forwarded to /api/scrape-spa for the Browserless fallback
+  // so that internal route call sees the same auth context as the agent
+  // request. _noRetry prevents infinite loop if Browserless also returns
+  // an SPA shell.
   const u = new URL(url)
   const res = await fetch(url, {
     headers: {
@@ -404,17 +409,114 @@ export async function fetchUrlAsHtml(url) {
 
   // SPA detection — if we extracted ZERO structured data AND the body
   // tail is minimal text, this is a JS-hydrated SPA (Sociolla, Shopee,
-  // Tokopedia, Lazada modern UIs). Server-side scrape can't get product
-  // data; surface explicit error so callers can suggest the right
-  // workaround instead of letting Gemini hallucinate.
+  // Tokopedia, Lazada modern UIs). Server-side fetch can't see product
+  // data because it only loads AFTER browser JS execution. Two paths:
+  //   1. BROWSERLESS_TOKEN env var set -> auto-retry via headless
+  //      Playwright (real browser, sees post-hydration DOM)
+  //   2. No token set -> throw with workaround hint
   const hasStructuredData = ldBlocks.length > 0 || Object.keys(og).length > 0
   const bodyText = html.replace(/<[^>]+>/g, '').trim()
   const looksLikeSpa = !hasStructuredData && bodyText.length < 500
   if (looksLikeSpa) {
+    // Try Browserless fallback IF token is configured. Caller may have
+    // hit this from a route already; we proxy through our own endpoint
+    // (rather than calling Browserless directly) so the auth boundary +
+    // env var stay on the server. Pass `_internalBrowserlessRetry: true`
+    // to prevent infinite recursion if browserless itself returns shell.
+    if (process.env.BROWSERLESS_TOKEN && !arguments[1]?._noRetry) {
+      try {
+        const proto = process.env.NEXT_PUBLIC_APP_URL || `https://${process.env.VERCEL_URL || 'localhost:3000'}`
+        const blRes = await fetch(`${proto}/api/scrape-spa`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            // Forward cookie so /api/scrape-spa sees the logged-in user
+            ...(arguments[1]?.cookie ? { Cookie: arguments[1].cookie } : {}),
+          },
+          body: JSON.stringify({ url, waitFor: 5000 }),
+        })
+        const blJson = await blRes.json().catch(() => ({}))
+        if (blJson.ok && blJson.html) {
+          // Re-run extraction on the rendered HTML — recursive call with
+          // _noRetry guard to prevent infinite loop if browserless also
+          // returns an empty shell (rare but possible).
+          return await fetchUrlAsHtmlFromBuffer(url, blJson.html)
+        }
+      } catch (e) {
+        console.warn('[fetchUrlAsHtml] browserless fallback failed:', e.message)
+      }
+    }
     const err = new Error(`SPA_NO_DATA`)
     err.isSpaShell = true
     err.host = u.host
     throw err
   }
   return combined
+}
+
+// Internal: run the OG/JSON-LD extraction pass on an already-fetched
+// HTML buffer (e.g. from Browserless rendered output). Same logic as
+// fetchUrlAsHtml minus the initial fetch + minus SPA fallback (we
+// already came from there).
+async function fetchUrlAsHtmlFromBuffer(url, rawHtml) {
+  const u = new URL(url)
+  const preamble = [`SOURCE_URL: ${url}`]
+
+  const ogMatches = rawHtml.matchAll(/<meta\s+(?:property|name)=["']([^"']+)["']\s+content=["']([^"']*)["']/gi)
+  const og = {}
+  for (const m of ogMatches) {
+    const key = m[1].toLowerCase()
+    if (key.startsWith('og:') || key.startsWith('twitter:') || key === 'description' || /price/i.test(key)) {
+      og[key] = m[2]
+    }
+  }
+  if (Object.keys(og).length) {
+    preamble.push('OG_META:')
+    for (const [k, v] of Object.entries(og)) preamble.push(`  ${k}: ${v}`)
+  }
+
+  const ldMatches = rawHtml.matchAll(/<script\s+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)
+  const ldBlocks = []
+  for (const m of ldMatches) {
+    try {
+      const data = JSON.parse(m[1].trim())
+      const items = Array.isArray(data) ? data : [data]
+      for (const item of items) {
+        const type = item['@type'] || item['@graph']?.[0]?.['@type']
+        if (typeof type === 'string' && /product|offer/i.test(type)) {
+          ldBlocks.push(JSON.stringify(item).slice(0, 2000))
+        }
+      }
+    } catch {}
+  }
+  if (ldBlocks.length) {
+    preamble.push('JSON_LD_PRODUCT:')
+    preamble.push(...ldBlocks)
+  }
+
+  // Also pull visible text from rendered DOM — much more meaningful
+  // than from raw shell since Browserless has executed all JS
+  const html = rawHtml
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  const preambleStr = preamble.join('\n')
+  const htmlBudget = Math.max(2000, 30000 - preambleStr.length - 100)
+
+  // If STILL no data + body still empty, browserless also failed to
+  // get product data (e.g. site requires login). Throw so caller can
+  // suggest manual workaround.
+  const hasStructuredData = ldBlocks.length > 0 || Object.keys(og).length > 0
+  const bodyText = html.replace(/<[^>]+>/g, '').trim()
+  if (!hasStructuredData && bodyText.length < 500) {
+    const err = new Error('SPA_NO_DATA_AFTER_RENDER')
+    err.isSpaShell = true
+    err.host = u.host
+    throw err
+  }
+  return `${preambleStr}\n\n--- HTML BODY (rendered) ---\n${html.slice(0, htmlBudget)}`
 }
