@@ -238,8 +238,8 @@ const TOOLS = {
   },
 
   gen_video: {
-    description: 'Generate a video. Pass motion_prompt (what happens, camera moves). Optional: duration (3-15s), image_url for image-to-video, ar (override), model (override config). If active persona/product, refs auto-attach. If active preset, its motion prompt appended.',
-    handler: async ({ motion_prompt, duration, image_url, ar, model: modelOverride }, ctx) => {
+    description: 'Generate one OR MORE videos. Pass motion_prompt (what happens, camera moves). Optional: duration (3-15s), image_url for image-to-video, ar (override), model (override config), count (1-5, parallel parallel gens — pass when user says "3 video" / "5 variasi"). If active persona/product, refs auto-attach. If active preset, its motion prompt appended.',
+    handler: async ({ motion_prompt, duration, image_url, ar, model: modelOverride, count = 1 }, ctx) => {
       const falKey = await getFalKey(ctx.supabase, ctx.workspaceId)
       if (!falKey) return { type: 'error', error: 'no fal.ai key configured' }
 
@@ -367,16 +367,83 @@ const TOOLS = {
         // (Hobby tier). Frontend polls via /api/god-mode/gen-status?
         // request_id=...&model=... when ready.
         //
-        // Earlier version polled inline up to 100s, which killed the Vercel
-        // function and returned HTML to the frontend (user saw "Unexpected
-        // token 'A'... is not valid JSON" error). Async pattern fixes this.
-        const submitRes = await fetch(`https://queue.fal.run/${wireModel}`, {
-          method: 'POST',
-          headers: { 'Authorization': `Key ${falKey}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify(input),
-        })
-        const submitData = await submitRes.json().catch(() => ({}))
-        if (!submitRes.ok) throw new Error(submitData?.detail || submitData?.error || `fal.ai ${submitRes.status}`)
+        // Mirror image_url to R2 if it exists + auto-retry on fal 422.
+        // Grok i2v + some Kling variants sometimes 422 with "image_url:
+        // Failed to download" even on R2 URLs — happens when source
+        // URL has signed-query params that expire mid-request, or when
+        // R2 CDN cache miss + fal's downloader bails fast. Mirroring
+        // through R2 with fresh keys + cache-warm fixes it.
+        async function submitOnce(inputToTry) {
+          const r = await fetch(`https://queue.fal.run/${wireModel}`, {
+            method: 'POST',
+            headers: { 'Authorization': `Key ${falKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify(inputToTry),
+          })
+          const d = await r.json().catch(() => ({}))
+          return { ok: r.ok, status: r.status, data: d }
+        }
+
+        // Multi-video path (count > 1) — parallel submits, skip inline
+        // poll, return all queued at once. Same pattern as
+        // gen_marketing_video_from_url.
+        const reqCount = Math.max(1, Math.min(5, parseInt(count) || 1))
+        if (reqCount > 1) {
+          const results = await Promise.all(Array.from({ length: reqCount }, async (_, idx) => {
+            try {
+              const res = await submitOnce(input)
+              if (!res.ok) {
+                // Try mirror-to-R2 retry on "Failed to download" errors.
+                const errStr = JSON.stringify(res.data).toLowerCase()
+                if (/failed to download|inaccessible/i.test(errStr) && finalImageUrl) {
+                  const mirrored = await mirrorToR2(finalImageUrl, 'fal-source-mirror')
+                  const input2 = buildVideoInputForModel(model, {
+                    motion_prompt, image_url: mirrored,
+                    image_urls: refUrls.length ? [mirrored, ...refUrls] : undefined,
+                    duration: dur, aspect_ratio: finalAr, resolution: cfg.resolution,
+                  })
+                  const retry = await submitOnce(input2)
+                  if (!retry.ok) return { ok: false, idx, error: retry.data?.detail || `fal ${retry.status} (after mirror retry)` }
+                  return { ok: true, idx, request_id: retry.data?.request_id, status_url: retry.data?.status_url, response_url: retry.data?.response_url }
+                }
+                return { ok: false, idx, error: res.data?.detail || res.data?.error || `fal ${res.status}` }
+              }
+              return { ok: true, idx, request_id: res.data?.request_id, status_url: res.data?.status_url, response_url: res.data?.response_url }
+            } catch (e) {
+              return { ok: false, idx, error: String(e?.message || e) }
+            }
+          }))
+          return {
+            type: 'gen_video_multi_queued',
+            count: reqCount,
+            items: results.map((s) => s.ok ? {
+              type: 'gen_video_queued',
+              request_id: s.request_id, model: wireModel,
+              status_url: s.status_url, response_url: s.response_url,
+              ar: finalAr, duration: dur,
+              motion: finalMotion, image_url: finalImageUrl,
+              label: `Video ${s.idx + 1}/${reqCount}`,
+              regen_payload: { motion_prompt, duration, image_url, ar, model: modelOverride },
+            } : { type: 'error', idx: s.idx, error: s.error }),
+          }
+        }
+
+        // Single-video path (count=1) with mirror-retry on 422.
+        let submitRes_ = await submitOnce(input)
+        if (!submitRes_.ok) {
+          const errStr = JSON.stringify(submitRes_.data).toLowerCase()
+          if (/failed to download|inaccessible/i.test(errStr) && finalImageUrl) {
+            // Mirror + retry
+            const mirrored = await mirrorToR2(finalImageUrl, 'fal-source-mirror')
+            const input2 = buildVideoInputForModel(model, {
+              motion_prompt, image_url: mirrored,
+              image_urls: refUrls.length ? [mirrored, ...refUrls] : undefined,
+              duration: dur, aspect_ratio: finalAr, resolution: cfg.resolution,
+            })
+            submitRes_ = await submitOnce(input2)
+          }
+          if (!submitRes_.ok) throw new Error(submitRes_.data?.detail || submitRes_.data?.error || `fal.ai ${submitRes_.status}`)
+        }
+        const submitData = submitRes_.data
         const requestId = submitData?.request_id
         if (!requestId) throw new Error('no request_id from fal')
         // fal's submit response includes status_url + response_url that
@@ -417,7 +484,13 @@ const TOOLS = {
             done?.url ||
             (Array.isArray(done?.videos) && done.videos[0]?.url) ||
             null
-          if (!url) return { type: 'error', error: 'no video url in fal response' }
+          if (!url) {
+            // fal returned COMPLETED but no video URL — usually means
+            // content checker flagged silently OR validation issue
+            // crept past queue. Surface raw payload so debug is possible.
+            const tail = JSON.stringify(done).slice(0, 300)
+            return { type: 'error', error: `fal completed without video URL — likely content checker rejection or input validation issue. Raw: ${tail}` }
+          }
 
           const { data: row } = await ctx.supabase.from('results').insert({
             workspace_id: ctx.workspaceId,
@@ -1593,7 +1666,7 @@ MODEL VARIANT RULES (CRITICAL):
 - URL/VIDEO ROUTING:
   - URL + "bikin video X detik tema Y" / "video dari link" → gen_marketing_video_from_url with extracted (duration, theme, model, count).
   - URL + "bikin foto/image/poster" → gen_image_from_url.
-  - **COUNT DETECTION**: parse N from user text — "2 video" / "3 variasi" / "bikinin 5 promo" → pass count=N to gen_marketing_video_from_url. Capped server-side at 5. If user says just "video" with no number, default count=1.
+  - **COUNT DETECTION**: parse N from user text — "2 video" / "3 variasi" / "bikinin 5 promo" → pass count=N to gen_marketing_video_from_url (URL path) OR gen_video (upload path). BOTH tools support count. Capped server-side at 5. If user says just "video" with no number, default count=1. **CRITICAL**: never silently downgrade — if user says "3 video" and you only call once, you're broken.
   - Bare URL no clear instruction → scrape_url_for_marketing (preview).
   - Detect model overrides in prompt: "pake Kling 3" -> 'fal-ai/kling-video/v3/image-to-video', "Kling Pro" -> '/v3/pro/image-to-video', "Seedance" -> 'bytedance/seedance-2.0/fast/image-to-video', "Veo" -> 'fal-ai/veo3', "Grok" -> 'xai/grok-imagine-video/image-to-video', "GPT Image 2 Edit" -> 'openai/gpt-image-2/edit', "Nano Banana" -> 'fal-ai/nano-banana/edit'.
 - If user uploads/attaches a video and says "analyze" or "make like this", call analyze_reference_video.
