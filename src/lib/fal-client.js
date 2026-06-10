@@ -71,14 +71,16 @@ export async function falRun(model, input, opts = {}) {
 }
 
 // Default timeout — kind-aware. Video gen with Grok ref-to-video or
-// Kling Pro can legit take 12-18 minutes when fal's queue is busy. Image
-// gen finishes in <30s so a tighter cap there catches stuck jobs faster.
+// Kling Pro can legit take 12-18 minutes when fal's queue is busy.
+// Image gen normally <30s, BUT during queue spikes (Grok image,
+// nano-banana mass burst, or fal-side outage) can stall 5-10 min
+// while webhook silently drops. 15 min keeps a real safety net.
 function defaultMaxWait(model) {
-  if (!model) return 600000
+  if (!model) return 900000
   if (/video|veo3|kling|seedance|wan|grok-imagine-video|happy-horse/i.test(model)) {
-    return 1200000 // 20 min
+    return 1200000 // 20 min — video gen
   }
-  return 600000 // 10 min
+  return 900000 // 15 min — image gen (was 10, bumped after user hit timeout on stalled webhook)
 }
 
 async function falRunOnce(model, input, { onProgress, maxWaitMs, workspaceId, duration, meta } = {}) {

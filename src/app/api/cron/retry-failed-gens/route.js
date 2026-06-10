@@ -1,9 +1,18 @@
 // GET /api/cron/retry-failed-gens
 //
-// Vercel cron job — runs every 15 minutes (see vercel.json). Scans
-// gen_jobs for FAILED rows that look like transient failures (content
-// checker, network, fal 5xx) and auto-retries them up to MAX_RETRIES
-// per chain.
+// Auto-retry endpoint for transient fal failures. Scans gen_jobs for
+// FAILED rows that look like transient failures (content checker,
+// network, fal 5xx) and retries them up to MAX_RETRIES per chain.
+//
+// HOW TO TRIGGER:
+// Vercel Hobby tier only allows daily cron — our previous vercel.json
+// with */15 schedule blocked the build entirely. Options:
+//   1. External cron service hitting this URL every 15 min:
+//      curl -H "Authorization: Bearer $CRON_SECRET" \
+//        https://<your-domain>/api/cron/retry-failed-gens
+//      Free: cron-job.org, EasyCron, Upstash QStash
+//   2. Manual trigger from settings UI (button → POST this endpoint)
+//   3. Upgrade to Vercel Pro for native */15 cron schedule support.
 //
 // Why automated retry exists:
 //   - Mass-variant burst (10-30 gens) on the fal content checker has
