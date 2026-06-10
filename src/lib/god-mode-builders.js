@@ -247,6 +247,43 @@ export async function falCall(model, input, falKey) {
   throw lastError || new Error('all fal path candidates failed')
 }
 
+// ── Mirror external image URL to our R2 ──────────────────────────────
+// Many product CDNs (Sociolla, Tokopedia, IG CDN, etc) block hotlinking
+// — they refuse downloads without the right Referer header or block
+// known bot UAs. When we pass such a URL to fal.ai, fal gets a 403/404
+// and returns "Failed to download the file. Please check if the URL is
+// accessible." Mirroring through R2 (our public CORS-friendly bucket)
+// fixes this — fal can always download from R2 since R2 sets no
+// hotlink protection.
+//
+// Returns the R2 URL on success, or the original URL on failure (fal
+// might still be able to fetch it; better than throwing).
+export async function mirrorToR2(externalUrl, folder = 'mirrored') {
+  try {
+    const { uploadToR2 } = await import('@/lib/r2-client')
+    const res = await fetch(externalUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'image/avif,image/webp,image/png,image/jpeg,image/*,*/*;q=0.8',
+        'Referer': new URL(externalUrl).origin,
+      },
+    })
+    if (!res.ok) {
+      console.warn('[mirrorToR2] fetch failed:', res.status, externalUrl.slice(-60))
+      return externalUrl
+    }
+    const buf = Buffer.from(await res.arrayBuffer())
+    const mime = res.headers.get('content-type') || 'image/jpeg'
+    const ext = mime.split('/')[1]?.split(';')[0] || 'jpg'
+    const hash = Math.random().toString(36).slice(2, 10) + '-' + Date.now().toString(36)
+    const key = `${folder}/${hash}.${ext}`
+    return await uploadToR2(key, buf, mime)
+  } catch (e) {
+    console.warn('[mirrorToR2] error:', e.message, '— falling back to original URL')
+    return externalUrl
+  }
+}
+
 // ── Fetch URL → trimmed HTML ─────────────────────────────────────────
 // Used by url_marketing tools to feed product page HTML into Gemini
 // for extraction. Strips scripts/styles to save tokens; caps at 30k

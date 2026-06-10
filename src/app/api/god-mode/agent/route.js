@@ -24,6 +24,7 @@ import {
   falCall,
   fetchUrlAsHtml,
   buildProductFidelityDirective,
+  mirrorToR2,
 } from '@/lib/god-mode-builders'
 
 export const runtime = 'nodejs'
@@ -396,7 +397,17 @@ const TOOLS = {
         }
 
         if (done) {
-          const url = done?.video?.url || done?.url
+          // Comprehensive URL extraction — fal models return different
+          // shapes (video.url, videos[0].url, output.video.url, etc).
+          // Same paths as /api/god-mode/gen-status.
+          const url =
+            done?.video?.url ||
+            done?.video_url ||
+            done?.output?.video?.url ||
+            done?.output?.url ||
+            done?.url ||
+            (Array.isArray(done?.videos) && done.videos[0]?.url) ||
+            null
           if (!url) return { type: 'error', error: 'no video url in fal response' }
 
           const { data: row } = await ctx.supabase.from('results').insert({
@@ -531,6 +542,10 @@ HTML: ${html.slice(0, 22000)}`
           return { type: 'error', error: 'gagal extract product dari URL — pastikan URL punya product photo yang jelas' }
         }
 
+        // Mirror scraped image to R2 — same reason as gen_marketing_video_from_url.
+        // Source CDNs (Sociolla, Tokopedia, etc) hotlink-block fal's fetcher.
+        p.image_url = await mirrorToR2(p.image_url, 'scraped-products')
+
         const imageModel = modelOverride || cfg.image_model || 'fal-ai/nano-banana/edit'
 
         // Use centralized helper — handles field names per model family,
@@ -622,6 +637,12 @@ HTML: ${html.slice(0, 22000)}`
           return { type: 'error', error: 'gagal extract product image / motion dari URL — coba paste URL yang punya product photo jelas' }
         }
 
+        // STEP 1b — Mirror scraped image to R2. Sociolla, Tokopedia, IG CDN
+        // etc block hotlinking — fal would get 403/404 trying to download.
+        // R2 mirror = always CORS-friendly, no Referer requirement.
+        const mirroredImageUrl = await mirrorToR2(p.image_url, 'scraped-products')
+        p.image_url = mirroredImageUrl
+
         // STEP 2 — Resolve video model. User can override via "pake Kling 3"
         // in prompt, which the agent passes as modelOverride. Otherwise use
         // the image-to-video version of cfg.video_model since we have a
@@ -691,8 +712,22 @@ HTML: ${html.slice(0, 22000)}`
         }
 
         if (done) {
-          const videoUrl = done?.video?.url || done?.url
-          if (!videoUrl) return { type: 'error', error: 'no video url in fal response' }
+          const videoUrl =
+            done?.video?.url ||
+            done?.video_url ||
+            done?.output?.video?.url ||
+            done?.output?.url ||
+            done?.url ||
+            (Array.isArray(done?.videos) && done.videos[0]?.url) ||
+            null
+          if (!videoUrl) {
+            // Fal sometimes returns 'COMPLETED' status but no URL in the
+            // payload when the actual gen failed (e.g. 422 input validation
+            // that crept past the queue). Surface the raw payload tail so
+            // user (and future debugger) can see what came back.
+            const tail = JSON.stringify(done).slice(0, 300)
+            return { type: 'error', error: `fal completed without video URL — likely input validation issue. Raw response: ${tail}` }
+          }
           const { data: row } = await ctx.supabase.from('results').insert({
             workspace_id: ctx.workspaceId,
             type: 'video', url: videoUrl,
