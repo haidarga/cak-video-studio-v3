@@ -57,6 +57,8 @@ export async function POST(req) {
 
     // Record job row immediately. Browser will subscribe by request_id and
     // react when webhook flips this to done/error.
+    // STORE status_url / response_url in meta — fall-back pollers can use
+    // them directly without path-guessing (see src/lib/fal-paths.js).
     const admin = createAdminClient()
     const kind = classify(model)
     const duration_seconds = kind === 'video' ? extractDuration(input) : null
@@ -67,7 +69,12 @@ export async function POST(req) {
       kind, model,
       status: 'pending',
       duration_seconds,
-      meta: { ...(meta || {}), raw_model: rawModel !== model ? rawModel : undefined },
+      meta: {
+        ...(meta || {}),
+        raw_model: rawModel !== model ? rawModel : undefined,
+        status_url: result.status_url,
+        response_url: result.response_url,
+      },
     })
 
     return NextResponse.json({ ok: true, ...result })

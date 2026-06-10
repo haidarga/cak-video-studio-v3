@@ -19,9 +19,14 @@ export async function falSubmit(model, input, { webhookUrl } = {}) {
   // Without it the SDK still works but caller has to poll fal.queue.status.
   const opts = { input }
   if (webhookUrl) opts.webhookUrl = webhookUrl
-  const { request_id } = await fal.queue.submit(model, opts)
+  const submitResult = await fal.queue.submit(model, opts)
+  const { request_id, status_url, response_url, cancel_url } = submitResult || {}
   if (!request_id) throw new Error('fal submit: no request_id returned')
-  return { request_id }
+  // Return status_url / response_url so pollers can hit the EXACT URLs fal
+  // anchored this request_id to — no path-guessing needed. This is the
+  // authoritative fix for the alias→canonical bug. Keep request_id for
+  // backwards compat with callers that subscribe by id (webhook flow).
+  return { request_id, status_url, response_url, cancel_url }
 }
 
 export async function falStatus(model, requestId) {

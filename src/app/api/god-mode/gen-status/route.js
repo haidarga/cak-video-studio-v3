@@ -1,8 +1,18 @@
-// GET /api/god-mode/gen-status?request_id=...&model=...
+// GET /api/god-mode/gen-status?request_id=...&model=...&status_url=...&response_url=...
 //
 // Poll a fal.ai queued generation. Used by the chat UI to follow a
 // gen_video that returned `type: 'gen_video_queued'` from the agent route
 // (when inline polling timed out at 30s but the gen continues server-side).
+//
+// THREE TIERS OF URL RESOLUTION (in priority order):
+//   1. status_url / response_url passed via query params — AUTHORITATIVE
+//      (fal returned them at submit time). No guessing needed.
+//   2. Look up gen_jobs.meta.status_url / response_url by request_id — for
+//      submissions that went through /api/fal/submit which records them.
+//   3. Construct URLs from candidate model paths — fallback for legacy
+//      queued messages from before status_url plumbing existed. Uses
+//      candidateFalPaths() to probe canonical + alias + algorithmic
+//      derivations.
 //
 // On completion, also persists the result to the `results` table so it
 // appears in /qc. Returns the same shape the inline gen would have
@@ -48,17 +58,19 @@ export async function GET(req) {
   const motion = url.searchParams.get('motion') || ''
   const personaId = url.searchParams.get('persona_id') || null
 
-  // Build candidate model paths via centralized helper. See src/lib/fal-paths.js
-  // for the full rationale — TL;DR fal queue routing anchors request_ids on
-  // CANONICAL paths but accepts aliases at submit, so we may need to probe
-  // both directions to find where the request lives.
-  const candidates = candidateFalPaths(model)
+  // ── URL resolution: tier 1 (query) → tier 2 (gen_jobs.meta) → tier 3 (candidates) ──
+  let statusUrl = url.searchParams.get('status_url') || null
+  let responseUrl = url.searchParams.get('response_url') || null
 
-  async function tryResultFetch(m) {
-    const fullRes = await fetch(`https://queue.fal.run/${m}/requests/${requestId}`, {
-      headers: { 'Authorization': `Key ${falKey}` },
-      cache: 'no-store',
-    })
+  if (!statusUrl || !responseUrl) {
+    const { data: jobRow } = await supabase
+      .from('gen_jobs').select('meta').eq('request_id', requestId).maybeSingle()
+    if (jobRow?.meta?.status_url) statusUrl = statusUrl || jobRow.meta.status_url
+    if (jobRow?.meta?.response_url) responseUrl = responseUrl || jobRow.meta.response_url
+  }
+
+  async function tryResultFetchUrl(rUrl) {
+    const fullRes = await fetch(rUrl, { headers: { 'Authorization': `Key ${falKey}` }, cache: 'no-store' })
     if (!fullRes.ok) return null
     const fullData = await fullRes.json().catch(() => ({}))
     const videoUrl =
@@ -69,16 +81,13 @@ export async function GET(req) {
       fullData?.url ||
       (Array.isArray(fullData?.videos) && fullData.videos[0]?.url) ||
       null
-    return videoUrl ? { videoUrl, raw: fullData, matchedModel: m } : null
+    return videoUrl ? { videoUrl, raw: fullData } : null
   }
 
-  async function tryStatusFetch(m) {
-    const r = await fetch(`https://queue.fal.run/${m}/requests/${requestId}/status`, {
-      headers: { 'Authorization': `Key ${falKey}` },
-      cache: 'no-store',
-    })
+  async function tryStatusFetchUrl(sUrl) {
+    const r = await fetch(sUrl, { headers: { 'Authorization': `Key ${falKey}` }, cache: 'no-store' })
     const data = await r.json().catch(() => ({}))
-    return { status: data?.status, queue_position: data?.queue_position, hint: data?.detail || data?.error || null, matchedModel: m }
+    return { status: data?.status, queue_position: data?.queue_position, hint: data?.detail || data?.error || null }
   }
 
   async function persistAndRespond(videoUrl, matchedModel) {
@@ -97,22 +106,55 @@ export async function GET(req) {
     })
   }
 
-  // PASS 1 — try fetching the result directly across all candidate paths.
-  // If any returns a video URL, we're done. This is the most reliable
-  // signal because it sidesteps the /status flakiness entirely.
-  for (const m of candidates) {
-    const r = await tryResultFetch(m)
-    if (r) return persistAndRespond(r.videoUrl, r.matchedModel)
+  // ── TIER 1+2 — Use authoritative URLs if we have them ──
+  if (responseUrl) {
+    const r = await tryResultFetchUrl(responseUrl)
+    if (r) return persistAndRespond(r.videoUrl, model)
+  }
+  if (statusUrl) {
+    const s = await tryStatusFetchUrl(statusUrl)
+    if (s.status === 'COMPLETED' && responseUrl) {
+      const r = await tryResultFetchUrl(responseUrl)
+      if (r) return persistAndRespond(r.videoUrl, model)
+    }
+    if (s.status === 'FAILED' || s.status === 'CANCELLED') {
+      return NextResponse.json({ ok: true, status: 'failed', error: s.hint || 'gen failed' })
+    }
+    if (s.status === 'IN_QUEUE' || s.status === 'IN_PROGRESS') {
+      return NextResponse.json({
+        ok: true, status: 'queued',
+        fal_status: s.status, queue_position: s.queue_position, fal_hint: s.hint || null,
+        used: 'authoritative-status-url',
+      })
+    }
   }
 
-  // PASS 2 — try the status endpoint across candidates. Surface
-  // COMPLETED/FAILED states; remember the best status info we got.
+  // ── TIER 3 — fall back to candidate path probing ──
+  // For legacy queued messages submitted before status_url plumbing existed,
+  // or in case the authoritative URLs returned unexpected shape.
+  const candidates = candidateFalPaths(model)
+
+  async function tryResultFetch(m) {
+    return tryResultFetchUrl(`https://queue.fal.run/${m}/requests/${requestId}`)
+  }
+  async function tryStatusFetch(m) {
+    const r = await tryStatusFetchUrl(`https://queue.fal.run/${m}/requests/${requestId}/status`)
+    return { ...r, matchedModel: m }
+  }
+
+  // PASS 1 — try fetching the result directly across all candidate paths.
+  for (const m of candidates) {
+    const r = await tryResultFetch(m)
+    if (r) return persistAndRespond(r.videoUrl, m)
+  }
+
+  // PASS 2 — try /status across candidates.
   let bestStatus = null
   for (const m of candidates) {
     const s = await tryStatusFetch(m)
     if (s.status === 'COMPLETED') {
       const r = await tryResultFetch(m)
-      if (r) return persistAndRespond(r.videoUrl, r.matchedModel)
+      if (r) return persistAndRespond(r.videoUrl, m)
     }
     if (s.status === 'FAILED' || s.status === 'CANCELLED') {
       return NextResponse.json({ ok: true, status: 'failed', error: s.hint || 'gen failed' })

@@ -492,6 +492,11 @@ const TOOLS = {
         if (!submitRes.ok) throw new Error(submitData?.detail || submitData?.error || `fal.ai ${submitRes.status}`)
         const requestId = submitData?.request_id
         if (!requestId) throw new Error('no request_id from fal')
+        // fal's submit response includes status_url + response_url that
+        // point to the CANONICAL polling URLs — capture them so the
+        // poller doesn't have to guess any model paths.
+        const statusUrl = submitData?.status_url
+        const responseUrl = submitData?.response_url
 
         // Short inline poll — 30s max — to catch fast gens (some videos
         // <5s finish quickly). If not done by then, return queued state
@@ -500,14 +505,13 @@ const TOOLS = {
         const start = Date.now()
         while (Date.now() - start < 30000) {
           await new Promise((r) => setTimeout(r, 4000))
-          const stRes = await fetch(`https://queue.fal.run/${wireModel}/requests/${requestId}/status`, {
-            headers: { 'Authorization': `Key ${falKey}` },
-          })
+          // Use fal-provided URLs when available; fall back to constructed.
+          const stUrl = statusUrl || `https://queue.fal.run/${wireModel}/requests/${requestId}/status`
+          const stRes = await fetch(stUrl, { headers: { 'Authorization': `Key ${falKey}` } })
           const st = await stRes.json().catch(() => ({}))
           if (st?.status === 'COMPLETED') {
-            const fullRes = await fetch(`https://queue.fal.run/${wireModel}/requests/${requestId}`, {
-              headers: { 'Authorization': `Key ${falKey}` },
-            })
+            const rUrl = responseUrl || `https://queue.fal.run/${wireModel}/requests/${requestId}`
+            const fullRes = await fetch(rUrl, { headers: { 'Authorization': `Key ${falKey}` } })
             done = await fullRes.json().catch(() => ({}))
             break
           }
@@ -539,10 +543,14 @@ const TOOLS = {
         // gen-status endpoint. Includes everything needed to resume on
         // success: request_id + model + the metadata to save when result
         // is fetched (motion, ar, image_url, refs, persona_id).
+        // status_url + response_url are the authoritative polling URLs
+        // fal handed us — no path-guessing needed when these are present.
         return {
           type: 'gen_video_queued',
           request_id: requestId,
           model: wireModel,
+          status_url: statusUrl,
+          response_url: responseUrl,
           ar: finalAr,
           duration: dur,
           motion: finalMotion,
@@ -772,20 +780,21 @@ HTML: ${html.slice(0, 22000)}`
         if (!submitRes.ok) throw new Error(submitData?.detail || submitData?.error || `fal.ai ${submitRes.status}`)
         const requestId = submitData?.request_id
         if (!requestId) throw new Error('no request_id from fal')
+        // Capture fal-provided polling URLs (authoritative — see fal-paths.js)
+        const statusUrl = submitData?.status_url
+        const responseUrl = submitData?.response_url
 
         // STEP 5 — Short inline poll, falls back to queued state for frontend.
         let done = null
         const start = Date.now()
         while (Date.now() - start < 30000) {
           await new Promise((r) => setTimeout(r, 4000))
-          const stRes = await fetch(`https://queue.fal.run/${wireVideoModel}/requests/${requestId}/status`, {
-            headers: { 'Authorization': `Key ${falKey}` },
-          })
+          const stUrl = statusUrl || `https://queue.fal.run/${wireVideoModel}/requests/${requestId}/status`
+          const stRes = await fetch(stUrl, { headers: { 'Authorization': `Key ${falKey}` } })
           const st = await stRes.json().catch(() => ({}))
           if (st?.status === 'COMPLETED') {
-            const fullRes = await fetch(`https://queue.fal.run/${wireVideoModel}/requests/${requestId}`, {
-              headers: { 'Authorization': `Key ${falKey}` },
-            })
+            const rUrl = responseUrl || `https://queue.fal.run/${wireVideoModel}/requests/${requestId}`
+            const fullRes = await fetch(rUrl, { headers: { 'Authorization': `Key ${falKey}` } })
             done = await fullRes.json().catch(() => ({}))
             break
           }
@@ -813,7 +822,9 @@ HTML: ${html.slice(0, 22000)}`
 
         return {
           type: 'gen_video_queued',
-          request_id: requestId, model: wireVideoModel, ar: finalAr, duration: finalDuration,
+          request_id: requestId, model: wireVideoModel,
+          status_url: statusUrl, response_url: responseUrl,
+          ar: finalAr, duration: finalDuration,
           motion: finalMotion, image_url: p.image_url,
           regen_payload: { url, duration: finalDuration, theme: finalTheme, model: modelOverride, ar: finalAr },
         }

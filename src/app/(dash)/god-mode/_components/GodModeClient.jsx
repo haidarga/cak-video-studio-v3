@@ -995,6 +995,9 @@ function GenVideoQueued({ result, onResolved }) {
     if (cancelRef.current) return
     setAttempts((n) => n + 1)
     try {
+      // Forward status_url + response_url if present — gen-status uses
+      // these directly (authoritative, no path-guessing). See
+      // src/lib/fal-paths.js for the alias→canonical bug story.
       const qs = new URLSearchParams({
         request_id: result.request_id,
         model: result.model,
@@ -1002,6 +1005,8 @@ function GenVideoQueued({ result, onResolved }) {
         duration: String(result.duration || ''),
         motion: result.motion || '',
         persona_id: result.persona_id || '',
+        ...(result.status_url ? { status_url: result.status_url } : {}),
+        ...(result.response_url ? { response_url: result.response_url } : {}),
       })
       const r = await fetch(`/api/god-mode/gen-status?${qs}`, { cache: 'no-store' })
       const j = await r.json().catch(() => ({ ok: false, error: 'non-json response' }))
