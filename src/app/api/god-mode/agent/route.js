@@ -739,51 +739,35 @@ HTML: ${html.slice(0, 22000)}`
       }
       if (!urlToAnalyze) return { type: 'error', error: 'gak nemu URL video atau attachment buat dianalisis. Paste link video atau upload langsung.' }
 
-      // ── DETECT URL KIND ──
-      // The old version blindly sent the URL text to Gemini, which DOES
-      // NOT fetch URLs. Gemini would hallucinate an analysis from training
-      // data (or pure guess) — user got bogus "2D animation cartoon"
-      // analysis on a live-action talk show. Now we route by URL kind:
-      //   1. YouTube/TikTok/IG → can't fetch frames, return explicit
-      //      warning + actionable workaround. NO hallucinated analysis.
-      //   2. Direct video file URL (.mp4/.mov/.webm) <20MB → fetch bytes,
-      //      pass to Gemini as inline_data so it sees actual frames.
-      //   3. Direct video file URL >20MB → can't inline, fall back to
-      //      metadata-only with the same warning as #1.
+      // ── ROUTE BY URL KIND ──
+      // Gemini 2.5 supports 3 video input shapes — we route to the
+      // RIGHT one per source so the model sees actual frames, never
+      // hallucinates from URL text alone:
+      //
+      //   1. YouTube URL → Gemini's NATIVE file_data part with
+      //      file_uri="<youtube url>" + mime_type="video/*". Gemini
+      //      fetches + analyzes the public video itself. Up to 8 hours
+      //      of YouTube per day on free tier; works on all public
+      //      youtube.com / youtu.be URLs.
+      //   2. Direct video file URL <20MB → inline_data with bytes
+      //      (download → base64). Works for R2 / Supabase storage /
+      //      public mp4 hosts.
+      //   3. TikTok / Instagram → block. Gemini's file_data only
+      //      supports YouTube + Google Cloud Storage URIs; those
+      //      platforms CORS-block direct fetch too.
       const isYouTube = /youtube\.com|youtu\.be/i.test(urlToAnalyze)
       const isTikTok = /tiktok\.com/i.test(urlToAnalyze)
       const isInstagram = /instagram\.com/i.test(urlToAnalyze)
-      const isPlatformURL = isYouTube || isTikTok || isInstagram
 
-      if (isPlatformURL) {
-        const platform = isYouTube ? 'YouTube' : isTikTok ? 'TikTok' : 'Instagram'
+      if (isTikTok || isInstagram) {
+        const platform = isTikTok ? 'TikTok' : 'Instagram'
         return {
           type: 'error',
-          error: `Sori bro, gua gak bisa langsung tonton ${platform} video dari URL — Gemini gak punya akses fetch URL eksternal. Workaround: download videonya (pakai ssstik / yt-dlp / snaptik), upload mp4-nya ke chat ini lewat tombol 📎, lalu suruh gua "analisis video di atas". Cara itu gua dapet frame asli, bukan ngarang dari training data.`,
+          error: `Gemini API gak support ${platform} URL langsung (cuma YouTube + direct mp4 URLs). Workaround: download videonya pake snaptik / ssstik, upload mp4 ke chat ini lewat 📎, lalu suruh gua analisis lagi.`,
         }
       }
 
-      // Direct video URL — try to fetch + analyze with real frames.
-      try {
-        const head = await fetch(urlToAnalyze, { method: 'HEAD' })
-        const sizeHeader = head.headers.get('content-length')
-        const sizeMb = sizeHeader ? parseInt(sizeHeader) / 1024 / 1024 : null
-        if (sizeMb != null && sizeMb > 20) {
-          return {
-            type: 'error',
-            error: `Video ${sizeMb.toFixed(1)}MB — Gemini inline limit 20MB. Trim videonya dulu atau upload yang lebih kecil.`,
-          }
-        }
-
-        const videoRes = await fetch(urlToAnalyze)
-        if (!videoRes.ok) {
-          return { type: 'error', error: `Gagal fetch video (${videoRes.status}). Cek URL-nya valid + accessible.` }
-        }
-        const videoBuf = Buffer.from(await videoRes.arrayBuffer())
-        const mimeType = head.headers.get('content-type') || 'video/mp4'
-        const videoBase64 = videoBuf.toString('base64')
-
-        const analyzePrompt = `Analyze the attached video reference and extract its production strategy so the user can replicate similar content. Reply in Bahasa Indonesia. Base your analysis on what you actually SEE in the video frames, not assumptions from the URL.
+      const analyzePrompt = `Analyze the attached video reference and extract its production strategy so the user can replicate similar content. Reply in Bahasa Indonesia. Base your analysis on what you actually SEE in the video frames, not assumptions from the URL.
 
 Return JSON only with these fields:
 {
@@ -796,21 +780,41 @@ Return JSON only with these fields:
   "replication_strategy": "step-by-step strategy to replicate this style in 1-2 paragraphs"
 }`
 
+      try {
+        let videoPart
+        if (isYouTube) {
+          // YouTube → file_data with the URL. Gemini fetches natively.
+          // mime_type 'video/*' lets the API auto-detect format.
+          videoPart = { file_data: { mime_type: 'video/*', file_uri: urlToAnalyze } }
+        } else {
+          // Direct video URL — fetch + inline. Check size first.
+          const head = await fetch(urlToAnalyze, { method: 'HEAD' })
+          const sizeHeader = head.headers.get('content-length')
+          const sizeMb = sizeHeader ? parseInt(sizeHeader) / 1024 / 1024 : null
+          if (sizeMb != null && sizeMb > 20) {
+            return {
+              type: 'error',
+              error: `Video ${sizeMb.toFixed(1)}MB — Gemini inline limit 20MB. Trim videonya dulu atau upload yang lebih kecil.`,
+            }
+          }
+          const videoRes = await fetch(urlToAnalyze)
+          if (!videoRes.ok) {
+            return { type: 'error', error: `Gagal fetch video (${videoRes.status}). Cek URL valid + accessible.` }
+          }
+          const videoBuf = Buffer.from(await videoRes.arrayBuffer())
+          const mimeType = head.headers.get('content-type') || 'video/mp4'
+          videoPart = { inline_data: { mime_type: mimeType, data: videoBuf.toString('base64') } }
+        }
+
         const result = await callLLMJSON({
           workspaceId: ctx.workspaceId,
-          contents: [{
-            role: 'user',
-            parts: [
-              { text: analyzePrompt },
-              { inline_data: { mime_type: mimeType, data: videoBase64 } },
-            ],
-          }],
+          contents: [{ role: 'user', parts: [{ text: analyzePrompt }, videoPart] }],
           temperature: 0.4,
           maxOutputTokens: 3000,
         })
         return { type: 'video_analysis', source_url: urlToAnalyze, ...(result.parsed || {}) }
       } catch (e) {
-        return { type: 'error', error: `Analisis gagal: ${e.message}. Coba upload video lewat 📎 langsung.` }
+        return { type: 'error', error: `Analisis gagal: ${e.message}. Coba upload video langsung lewat 📎 kalo URL nya bermasalah.` }
       }
     },
   },
