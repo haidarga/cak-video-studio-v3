@@ -815,7 +815,15 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       const disabledSet = new Set(shot.disabledRefIds || [])
       const filteredSelected = selectedRefs.filter((r) => !disabledSet.has(r.id))
       const filteredStyle = styleRefs.filter((r) => !disabledSet.has(r.id))
-      const characterProductUrls = filteredSelected.map((r) => r.fal_url).filter(Boolean)
+      // Split by ref kind so motion prompt can role-anchor each properly.
+      // Without this, model treats all refs equally + tends to "animate
+      // the first ref as-is" (plek ketiplek the character pose/setting,
+      // ignoring the product + motion prompt entirely).
+      const characterFiltered = filteredSelected.filter((r) => (r.kind || 'character') === 'character')
+      const productFiltered = filteredSelected.filter((r) => r.kind === 'product')
+      const characterUrls = characterFiltered.map((r) => r.fal_url).filter(Boolean)
+      const productUrls = productFiltered.map((r) => r.fal_url).filter(Boolean)
+      const characterProductUrls = [...characterUrls, ...productUrls]
       const styleUrls = filteredStyle.map((r) => r.fal_url).filter(Boolean)
       const refUrls = [...characterProductUrls, ...styleUrls]
       // Direct mode REQUIRES refs (there's no source image to fall back on).
@@ -942,6 +950,40 @@ ${beats}
 MOTION DETAILS:
 ${motion}`
       }
+
+      // ── Role anchor preamble for ALL r2v gens (not just storyboard) ──
+      // Without this, models treat all refs equally + tend to "animate the
+      // first ref as-is" (plek ketiplek character pose/setting, ignore
+      // product, ignore motion prompt). User-reported bug.
+      //
+      // The preamble explicitly maps ref position -> role and tells the
+      // model to use refs as IDENTITY anchors only (not pose/setting
+      // anchors). Setting/action come from MOTION PROMPT.
+      if (isRefVid && characterUrls.length + productUrls.length > 0) {
+        const ranges = []
+        let cursor = 1
+        if (characterUrls.length > 0) {
+          const end = cursor + characterUrls.length - 1
+          ranges.push(`- Reference image${characterUrls.length > 1 ? `s ${cursor}-${end}` : ` ${cursor}`} = the CHARACTER (use to lock face/hair/body identity ONLY — do NOT copy the reference pose, setting, expression, or clothing background)`)
+          cursor += characterUrls.length
+        }
+        if (productUrls.length > 0) {
+          const end = cursor + productUrls.length - 1
+          ranges.push(`- Reference image${productUrls.length > 1 ? `s ${cursor}-${end}` : ` ${cursor}`} = the PRODUCT (must appear visibly in the video, held/used/showcased by the character. Render the product packaging EXACTLY — same shape, color, label text, proportions as the reference)`)
+          cursor += productUrls.length
+        }
+        const productMandate = productUrls.length > 0
+          ? '\n- MANDATORY: the product reference must be visible throughout the video. Do NOT generate a video without the product. If the motion prompt does not specify when to show it, default to the character holding/using it from start to finish.'
+          : ''
+        const roleAnchor = `REFERENCE ROLES (CRITICAL — read before generating):
+${ranges.join('\n')}
+- The character must perform the action described in MOTION below — NOT recreate the pose from the character reference. Setting, lighting, framing come from MOTION, not from refs.${productMandate}
+
+MOTION:
+${finalMotion}`
+        finalMotion = roleAnchor
+      }
+
       const vidInput = buildVidInput(vidModel, {
         prompt: finalMotion,
         image_url: isDirect ? undefined : shot.image?.url,
