@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/retry-failed-gens",
+      "schedule": "*/15 * * * *"
+    }
+  ]
+}

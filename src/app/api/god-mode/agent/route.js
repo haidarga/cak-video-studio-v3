@@ -1014,6 +1014,45 @@ Return JSON only, no prose. No markdown fences. Be specific, no generic filler.`
     },
   },
 
+  // ─ Viral Clip Cutter ────────────────────────────────────────────
+  viral_clip_cut: {
+    description: 'Cut a long video into platform-target clips (TikTok 60s, Reels 90s, Shorts 60s). Use when user asks "potong video buat TikTok", "bikin reels dari video ini", "cut clip 60 detik mulai detik 30", "convert ke shorts format". Provide video_url + clips array [{ start, duration | preset }]. Preset auto-fills duration: tiktok/shorts=60s, reels/ig=90s.',
+    handler: async ({ video_url, clips, result_id }, ctx) => {
+      if (!video_url) {
+        // Auto-resolve from chat attachments OR most-recent video result
+        const att = (ctx.recentAttachments || []).find((a) => a.type === 'video' && a.url)
+        if (att) video_url = att.url
+      }
+      if (!video_url) return { type: 'error', error: 'video_url required — upload video ke chat atau kasih URL' }
+      if (!Array.isArray(clips) || clips.length === 0) {
+        // Sensible default — one 60s clip from the start
+        clips = [{ start: 0, duration: 60, preset: 'tiktok', label: 'TikTok cut' }]
+      }
+
+      try {
+        const proto = ctx.req?.headers?.get?.('x-forwarded-proto') || 'https'
+        const host = ctx.req?.headers?.get?.('host') || 'localhost:3000'
+        const cookie = ctx.req?.headers?.get?.('cookie') || ''
+        const r = await fetch(`${proto}://${host}/api/viral-clip/cut`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Cookie: cookie },
+          body: JSON.stringify({ video_url, clips, result_id }),
+        })
+        const j = await r.json()
+        if (!j.ok) return { type: 'error', error: j.error || 'clip cut failed' }
+        return {
+          type: 'viral_clip_result',
+          source: j.source,
+          clips: j.clips,
+          count: j.count,
+          failed: j.failed,
+        }
+      } catch (e) {
+        return { type: 'error', error: e.message }
+      }
+    },
+  },
+
   // ─ Soul / LoRA training ─────────────────────────────────────────
   train_persona_soul: {
     description: 'Start training a Soul (LoRA) for a persona. Use when user explicitly asks to train soul, train persona, lock character via training. Requires persona_id + reference image URLs (from user attachments or persona refs).',

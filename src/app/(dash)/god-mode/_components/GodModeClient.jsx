@@ -734,7 +734,59 @@ function ToolResult({ result, personas, onPresetUse, onPersonaPick, onProductPic
   if (result.type === 'viral_ad_campaign_result') {
     return <ViralAdCampaignResult result={result} />
   }
+  if (result.type === 'viral_clip_result') {
+    return <ViralClipResult result={result} />
+  }
   return null
+}
+
+function ViralClipResult({ result }) {
+  return (
+    <div className="mt-3 bg-[var(--surface)] border border-[var(--border)] rounded-lg p-4 space-y-3">
+      <div className="flex items-baseline justify-between">
+        <div className="text-[10px] uppercase font-bold text-[var(--accent)]">
+          ✂ Viral Clip Cuts · {result.count}/{result.count + result.failed} success
+        </div>
+        {result.failed > 0 && (
+          <div className="text-[10px] text-red-400">{result.failed} failed</div>
+        )}
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {(result.clips || []).map((c, i) => (
+          <div
+            key={i}
+            className={`rounded p-2 border text-[11px] ${c.ok ? 'bg-[var(--surface2)] border-[var(--border)]' : 'bg-red-500/10 border-red-500/30'}`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="font-bold truncate">
+                {c.preset && <span className="text-[var(--accent)]">{c.preset.toUpperCase()}</span>} {c.label || `Clip ${i + 1}`}
+              </div>
+              <div className="text-[10px] text-[var(--muted)] tabular-nums shrink-0">
+                {c.start}s + {c.duration}s
+              </div>
+            </div>
+            {c.ok && c.url ? (
+              <>
+                <video src={c.url} controls preload="metadata" className="mt-1 w-full rounded bg-black aspect-video object-contain" />
+                <a
+                  href={c.url} target="_blank" rel="noreferrer"
+                  download
+                  className="inline-block mt-1 text-[10px] text-[var(--accent)] hover:underline"
+                >
+                  ↓ Download mp4
+                </a>
+              </>
+            ) : (
+              <div className="text-[10px] text-red-400 mt-1">{c.error}</div>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="text-[10px] text-[var(--muted2)] italic">
+        Note: clips di-cache di v2 backend (HF Space) — file mungkin di-evict setelah beberapa jam. Buat permanent storage, download + upload ulang ke R2.
+      </div>
+    </div>
+  )
 }
 
 function ViralAdCampaignResult({ result }) {
