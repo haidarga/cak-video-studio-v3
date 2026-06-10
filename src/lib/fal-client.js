@@ -142,16 +142,41 @@ async function falRunOnce(model, input, { onProgress, maxWaitMs, workspaceId, du
     supabase.from('gen_jobs').select('*').eq('request_id', requestId).maybeSingle()
       .then(({ data }) => { if (data) finish(data) })
 
-    // Fallback poll every 45s of OUR Supabase (not fal). Catches the case
-    // where the realtime channel quietly drops — Supabase realtime is reliable
-    // but not bulletproof on flaky networks / phone backgrounding.
+    // Fallback poll every 20s of OUR Supabase + fal direct status.
+    // Two reasons for the dual poll:
+    //   1. Supabase realtime sometimes silently drops on flaky networks /
+    //      phone backgrounding — without this, the UI would just sit on
+    //      "submitted, waiting for webhook..." forever even after the gen
+    //      actually completed on fal side.
+    //   2. fal direct status gives us queue_position + IN_QUEUE/IN_PROGRESS
+    //      states the user can SEE — much better UX than a silent timer.
+    //      Without this, user sees "lama bro" with no signal whether fal
+    //      is queued (will eventually move) or stuck (need to bail).
     fallbackInterval = setInterval(async () => {
       if (settled) return
       const elapsed = Math.round((Date.now() - start) / 1000)
-      onProgress?.(`waiting (${elapsed}s)`)
       const { data } = await supabase.from('gen_jobs').select('*').eq('request_id', requestId).maybeSingle()
-      if (data) finish(data)
-    }, 45000)
+      if (data?.status === 'done' || data?.status === 'error') { finish(data); return }
+      // Probe fal direct status via /api/god-mode/gen-status which already
+      // handles canonical-path resolution + reads status_url from gen_jobs.
+      try {
+        const qs = new URLSearchParams({ request_id: requestId, model })
+        const r = await fetch(`/api/god-mode/gen-status?${qs}`, { cache: 'no-store' })
+        const j = await r.json().catch(() => ({}))
+        if (j.ok && j.status === 'done' && j.url) {
+          // gen-status already saved the result row + would have triggered
+          // webhook; mark settled with the URL we got.
+          settled = true; cleanup()
+          resolve(j.url ? { video: { url: j.url }, images: [{ url: j.url }] } : {})
+          return
+        }
+        const falState = j.fal_status || 'pending'
+        const queuePos = j.queue_position != null ? ` · #${j.queue_position} in queue` : ''
+        onProgress?.(`${falState}${queuePos} (${elapsed}s)`)
+      } catch {
+        onProgress?.(`waiting (${elapsed}s)`)
+      }
+    }, 20000)
 
     // Hard timeout — if no webhook AND fallback never sees done, give up.
     // Video gen defaults to 20 min (Grok ref-to-video + Kling Pro under
