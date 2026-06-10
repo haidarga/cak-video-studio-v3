@@ -137,11 +137,25 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
 
   return (
     <div className="space-y-6 max-w-5xl">
-      <div>
-        <h1 className="text-3xl font-bold mb-1">⚡ Generate</h1>
-        <p className="text-sm text-[var(--muted)]">
-          Pilih persona → naskah → Parse → <strong>Generate Images dulu</strong> → approve yang oke → <strong>Generate Videos</strong> dari approved. Image murah, video mahal — filter di level image dulu.
-          {activeBrand && <> · Brand aktif: <strong className="text-[var(--accent)]">{activeBrand.name}</strong></>}
+      {/* Hero header — halo glow + gradient typography. Aim: less
+          "AI-template" plain h1, more "landing page" focal energy. */}
+      <div className="hero-halo text-center py-8 md:py-12">
+        <div className="flex justify-center mb-4">
+          {activeBrand && (
+            <div className="brand-pill">
+              🏷 BRAND AKTIF · {activeBrand.name}
+            </div>
+          )}
+        </div>
+        <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight leading-[1.05] mb-3">
+          <span className="gradient-text-strong">Generate.</span>
+          <br />
+          <span className="text-[var(--text)]">Build your brand.</span>
+        </h1>
+        <p className="text-sm md:text-base text-[var(--muted)] max-w-xl mx-auto leading-relaxed">
+          Pilih persona → naskah → Parse → <strong className="text-[var(--text)]">Images dulu</strong> → approve yang oke → <strong className="text-[var(--text)]">Videos</strong> dari approved.
+          <br className="hidden md:inline" />
+          <span className="text-[var(--muted2)]">Image murah, video mahal — filter di level image dulu.</span>
         </p>
       </div>
 
@@ -379,22 +393,30 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
             Belum ada persona. <a href="/personas" className="underline text-[var(--accent)]">Bikin persona dulu</a>.
           </div>
         ) : (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
             {personas.map((p) => {
               const on = selectedIds.has(p.id)
               return (
-                <button key={p.id} onClick={() => togglePersona(p.id)}
-                  className={`text-left p-3 rounded-lg border ${on
-                    ? 'border-[var(--accent)] bg-[var(--surface)]'
-                    : 'border-[var(--border)] bg-[var(--surface)] hover:border-[var(--muted)]'}`}>
-                  <div className="flex items-center gap-2">
-                    {p.avatar_url
-                      ? <img src={p.avatar_url} alt="" className="w-9 h-9 rounded-full object-cover" />
-                      : <div className="w-9 h-9 rounded-full bg-[var(--surface2)] flex items-center justify-center text-sm font-bold">{(p.name || '?').slice(0, 1).toUpperCase()}</div>}
+                <button
+                  key={p.id}
+                  onClick={() => togglePersona(p.id)}
+                  data-selected={on ? 'true' : 'false'}
+                  className="glow-card text-left p-3.5"
+                >
+                  <div className="flex items-center gap-2.5">
+                    {p.avatar_url ? (
+                      <span className="avatar-ring shrink-0">
+                        <img src={p.avatar_url} alt="" className="w-9 h-9 object-cover" />
+                      </span>
+                    ) : (
+                      <span className="avatar-ring shrink-0">
+                        <div className="w-9 h-9 bg-[var(--surface2)] flex items-center justify-center text-sm font-bold">
+                          {(p.name || '?').slice(0, 1).toUpperCase()}
+                        </div>
+                      </span>
+                    )}
                     <div className="min-w-0 flex-1">
-                      <div className="text-sm font-semibold truncate flex items-center gap-1">
-                        {on && <span className="text-[var(--accent)]">✓</span>}{p.name}
-                      </div>
+                      <div className="text-sm font-semibold truncate">{p.name}</div>
                       <div className="text-[10px] text-[var(--muted)] truncate">@{p.username || '—'}</div>
                     </div>
                   </div>

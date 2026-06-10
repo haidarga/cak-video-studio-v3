@@ -10,6 +10,7 @@ import MobileNav from './_components/MobileNav'
 import ThemeToggle from './_components/ThemeToggle'
 import GlobalSearch from './_components/GlobalSearch'
 import HelpModal from './_components/HelpModal'
+import NavLink from './_components/NavLink'
 
 export default async function DashLayout({ children }) {
   const supabase = await createClient()
@@ -62,9 +63,12 @@ export default async function DashLayout({ children }) {
 
   const sidebarContent = (
     <>
-      <div className="mb-3">
-        <div className="text-sm font-bold">CAK Video</div>
-        <div className="text-xs text-[var(--muted)] truncate">{activeWs?.name}</div>
+      {/* Brand header — gradient text + subtle workspace label */}
+      <div className="mb-3 pb-3 border-b border-[var(--border)]">
+        <div className="text-base font-extrabold tracking-tight gradient-text-strong">CAK Video</div>
+        <div className="text-[10px] text-[var(--muted)] truncate uppercase font-semibold tracking-wider mt-0.5">
+          {activeWs?.name}
+        </div>
       </div>
       <div className="mb-3">
         <ActiveBrandWidget workspaceId={activeWs.id} activeBrandId={activeWs.active_brand_id} brands={brands || []} />
@@ -80,11 +84,13 @@ export default async function DashLayout({ children }) {
       <NavLink href="/dashboard" label="📊 Dashboard" />
       <NavLink href="/errors" label="🚨 Errors" />
       <NavLink href="/team" label="👥 Team" />
-      <div className="text-[9px] uppercase text-[var(--muted2)] font-bold tracking-wider mt-4 mb-1 px-3">Library</div>
+      <div className="text-[9px] uppercase text-[var(--muted2)] font-bold tracking-[0.18em] mt-5 mb-2 px-3 flex items-center gap-1.5">
+        <span className="block w-1 h-3 bg-gradient-to-b from-[var(--purple)] to-[var(--magenta)] rounded-sm shadow-[0_0_6px_var(--accent-glow)]"></span>Library</div>
       <NavLink href="/brands" label="🏷 Brands" />
       <NavLink href="/personas" label="🎭 Personas" />
       <NavLink href="/refs" label="🖼 References" />
-      <div className="text-[9px] uppercase text-[var(--muted2)] font-bold tracking-wider mt-4 mb-1 px-3">Legacy</div>
+      <div className="text-[9px] uppercase text-[var(--muted2)] font-bold tracking-[0.18em] mt-5 mb-2 px-3 flex items-center gap-1.5">
+        <span className="block w-1 h-3 bg-gradient-to-b from-[var(--purple)] to-[var(--magenta)] rounded-sm shadow-[0_0_6px_var(--accent-glow)]"></span>Legacy</div>
       <NavLink href="/studio" label="🎬 Studio v2 (single-mode)" />
       <NavLink href="/results" label="📁 Results (browse all)" />
       <div className="mt-auto pt-4 border-t border-[var(--border)] text-xs text-[var(--muted)]">
@@ -109,12 +115,5 @@ export default async function DashLayout({ children }) {
   )
 }
 
-function NavLink({ href, label, highlight = false }) {
-  // GOD MODE entry uses a subtle accent border so the user can spot the new
-  // surface area at a glance. Other links keep the default flat hover style.
-  const base = 'block px-3 py-2 rounded text-sm hover:bg-[var(--surface2)]'
-  const cls = highlight
-    ? `${base} border border-[var(--accent)]/40 bg-gradient-to-r from-[var(--accent)]/10 to-transparent text-[var(--accent)] font-semibold`
-    : base
-  return <Link href={href} className={cls}>{label}</Link>
-}
+// NavLink moved to ./_components/NavLink.jsx (client component with
+// usePathname for auto-active-state detection).

@@ -298,37 +298,46 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
 
   return (
     <div className="max-w-4xl mx-auto">
-      <header className="mb-5 flex items-start justify-between gap-4">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-3xl">🔥</span>
-            <h1 className="text-3xl font-bold">God Mode</h1>
-            <span className="text-[10px] uppercase font-bold bg-[var(--accent)]/20 text-[var(--accent)] px-2 py-0.5 rounded">Beta</span>
-          </div>
-          <p className="text-sm text-[var(--muted)]">
-            Conversational AI agent — describe what you want, the agent picks the right tool. Built on top of {personas.length} personas + {productRefs.length} products + 28 cinematic presets.
-          </p>
-          {activeBrand && (
-            <div className="mt-2 inline-flex items-center gap-1.5 text-[10px] uppercase font-semibold text-[var(--accent)] bg-[var(--accent)]/10 px-2 py-1 rounded border border-[var(--accent)]/30">
-              🏷 brand: {activeBrand.name}
+      <header className="hero-halo mb-6 pt-4 pb-2">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
+              <span className="text-4xl float-soft">🔥</span>
+              <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight">
+                <span className="gradient-text-strong">God Mode</span>
+              </h1>
+              <span className="text-[10px] uppercase font-bold bg-[var(--accent)]/20 text-[var(--accent)] px-2 py-0.5 rounded border border-[var(--accent)]/30">Beta</span>
             </div>
-          )}
-        </div>
-        {/* Conversation controls — new chat + history toggle. Compact icon
-            buttons so the header doesn't compete with content. */}
-        <div className="flex gap-1 flex-shrink-0">
-          <button
-            onClick={newConversation}
-            title="Start new conversation"
-            className="text-xs px-3 py-2 rounded-lg bg-[var(--surface2)] border border-[var(--border)] hover:border-[var(--accent)]/40 font-semibold">
-            + New
-          </button>
-          <button
-            onClick={() => { setShowHistory((s) => !s); if (!showHistory) loadHistory() }}
-            title="Show conversation history"
-            className={`text-xs px-3 py-2 rounded-lg border font-semibold ${showHistory ? 'bg-[var(--accent)]/20 border-[var(--accent)]/50 text-[var(--accent)]' : 'bg-[var(--surface2)] border-[var(--border)] hover:border-[var(--accent)]/40'}`}>
-            🕐 History
-          </button>
+            <p className="text-sm md:text-base text-[var(--muted)] max-w-2xl leading-relaxed">
+              Conversational AI agent — describe what you want, the agent picks the right tool.
+              <br className="hidden md:inline" />
+              <span className="text-[var(--muted2)]">
+                Built on top of {personas.length} personas · {productRefs.length} products · 28 cinematic presets.
+              </span>
+            </p>
+            {activeBrand && (
+              <div className="mt-3 brand-pill">
+                BRAND · {activeBrand.name}
+              </div>
+            )}
+          </div>
+          {/* Conversation controls — new chat + history toggle. */}
+          <div className="flex gap-1 flex-shrink-0">
+            <button
+              onClick={newConversation}
+              title="Start new conversation"
+              className="btn-ghost-glow text-xs"
+            >
+              + New
+            </button>
+            <button
+              onClick={() => { setShowHistory((s) => !s); if (!showHistory) loadHistory() }}
+              title="Show conversation history"
+              className={`btn-ghost-glow text-xs ${showHistory ? 'border-[var(--accent)]/60 text-[var(--accent)]' : ''}`}
+            >
+              🕐 History
+            </button>
+          </div>
         </div>
       </header>
 
