@@ -136,7 +136,7 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
   const selectedPersonas = useMemo(() => personas.filter((p) => selectedIds.has(p.id)), [personas, selectedIds])
 
   return (
-    <div className="space-y-6 max-w-5xl">
+    <div className="space-y-6 max-w-5xl mx-auto">
       {/* Hero header — halo glow + gradient typography. Aim: less
           "AI-template" plain h1, more "landing page" focal energy. */}
       <div className="hero-halo text-center py-8 md:py-12">
