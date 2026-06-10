@@ -28,28 +28,27 @@
 //     no action needed. If it returns empty/404, add to ALIAS_MAP after
 //     checking fal.ai dashboard for the canonical "Endpoint" field.
 
+// VERIFIED canonical mappings — confirmed by inspecting the fal.ai
+// dashboard "Endpoint" field after a real submit. Used by canonicalFalPath()
+// at SUBMIT time, so wrong entries here BREAK submission. Only add after
+// dashboard verification.
+//
+// For UNVERIFIED models, leave them out of this map. candidateFalPaths()
+// will probe algorithmic derivations + capture authoritative status_url
+// from the fal submit response (which works regardless of our guess).
 const ALIAS_MAP = {
-  // ── Seedance 2 (verified via fal dashboard) ──
+  // ── Seedance 2 (verified — drops "bytedance/" prefix, normalizes "2.0"→"2") ──
   'bytedance/seedance-2.0/fast/reference-to-video': 'fal-ai/seedance-2/fast/reference-to-video',
   'bytedance/seedance-2.0/fast/image-to-video': 'fal-ai/seedance-2/fast/image-to-video',
   'bytedance/seedance-2.0/fast/text-to-video': 'fal-ai/seedance-2/fast/text-to-video',
   'bytedance/seedance-2.0/pro/reference-to-video': 'fal-ai/seedance-2/pro/reference-to-video',
   'bytedance/seedance-2.0/pro/image-to-video': 'fal-ai/seedance-2/pro/image-to-video',
 
-  // ── xAI Grok Imagine Video (verified via fal dashboard) ──
+  // ── xAI Grok Imagine Video (verified — drops middle "grok-imagine-video") ──
+  // Both i2v and r2v variants share this exact pattern. Dashboard endpoint
+  // shows fal-ai/xai/reference-to-video and fal-ai/xai/image-to-video.
   'xai/grok-imagine-video/reference-to-video': 'fal-ai/xai/reference-to-video',
   'xai/grok-imagine-video/image-to-video': 'fal-ai/xai/image-to-video',
-
-  // ── Happy Horse (alibaba) — common alias pattern, fal-ai/ prefix ──
-  'alibaba/happy-horse/image-to-video': 'fal-ai/alibaba/happy-horse/image-to-video',
-  'alibaba/happy-horse/reference-to-video': 'fal-ai/alibaba/happy-horse/reference-to-video',
-
-  // ── xAI Grok Imagine Image Edit ──
-  'xai/grok-imagine-image/quality/edit': 'fal-ai/xai/grok-imagine-image/quality/edit',
-
-  // ── OpenAI GPT Image 2 ──
-  'openai/gpt-image-2': 'fal-ai/openai/gpt-image-2',
-  'openai/gpt-image-2/edit': 'fal-ai/openai/gpt-image-2/edit',
 }
 
 // Reverse lookup so we can also normalize when caller passed canonical.
@@ -72,33 +71,60 @@ export function canonicalFalPath(model) {
  * Generate algorithmic candidate transformations for an unknown model path.
  * Covers common patterns fal uses when going from public alias to canonical:
  *   - Add `fal-ai/` prefix
- *   - Drop vendor prefix segment (xai/foo/bar → fal-ai/foo/bar; or fal-ai/bar)
- *   - Normalize version dot suffix (X-2.0 → X-2)
- * Returns the list of derived candidates (excluding the input itself).
+ *   - Drop the vendor segment (`bytedance/X/Y` → `fal-ai/X/Y`)
+ *   - DROP MIDDLE SEGMENT (`xai/grok-imagine-video/i2v` → `fal-ai/xai/i2v`).
+ *     This is the Grok pattern. Without it, Grok variants beyond r2v/i2v
+ *     would silently fail to resolve.
+ *   - Normalize semver suffix (`seedance-2.0` → `seedance-2`)
+ *   - Combinations of the above
+ *
+ * NOTE — keeping the LAST segment (variant: i2v/r2v/t2v/edit) intact in
+ * every candidate. Endpoints differ by variant; never drop it.
  */
 function algorithmicCandidates(model) {
   const out = new Set()
   if (!model || typeof model !== 'string') return []
   const parts = model.split('/')
 
-  // Prefix with fal-ai/ if not already
+  // ── Base permutations (no version normalization yet) ──
   if (!model.startsWith('fal-ai/')) {
+    // Add fal-ai/ prefix as-is.
     out.add(`fal-ai/${model}`)
-    // Also drop the first (vendor) segment: bytedance/X/Y → fal-ai/X/Y
+    // Drop vendor (first segment): a/b/c → fal-ai/b/c
     if (parts.length >= 2) out.add(`fal-ai/${parts.slice(1).join('/')}`)
+    // Drop middle segments — keep first + last (Grok pattern).
+    // For 3+ segments only; for `a/b/c` produces `fal-ai/a/c`.
+    if (parts.length >= 3) {
+      const first = parts[0]
+      const last = parts[parts.length - 1]
+      out.add(`fal-ai/${first}/${last}`)
+      // For 4+ segments, also try dropping each interior position.
+      for (let i = 1; i < parts.length - 1; i++) {
+        const reduced = [...parts.slice(0, i), ...parts.slice(i + 1)].join('/')
+        out.add(`fal-ai/${reduced}`)
+      }
+    }
   } else {
-    // If already canonical, try the alias form (drop fal-ai/)
+    // Already canonical — also try the alias form (drop fal-ai/) so we
+    // can resolve a request that was submitted via alias even though we
+    // stored canonical.
     out.add(parts.slice(1).join('/'))
   }
 
-  // Normalize semver-style suffix: seedance-2.0 → seedance-2
+  // ── Version normalization: seedance-2.0 → seedance-2 ──
+  // Apply transform then re-run base permutations on the normalized form.
   const normalized = model.replace(/-(\d+)\.0(\b|\/)/g, '-$1$2')
   if (normalized !== model) {
     out.add(normalized)
-    if (!normalized.startsWith('fal-ai/')) out.add(`fal-ai/${normalized}`)
     const nParts = normalized.split('/')
-    if (nParts.length >= 2 && !normalized.startsWith('fal-ai/')) {
-      out.add(`fal-ai/${nParts.slice(1).join('/')}`)
+    if (!normalized.startsWith('fal-ai/')) {
+      out.add(`fal-ai/${normalized}`)
+      if (nParts.length >= 2) {
+        out.add(`fal-ai/${nParts.slice(1).join('/')}`)
+      }
+      if (nParts.length >= 3) {
+        out.add(`fal-ai/${nParts[0]}/${nParts[nParts.length - 1]}`)
+      }
     }
   }
 
