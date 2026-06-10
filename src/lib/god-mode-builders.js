@@ -423,7 +423,7 @@ export async function fetchUrlAsHtml(url, opts = {}) {
     // (rather than calling Browserless directly) so the auth boundary +
     // env var stay on the server. Pass `_internalBrowserlessRetry: true`
     // to prevent infinite recursion if browserless itself returns shell.
-    if (process.env.BROWSERLESS_TOKEN && !arguments[1]?._noRetry) {
+    if (process.env.BROWSERLESS_TOKEN && !opts._noRetry) {
       try {
         const proto = process.env.NEXT_PUBLIC_APP_URL || `https://${process.env.VERCEL_URL || 'localhost:3000'}`
         const blRes = await fetch(`${proto}/api/scrape-spa`, {
@@ -431,7 +431,7 @@ export async function fetchUrlAsHtml(url, opts = {}) {
           headers: {
             'Content-Type': 'application/json',
             // Forward cookie so /api/scrape-spa sees the logged-in user
-            ...(arguments[1]?.cookie ? { Cookie: arguments[1].cookie } : {}),
+            ...(opts.cookie ? { Cookie: opts.cookie } : {}),
           },
           body: JSON.stringify({ url, waitFor: 5000 }),
         })
