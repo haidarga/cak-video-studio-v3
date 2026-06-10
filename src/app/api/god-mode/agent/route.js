@@ -1204,6 +1204,103 @@ Return JSON only, no prose. No markdown fences. Be specific, no generic filler.`
     },
   },
 
+  // ─ Continue shot — next image/video in a sequence ────────────────
+  continue_shot: {
+    description: 'Generate the NEXT shot in a sequence based on the most recent gen_image / gen_video in this conversation. Same character/style/setting carried over, only the action/moment advances. Use when user says "next shot", "lanjutin", "shot 2", "continue dari yang tadi", "shot berikutnya tapi dia lagi X". Optional `next_action` describes what the new shot shows.',
+    handler: async ({ next_action, kind }, ctx) => {
+      // Find most recent gen result in conversation history. Skip queued
+      // / pending types — only completed results carry usable metadata.
+      const allMsgs = ctx.messages || []
+      let lastGen = null
+      for (let i = allMsgs.length - 1; i >= 0; i--) {
+        const m = allMsgs[i]
+        const r = m?.result
+        if (r && (r.type === 'gen_image_result' || r.type === 'gen_video_result')) {
+          lastGen = r
+          break
+        }
+      }
+      if (!lastGen) {
+        return { type: 'error', error: 'Belum ada gen result di chat ini buat dilanjutin. Bikin shot pertama dulu pake gen_image atau gen_video.' }
+      }
+
+      const isVideoSource = lastGen.type === 'gen_video_result'
+      // Default: continue in the SAME medium. User can override via `kind`
+      // (e.g. last was image, user wants video continuation -> animate it).
+      const targetKind = kind || (isVideoSource ? 'video' : 'image')
+
+      // Pull the source prompt from regen_payload (where gen_image/gen_video
+      // stashed the prompt + ar + duration + model at gen time).
+      const srcPayload = lastGen.regen_payload || {}
+      const sourcePrompt =
+        srcPayload.prompt ||                // gen_image stashed under prompt
+        srcPayload.motion_prompt ||         // gen_video stashed under motion_prompt
+        ''
+      if (!sourcePrompt) {
+        return { type: 'error', error: 'Gak nemu source prompt dari shot sebelumnya — coba bikin shot baru langsung pake gen_image / gen_video.' }
+      }
+
+      // Build continuation prompt via LLM — extracts the durable elements
+      // (character, setting, style, lighting) + replaces only the action.
+      // Without this step, naive prompt concat creates internal contradictions
+      // ("she sips coffee" + "she dances" = confused model).
+      const continuationBuilder = `Lo lagi bantu user bikin shot LANJUTAN dari shot sebelumnya. Tugas: rewrite source prompt jadi versi shot baru dengan SAME character/wardrobe/setting/style/lighting tapi advance action/moment-nya.
+
+SOURCE PROMPT (shot sebelumnya):
+${sourcePrompt.slice(0, 800)}
+
+NEXT ACTION yang user mau (kalo ada): ${next_action || '(user gak specify — pilih moment natural berikutnya dalam scene yang sama, mis: kalo dia pegang cup -> sekarang dia minum / senyum / liat ke arah lain)'}
+
+Output JSON only:
+{
+  "new_prompt": "rewritten shot prompt in English, single paragraph, preserves character + setting + style but with new action",
+  "continuity_note": "1 line in Bahasa Indonesia describing what changed vs source"
+}`
+
+      let newPrompt = sourcePrompt
+      let continuityNote = ''
+      try {
+        const built = await callLLMJSON({
+          workspaceId: ctx.workspaceId,
+          contents: [{ role: 'user', parts: [{ text: continuationBuilder }] }],
+          temperature: 0.7,
+          maxOutputTokens: 800,
+        })
+        if (built.parsed?.new_prompt) newPrompt = built.parsed.new_prompt
+        continuityNote = built.parsed?.continuity_note || ''
+      } catch (e) {
+        // LLM rewrite failed -> fall back to naive concat; better than nothing.
+        newPrompt = `${sourcePrompt}\n\nNext moment: ${next_action || 'continue the scene naturally'}`
+      }
+
+      // Dispatch to gen_image or gen_video tool internally — re-use all
+      // their existing logic (budget gate, refs, fidelity directive, etc).
+      // This keeps continue_shot as a thin orchestrator, not a duplicate
+      // gen path that would drift out of sync with the main tools.
+      const targetTool = targetKind === 'video' ? TOOLS.gen_video : TOOLS.gen_image
+      const toolInput = targetKind === 'video'
+        ? {
+            motion_prompt: newPrompt,
+            duration: srcPayload.duration,
+            ar: srcPayload.ar,
+            model: srcPayload.model,
+            // If source was an image, use its URL as start frame for video continuation
+            image_url: !isVideoSource ? lastGen.url : srcPayload.image_url,
+          }
+        : {
+            prompt: newPrompt,
+            ar: srcPayload.ar,
+            model: srcPayload.model,
+          }
+      const result = await targetTool.handler(toolInput, ctx)
+      if (result && result.type !== 'error') {
+        result._continuation_of = lastGen.result_id || null
+        result._continuity_note = continuityNote
+      }
+      return result
+    },
+  },
+
   // ─ Soul / LoRA training ─────────────────────────────────────────
   train_persona_soul: {
     description: 'Start training a Soul (LoRA) for a persona. Use when user explicitly asks to train soul, train persona, lock character via training. Requires persona_id + reference image URLs (from user attachments or persona refs).',

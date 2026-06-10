@@ -324,7 +324,18 @@ export async function fetchUrlAsHtml(url) {
     },
     redirect: 'follow',
   })
-  if (!res.ok) throw new Error(`URL fetch failed: ${res.status}`)
+  if (!res.ok) {
+    // Some sites have bulletproof bot-protection (Akamai, Cloudflare Bot
+    // Manager, Imperva). Louis Vuitton, Nike, Apple, big banks all use
+    // these — they detect data-center IPs (Vercel, AWS, etc) and 403
+    // EVERYTHING regardless of UA / headers. Server-side scraping is
+    // genuinely impossible for these sites without a residential proxy.
+    // Surface a clear error with workaround instead of generic "fetch failed".
+    if (res.status === 403 || res.status === 429) {
+      throw new Error(`Site ini di-protect anti-bot Akamai/Cloudflare (403 dari Vercel IP). Server-side scrape gak bisa di-bypass. Workaround: screenshot product photo + paste ke chat ini lewat 📎, lalu kasih konteks "ini produk X dari brand Y, bikinin video review".`)
+    }
+    throw new Error(`URL fetch failed: ${res.status}. Cek URL valid + accessible publicly.`)
+  }
   const rawHtml = await res.text()
 
   // ── Extract structured data BEFORE strip ──
