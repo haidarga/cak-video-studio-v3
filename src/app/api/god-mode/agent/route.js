@@ -1083,7 +1083,7 @@ Return JSON only, no prose. No markdown fences. Be specific, no generic filler.`
 
   // ─ Viral Clip Cutter ────────────────────────────────────────────
   viral_clip_cut: {
-    description: 'Cut a long video into platform-target clips (TikTok 60s, Reels 90s, Shorts 60s). Use when user asks "potong video buat TikTok", "bikin reels dari video ini", "cut clip 60 detik mulai detik 30", "convert ke shorts format". Provide video_url + clips array [{ start, duration | preset }]. Preset auto-fills duration: tiktok/shorts=60s, reels/ig=90s.',
+    description: 'Cut a long video into platform-target clips (TikTok 60s, Reels 90s, Shorts 60s). Use when user asks "potong video buat TikTok", "bikin reels dari video ini", "cut clip 60 detik mulai detik 30", "convert ke shorts format". Provide video_url + clips array [{ start, duration | preset }]. Preset auto-fills duration: tiktok/shorts=60s, reels/ig=90s. DO NOT use with YouTube/TikTok/IG URLs — browser CORS-blocks those, fetch returns 403. User must download + upload mp4 first.',
     handler: async ({ video_url, clips, result_id }, ctx) => {
       if (!video_url) {
         // Auto-resolve from chat attachments OR most-recent video result
@@ -1091,6 +1091,20 @@ Return JSON only, no prose. No markdown fences. Be specific, no generic filler.`
         if (att) video_url = att.url
       }
       if (!video_url) return { type: 'error', error: 'video_url required — upload video ke chat atau kasih URL' }
+
+      // Block YouTube/TikTok/IG URLs — browser ffmpeg.wasm fetches via
+      // standard fetch() which CORS-blocks those platforms (returns 403).
+      // Same root cause as analyze_reference_video URL fetch failures.
+      // Cut only works on direct-CORS-allowed video URLs (R2 / Supabase
+      // storage / public mp4 hosts).
+      if (/youtube\.com|youtu\.be|tiktok\.com|instagram\.com/i.test(video_url)) {
+        const platform = /youtube/i.test(video_url) ? 'YouTube'
+          : /tiktok/i.test(video_url) ? 'TikTok' : 'Instagram'
+        return {
+          type: 'error',
+          error: `Sori bro, gak bisa cut langsung dari ${platform} URL — browser di-block CORS jadi fetch ke server ${platform} balik 403. Workaround: download videonya pake ssstik.io / yt-dlp / snaptik, upload mp4 ke chat ini lewat 📎, lalu suruh gua "potong 15 detik" lagi. Setelah upload, file ada di R2 storage yang CORS-friendly.`,
+        }
+      }
       if (!Array.isArray(clips) || clips.length === 0) {
         // Sensible default — one 60s clip from the start
         clips = [{ start: 0, duration: 60, preset: 'tiktok', label: 'TikTok cut' }]
