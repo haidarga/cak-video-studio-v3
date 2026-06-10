@@ -752,6 +752,22 @@ function ToolResult({ result, personas, onPresetUse, onPersonaPick, onProductPic
   if (result.type === 'viral_clip_pending') {
     return <ViralClipPending result={result} />
   }
+  if (result.type === 'gen_video_multi_queued') {
+    return (
+      <div className="mt-3 space-y-2">
+        <div className="text-[10px] uppercase font-bold text-[var(--accent)]">
+          🎬 {result.count} videos queued — each polls independently
+        </div>
+        {result.items.map((item, i) => (
+          <div key={i}>
+            {item.type === 'error'
+              ? <div className="text-xs text-red-400 bg-red-900/20 p-2 rounded border border-red-900/40">Video {(item.idx || i) + 1}: {item.error}</div>
+              : <GenVideoQueued result={item} />}
+          </div>
+        ))}
+      </div>
+    )
+  }
   return null
 }
 

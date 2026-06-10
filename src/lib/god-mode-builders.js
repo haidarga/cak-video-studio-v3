@@ -400,5 +400,21 @@ export async function fetchUrlAsHtml(url) {
   // Total budget: 30k chars. Preamble first (high signal), then HTML tail.
   const preambleStr = preamble.join('\n')
   const htmlBudget = Math.max(2000, 30000 - preambleStr.length - 100)
-  return `${preambleStr}\n\n--- HTML BODY (fallback) ---\n${html.slice(0, htmlBudget)}`
+  const combined = `${preambleStr}\n\n--- HTML BODY (fallback) ---\n${html.slice(0, htmlBudget)}`
+
+  // SPA detection — if we extracted ZERO structured data AND the body
+  // tail is minimal text, this is a JS-hydrated SPA (Sociolla, Shopee,
+  // Tokopedia, Lazada modern UIs). Server-side scrape can't get product
+  // data; surface explicit error so callers can suggest the right
+  // workaround instead of letting Gemini hallucinate.
+  const hasStructuredData = ldBlocks.length > 0 || Object.keys(og).length > 0
+  const bodyText = html.replace(/<[^>]+>/g, '').trim()
+  const looksLikeSpa = !hasStructuredData && bodyText.length < 500
+  if (looksLikeSpa) {
+    const err = new Error(`SPA_NO_DATA`)
+    err.isSpaShell = true
+    err.host = u.host
+    throw err
+  }
+  return combined
 }

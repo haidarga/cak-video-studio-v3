@@ -223,6 +223,15 @@ const TOOLS = {
           regen_payload: { prompt, ar, model: modelOverride },
         }
       } catch (e) {
+        // SPA shell detected — page has no embeddable product data
+        // (Sociolla, Shopee, Tokopedia, Lazada modern UI all do this).
+        // Surface actionable workaround instead of generic "extract failed".
+        if (e.isSpaShell) {
+          return {
+            type: 'error',
+            error: `Site ${e.host} adalah SPA (single-page app) — product data load lewat JavaScript setelah halaman render, gak ada di HTML response. Server-side scrape gak bisa dapet info. 3 workaround: (1) right-click product photo di browser → "Copy image address" → paste URL gambar itu (bukan URL halaman) ke chat ini. (2) Screenshot product photo → upload via 📎. (3) Copy text deskripsi produk + paste manual + upload screenshot.`,
+          }
+        }
         return { type: 'error', error: e.message }
       }
     },
@@ -448,6 +457,15 @@ const TOOLS = {
           regen_payload: { motion_prompt, duration, image_url, ar, model: modelOverride },
         }
       } catch (e) {
+        // SPA shell detected — page has no embeddable product data
+        // (Sociolla, Shopee, Tokopedia, Lazada modern UI all do this).
+        // Surface actionable workaround instead of generic "extract failed".
+        if (e.isSpaShell) {
+          return {
+            type: 'error',
+            error: `Site ${e.host} adalah SPA (single-page app) — product data load lewat JavaScript setelah halaman render, gak ada di HTML response. Server-side scrape gak bisa dapet info. 3 workaround: (1) right-click product photo di browser → "Copy image address" → paste URL gambar itu (bukan URL halaman) ke chat ini. (2) Screenshot product photo → upload via 📎. (3) Copy text deskripsi produk + paste manual + upload screenshot.`,
+          }
+        }
         return { type: 'error', error: e.message }
       }
     },
@@ -499,6 +517,15 @@ Match the theme vibe in the naskah tone. Keep timestamps consistent with ${durat
           naskah: p.naskah || '',
         }
       } catch (e) {
+        // SPA shell detected — page has no embeddable product data
+        // (Sociolla, Shopee, Tokopedia, Lazada modern UI all do this).
+        // Surface actionable workaround instead of generic "extract failed".
+        if (e.isSpaShell) {
+          return {
+            type: 'error',
+            error: `Site ${e.host} adalah SPA (single-page app) — product data load lewat JavaScript setelah halaman render, gak ada di HTML response. Server-side scrape gak bisa dapet info. 3 workaround: (1) right-click product photo di browser → "Copy image address" → paste URL gambar itu (bukan URL halaman) ke chat ini. (2) Screenshot product photo → upload via 📎. (3) Copy text deskripsi produk + paste manual + upload screenshot.`,
+          }
+        }
         return { type: 'error', error: e.message }
       }
     },
@@ -593,6 +620,15 @@ ${html.slice(0, 22000)}`
           regen_payload: { url, theme: finalTheme, model: modelOverride, ar: finalAr },
         }
       } catch (e) {
+        // SPA shell detected — page has no embeddable product data
+        // (Sociolla, Shopee, Tokopedia, Lazada modern UI all do this).
+        // Surface actionable workaround instead of generic "extract failed".
+        if (e.isSpaShell) {
+          return {
+            type: 'error',
+            error: `Site ${e.host} adalah SPA (single-page app) — product data load lewat JavaScript setelah halaman render, gak ada di HTML response. Server-side scrape gak bisa dapet info. 3 workaround: (1) right-click product photo di browser → "Copy image address" → paste URL gambar itu (bukan URL halaman) ke chat ini. (2) Screenshot product photo → upload via 📎. (3) Copy text deskripsi produk + paste manual + upload screenshot.`,
+          }
+        }
         return { type: 'error', error: e.message }
       }
     },
@@ -600,8 +636,8 @@ ${html.slice(0, 22000)}`
 
   // ─ URL → Marketing Video (scrape + gen video in one shot) ────────
   gen_marketing_video_from_url: {
-    description: 'PRIMARY TOOL when user pastes a product URL AND asks for VIDEO with specific params (duration / theme / model / etc). Scrapes URL, extracts product, composes motion_prompt with theme, gens video at requested duration with requested model. Returns the video directly. Use this when user says e.g. "bikin video X detik dari URL ini, tema Y, pake model Z". If user references "link itu" / "URL diatas" / "dari link tadi" without pasting again, the URL auto-resolves from earlier messages in the conversation.',
-    handler: async ({ url, duration, theme, model: modelOverride, ar }, ctx) => {
+    description: 'PRIMARY TOOL when user pastes a product URL AND asks for VIDEO with specific params (duration / theme / model / count / etc). Scrapes URL, extracts product, gens N videos at requested duration with requested model. Returns the video(s) directly. Use this when user says e.g. "bikin 2 video X detik dari URL ini, tema Y, pake model Z" or "buatin gua 3 video promo dari link ini". COUNT detection: if user says "2 video" / "3 video promo" / "bikinin 5 variasi", pass count=N (max 5). Returns array of generated videos. If user references "link itu" / "URL diatas" without pasting again, the URL auto-resolves from earlier messages.',
+    handler: async ({ url, duration, theme, model: modelOverride, ar, count = 1 }, ctx) => {
       // Fallback: if no URL passed, use most recent URL from conversation.
       if (!url && Array.isArray(ctx.recentUrls) && ctx.recentUrls.length > 0) {
         url = ctx.recentUrls[0]
@@ -685,14 +721,54 @@ ${html.slice(0, 22000)}`
           aspect_ratio: finalAr,
           resolution: cfg.resolution,
         })
-        // Budget gate before video submit — url_marketing video is the
-        // most expensive single tool ($0.07-$0.28/dtk × duration).
-        const urlVidProjected = estimateFalCost(videoModel, videoInput || {})
+        // Budget gate — multiplied by count for multi-video requests.
+        const reqCount = Math.max(1, Math.min(5, parseInt(count) || 1))
+        const urlVidProjected = estimateFalCost(videoModel, videoInput || {}) * reqCount
         const urlVidGate = await assertBudget(ctx.supabase, ctx.workspaceId, { projectedUsd: urlVidProjected })
         if (!urlVidGate.ok) return { type: 'error', error: urlVidGate.reason, gate: urlVidGate }
 
         // Canonicalize before queue calls — see src/lib/fal-paths.js
         const wireVideoModel = canonicalFalPath(videoModel)
+
+        // ── MULTI-VIDEO PATH ──
+        // User asked "bikin N video" -> submit N parallel gen jobs and
+        // return all queued at once. Skip the 30s inline poll (would
+        // 30s*N exceed Vercel function timeout). Frontend polls each
+        // queued message independently.
+        if (reqCount > 1) {
+          const submits = await Promise.all(Array.from({ length: reqCount }, async (_, idx) => {
+            try {
+              const r = await fetch(`https://queue.fal.run/${wireVideoModel}`, {
+                method: 'POST',
+                headers: { 'Authorization': `Key ${falKey}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify(videoInput),
+              })
+              const d = await r.json().catch(() => ({}))
+              if (!r.ok) return { ok: false, idx, error: d?.detail || d?.error || `fal ${r.status}` }
+              return {
+                ok: true, idx,
+                request_id: d?.request_id, status_url: d?.status_url, response_url: d?.response_url,
+              }
+            } catch (e) {
+              return { ok: false, idx, error: String(e?.message || e) }
+            }
+          }))
+          return {
+            type: 'gen_video_multi_queued',
+            count: reqCount,
+            items: submits.map((s) => s.ok ? {
+              type: 'gen_video_queued',
+              request_id: s.request_id, model: wireVideoModel,
+              status_url: s.status_url, response_url: s.response_url,
+              ar: finalAr, duration: finalDuration,
+              motion: finalMotion, image_url: p.image_url,
+              label: `Video ${s.idx + 1}/${reqCount}`,
+              regen_payload: { url, duration: finalDuration, theme: finalTheme, model: modelOverride, ar: finalAr },
+            } : { type: 'error', idx: s.idx, error: s.error }),
+          }
+        }
+
+        // ── SINGLE-VIDEO PATH (original flow) ──
         const submitRes = await fetch(`https://queue.fal.run/${wireVideoModel}`, {
           method: 'POST',
           headers: { 'Authorization': `Key ${falKey}`, 'Content-Type': 'application/json' },
@@ -765,6 +841,15 @@ ${html.slice(0, 22000)}`
           regen_payload: { url, duration: finalDuration, theme: finalTheme, model: modelOverride, ar: finalAr },
         }
       } catch (e) {
+        // SPA shell detected — page has no embeddable product data
+        // (Sociolla, Shopee, Tokopedia, Lazada modern UI all do this).
+        // Surface actionable workaround instead of generic "extract failed".
+        if (e.isSpaShell) {
+          return {
+            type: 'error',
+            error: `Site ${e.host} adalah SPA (single-page app) — product data load lewat JavaScript setelah halaman render, gak ada di HTML response. Server-side scrape gak bisa dapet info. 3 workaround: (1) right-click product photo di browser → "Copy image address" → paste URL gambar itu (bukan URL halaman) ke chat ini. (2) Screenshot product photo → upload via 📎. (3) Copy text deskripsi produk + paste manual + upload screenshot.`,
+          }
+        }
         return { type: 'error', error: e.message }
       }
     },
@@ -938,6 +1023,15 @@ Return JSON only:
           advice: Array.isArray(p.advice) ? p.advice : [],
         }
       } catch (e) {
+        // SPA shell detected — page has no embeddable product data
+        // (Sociolla, Shopee, Tokopedia, Lazada modern UI all do this).
+        // Surface actionable workaround instead of generic "extract failed".
+        if (e.isSpaShell) {
+          return {
+            type: 'error',
+            error: `Site ${e.host} adalah SPA (single-page app) — product data load lewat JavaScript setelah halaman render, gak ada di HTML response. Server-side scrape gak bisa dapet info. 3 workaround: (1) right-click product photo di browser → "Copy image address" → paste URL gambar itu (bukan URL halaman) ke chat ini. (2) Screenshot product photo → upload via 📎. (3) Copy text deskripsi produk + paste manual + upload screenshot.`,
+          }
+        }
         return { type: 'error', error: e.message }
       }
     },
@@ -980,6 +1074,15 @@ Be specific to Indonesian / SEA market. Make brand names that sound natural in I
         })
         return { type: 'brand_builder_result', seed: niche_or_idea, ...(result.parsed || {}) }
       } catch (e) {
+        // SPA shell detected — page has no embeddable product data
+        // (Sociolla, Shopee, Tokopedia, Lazada modern UI all do this).
+        // Surface actionable workaround instead of generic "extract failed".
+        if (e.isSpaShell) {
+          return {
+            type: 'error',
+            error: `Site ${e.host} adalah SPA (single-page app) — product data load lewat JavaScript setelah halaman render, gak ada di HTML response. Server-side scrape gak bisa dapet info. 3 workaround: (1) right-click product photo di browser → "Copy image address" → paste URL gambar itu (bukan URL halaman) ke chat ini. (2) Screenshot product photo → upload via 📎. (3) Copy text deskripsi produk + paste manual + upload screenshot.`,
+          }
+        }
         return { type: 'error', error: e.message }
       }
     },
@@ -1149,6 +1252,15 @@ Return JSON only, no prose. No markdown fences. Be specific, no generic filler.`
           final_package: p.final_package || null,
         }
       } catch (e) {
+        // SPA shell detected — page has no embeddable product data
+        // (Sociolla, Shopee, Tokopedia, Lazada modern UI all do this).
+        // Surface actionable workaround instead of generic "extract failed".
+        if (e.isSpaShell) {
+          return {
+            type: 'error',
+            error: `Site ${e.host} adalah SPA (single-page app) — product data load lewat JavaScript setelah halaman render, gak ada di HTML response. Server-side scrape gak bisa dapet info. 3 workaround: (1) right-click product photo di browser → "Copy image address" → paste URL gambar itu (bukan URL halaman) ke chat ini. (2) Screenshot product photo → upload via 📎. (3) Copy text deskripsi produk + paste manual + upload screenshot.`,
+          }
+        }
         return { type: 'error', error: e.message }
       }
     },
@@ -1345,6 +1457,15 @@ Output JSON only:
           request_id: j.request_id,
         }
       } catch (e) {
+        // SPA shell detected — page has no embeddable product data
+        // (Sociolla, Shopee, Tokopedia, Lazada modern UI all do this).
+        // Surface actionable workaround instead of generic "extract failed".
+        if (e.isSpaShell) {
+          return {
+            type: 'error',
+            error: `Site ${e.host} adalah SPA (single-page app) — product data load lewat JavaScript setelah halaman render, gak ada di HTML response. Server-side scrape gak bisa dapet info. 3 workaround: (1) right-click product photo di browser → "Copy image address" → paste URL gambar itu (bukan URL halaman) ke chat ini. (2) Screenshot product photo → upload via 📎. (3) Copy text deskripsi produk + paste manual + upload screenshot.`,
+          }
+        }
         return { type: 'error', error: e.message }
       }
     },
@@ -1441,8 +1562,9 @@ MODEL VARIANT RULES (CRITICAL):
   - Never tell user to "pin product/persona dulu" if they already uploaded an image or pasted a URL — just call the right tool.
 
 - URL/VIDEO ROUTING:
-  - URL + "bikin video X detik tema Y" / "video dari link" → gen_marketing_video_from_url with extracted (duration, theme, model).
+  - URL + "bikin video X detik tema Y" / "video dari link" → gen_marketing_video_from_url with extracted (duration, theme, model, count).
   - URL + "bikin foto/image/poster" → gen_image_from_url.
+  - **COUNT DETECTION**: parse N from user text — "2 video" / "3 variasi" / "bikinin 5 promo" → pass count=N to gen_marketing_video_from_url. Capped server-side at 5. If user says just "video" with no number, default count=1.
   - Bare URL no clear instruction → scrape_url_for_marketing (preview).
   - Detect model overrides in prompt: "pake Kling 3" -> 'fal-ai/kling-video/v3/image-to-video', "Kling Pro" -> '/v3/pro/image-to-video', "Seedance" -> 'bytedance/seedance-2.0/fast/image-to-video', "Veo" -> 'fal-ai/veo3', "Grok" -> 'xai/grok-imagine-video/image-to-video', "GPT Image 2 Edit" -> 'openai/gpt-image-2/edit', "Nano Banana" -> 'fal-ai/nano-banana/edit'.
 - If user uploads/attaches a video and says "analyze" or "make like this", call analyze_reference_video.
