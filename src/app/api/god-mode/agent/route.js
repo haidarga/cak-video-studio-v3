@@ -521,15 +521,19 @@ Match the theme vibe in the naskah tone. Keep timestamps consistent with ${durat
 
       try {
         const html = await fetchUrlAsHtml(url)
-        const extractPrompt = `Extract product info from this HTML for a marketing image. Return JSON only:
+        const extractPrompt = `Extract product info from this e-commerce page for a marketing image. The page content has TWO blocks:
+- Top: STRUCTURED DATA (OG_META + JSON_LD_PRODUCT) — trust this FIRST for reliable title + image.
+- Bottom: HTML BODY (fallback) — often empty shell on JS-SPAs (Shopee, Sociolla, Tokopedia).
+
+Return JSON only:
 {
-  "title": "product name",
-  "image_url": "best primary product image URL (absolute)",
+  "title": "product name (prefer og:title / JSON-LD name)",
+  "image_url": "best primary product image URL (prefer og:image / JSON-LD image — absolute)",
   "image_prompt": "detailed visual prompt in English for a marketing/listing photo of the product, matching theme '${finalTheme}'. Describe composition, lighting, mood, props. 2-3 sentences."
 }
 
-URL: ${url}
-HTML: ${html.slice(0, 22000)}`
+PAGE CONTENT:
+${html.slice(0, 22000)}`
 
         const extracted = await callLLMJSON({
           workspaceId: ctx.workspaceId,
@@ -614,16 +618,24 @@ HTML: ${html.slice(0, 22000)}`
       try {
         // STEP 1 — Scrape + extract product info via Gemini.
         const html = await fetchUrlAsHtml(url)
-        const extractPrompt = `Extract product info from this HTML to build a marketing video. Return JSON only:
+        const extractPrompt = `Extract product info from this e-commerce page to build a marketing video. The page content has TWO blocks:
+- Top: STRUCTURED DATA (OG_META + JSON_LD_PRODUCT) — extracted before HTML strip. Trust this FIRST. og:image / og:title / og:description / JSON-LD image+name+description are reliable.
+- Bottom: HTML BODY (fallback) — visible markup. Use only if structured data is missing.
+
+For JS-rendered SPAs (Shopee, Tokopedia, Sociolla, IG) the HTML body is often a near-empty shell — structured data is the ONLY reliable source.
+
+Return JSON only:
 {
-  "title": "product name",
-  "image_url": "best primary product image URL from the page (absolute URL)",
+  "title": "product name (prefer og:title / JSON-LD name)",
+  "image_url": "best primary product image URL (prefer og:image / JSON-LD image — absolute URL)",
   "key_features": ["feature 1", "feature 2", "feature 3"],
   "motion_prompt": "${finalDuration}s video motion description in English, matching theme '${finalTheme}'. Describe what happens, camera moves, mood. Be cinematic. Bake in product showcase. Single block of text, no timestamps."
 }
 
-URL: ${url}
-HTML: ${html.slice(0, 22000)}`
+If you cannot find image_url anywhere, return image_url=null and the caller will surface a clearer error.
+
+PAGE CONTENT:
+${html.slice(0, 22000)}`
 
         const extracted = await callLLMJSON({
           workspaceId: ctx.workspaceId,

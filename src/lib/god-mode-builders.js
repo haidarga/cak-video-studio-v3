@@ -284,23 +284,110 @@ export async function mirrorToR2(externalUrl, folder = 'mirrored') {
   }
 }
 
-// ── Fetch URL → trimmed HTML ─────────────────────────────────────────
-// Used by url_marketing tools to feed product page HTML into Gemini
-// for extraction. Strips scripts/styles to save tokens; caps at 30k
-// chars since most product pages have what we need in the first chunk.
+// ── Fetch URL → structured product data + trimmed HTML ──────────────
+// Used by url_marketing tools.
+//
+// Why this was rewritten:
+// Original version stripped `<script>` BEFORE returning, which killed
+// the JSON-LD <script type="application/ld+json"> blocks that e-commerce
+// sites use to embed structured Product schema. It also used a custom
+// User-Agent ("CAK-Video-GodMode/1.0") that Shopee, Sociolla, Tokopedia
+// recognize as a bot and serve empty shells.
+//
+// Modern e-commerce sites are JS-hydrated SPAs — the visible HTML is
+// just a shell + meta tags. The ACTUAL product data lives in:
+//   1. <meta property="og:image|og:title|og:description"> — always
+//      server-rendered for social sharing
+//   2. <script type="application/ld+json"> — Product schema (price,
+//      images array, name, description, brand) for SEO + Google
+//      shopping integration
+//   3. Twitter Card metas as backup
+//
+// New behavior:
+//   1. Fetch with realistic browser User-Agent + Referer matching the
+//      site's own origin (most anti-bot rules pass this)
+//   2. BEFORE stripping scripts, extract OG meta + JSON-LD Product
+//      schema into a structured "STRUCTURED PRODUCT DATA" preamble
+//   3. Then strip + trim the rest of HTML
+//   4. Return preamble + clean HTML (capped 30k) — Gemini sees the
+//      reliable structured data FIRST + can fall back to visible
+//      HTML for context
 export async function fetchUrlAsHtml(url) {
+  const u = new URL(url)
   const res = await fetch(url, {
-    headers: { 'User-Agent': 'Mozilla/5.0 CAK-Video-GodMode/1.0' },
+    headers: {
+      // Real Chrome UA — bypasses most anti-bot rules on e-commerce sites
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
+      'Referer': u.origin,
+    },
     redirect: 'follow',
   })
   if (!res.ok) throw new Error(`URL fetch failed: ${res.status}`)
-  let html = await res.text()
-  html = html
+  const rawHtml = await res.text()
+
+  // ── Extract structured data BEFORE strip ──
+  const preamble = []
+  preamble.push(`SOURCE_URL: ${url}`)
+
+  // OG meta tags
+  const ogMatches = rawHtml.matchAll(/<meta\s+(?:property|name)=["']([^"']+)["']\s+content=["']([^"']*)["']/gi)
+  const og = {}
+  for (const m of ogMatches) {
+    const key = m[1].toLowerCase()
+    if (
+      key.startsWith('og:') ||
+      key.startsWith('twitter:') ||
+      key === 'description' ||
+      key === 'product:price:amount' ||
+      key === 'product:price:currency' ||
+      key === 'price'
+    ) {
+      og[key] = m[2]
+    }
+  }
+  if (Object.keys(og).length) {
+    preamble.push('OG_META:')
+    for (const [k, v] of Object.entries(og)) {
+      preamble.push(`  ${k}: ${v}`)
+    }
+  }
+
+  // JSON-LD blocks (Product schema is the key one)
+  const ldMatches = rawHtml.matchAll(/<script\s+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)
+  const ldBlocks = []
+  for (const m of ldMatches) {
+    try {
+      const data = JSON.parse(m[1].trim())
+      // Only keep Product / Offer / nested Product entities (skip BreadcrumbList etc)
+      const items = Array.isArray(data) ? data : [data]
+      for (const item of items) {
+        const type = item['@type'] || item['@graph']?.[0]?.['@type']
+        if (typeof type === 'string' && /product|offer/i.test(type)) {
+          ldBlocks.push(JSON.stringify(item).slice(0, 2000))
+        }
+      }
+    } catch {
+      // Malformed JSON-LD — skip
+    }
+  }
+  if (ldBlocks.length) {
+    preamble.push('JSON_LD_PRODUCT:')
+    preamble.push(...ldBlocks)
+  }
+
+  // ── Strip + trim HTML for fallback context ──
+  let html = rawHtml
     .replace(/<script[\s\S]*?<\/script>/gi, '')
     .replace(/<style[\s\S]*?<\/style>/gi, '')
     .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
     .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/\s+/g, ' ')
     .trim()
-  return html.slice(0, 30000)
+
+  // Total budget: 30k chars. Preamble first (high signal), then HTML tail.
+  const preambleStr = preamble.join('\n')
+  const htmlBudget = Math.max(2000, 30000 - preambleStr.length - 100)
+  return `${preambleStr}\n\n--- HTML BODY (fallback) ---\n${html.slice(0, htmlBudget)}`
 }
