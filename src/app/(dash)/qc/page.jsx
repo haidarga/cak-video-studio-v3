@@ -39,7 +39,7 @@ export default async function QCPage() {
     .select('id, type, url, label, ar, qc_status, group_label, created_at, persona_id, personas(id, name, username, avatar_url, postiz_channel_id)')
     .eq('workspace_id', ws.id).not('qc_status', 'is', null)
   const personasQuery = supabase.from('personas')
-    .select('id, name, username, avatar_url, postiz_channel_id')
+    .select('id, name, username, avatar_url, postiz_channel_id, voice_id, voice_name')
     .eq('workspace_id', ws.id)
   if (allowedPersonaIds) {
     resultsQuery.in('persona_id', allowedPersonaIds)

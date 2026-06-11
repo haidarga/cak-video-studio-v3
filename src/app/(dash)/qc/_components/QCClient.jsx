@@ -5,6 +5,7 @@ import { uploadFile, uploadBlob } from '@/lib/upload-client'
 import { LazyVideo } from '@/lib/use-lazy-video'
 import { convertVideoToMp4 } from '@/lib/video-convert'
 import { stripAudioFromVideo } from '@/lib/strip-audio'
+import { swapAudioInVideo } from '@/lib/swap-audio'
 
 const STATUSES = [
   { v: 'pending',  l: '⏳ Review',   color: 'bg-blue-500/20 text-blue-400 border-blue-500/40' },
@@ -157,6 +158,52 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
     }
   }
 
+  // ── 🎙 Change Voice — swap the AI video's voice for the persona's cloned
+  // voice. ElevenLabs Speech-to-Speech keeps the original audio's timing
+  // and phonemes 1:1, so LIP-SYNC SURVIVES — only the timbre changes.
+  // Flow: /api/voice/convert (extract audio via v2 ffmpeg → S2S → mp3 on
+  // R2) → swapAudioInVideo (mux: original audio dropped, cloned voice in)
+  // → upload → NEW result row next to the original (non-destructive, so
+  // you can A/B the two voices in QC and approve the better one).
+  async function changeVoice(r) {
+    if (converting) return
+    const persona = personas.find((p) => p.id === r.persona_id)
+    if (!persona?.voice_id) {
+      setErr(`Persona "${persona?.name || 'unassigned'}" belum punya voice. Clone/design voice dulu di Personas → Voice Clone, baru tombol ini jalan.`)
+      return
+    }
+    setConverting({ id: r.id, stage: 'Extract audio + ElevenLabs S2S...' })
+    setErr('')
+    try {
+      const res = await fetch('/api/voice/convert', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ video_url: r.url, voice_id: persona.voice_id, result_id: r.id }),
+      })
+      const j = await res.json().catch(() => ({ ok: false, error: 'non-json response' }))
+      if (!j.ok) throw new Error(j.error || 'voice convert failed')
+      const blob = await swapAudioInVideo(r.url, j.audio_url, (stage) => setConverting({ id: r.id, stage }))
+      setConverting({ id: r.id, stage: `Uploading ${(blob.size / 1024 / 1024).toFixed(1)}MB...` })
+      const { url: publicUrl } = await uploadBlob(blob, `qc-voiced-${Date.now()}.mp4`, 'qc')
+      const { error: insErr } = await supabase.from('results').insert({
+        workspace_id: workspaceId,
+        persona_id: r.persona_id,
+        type: 'video',
+        url: publicUrl,
+        label: `${r.label || 'video'} 🎙 ${persona.voice_name || 'cloned voice'}`,
+        ar: r.ar,
+        group_label: r.group_label,
+        qc_status: 'pending',
+        meta: { source: 'voice-swap', original_result_id: r.id, cloned_audio_url: j.audio_url, voice_id: persona.voice_id },
+        created_by: userId,
+      })
+      if (insErr) throw insErr
+      setConverting(null)
+    } catch (e) {
+      setErr('Change voice gagal: ' + (e?.message || e))
+      setConverting(null)
+    }
+  }
+
   async function uploadExternal(persona, file) {
     setErr('')
 
@@ -285,7 +332,7 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
             onSetStatus={setStatus} onRemove={removeFromQC} onOpenNote={setOpenNote}
             onRename={rename} onDeletePerma={deletePerma}
             selectedIds={selectedIds} onToggleSelect={toggleSelect}
-            converting={converting} onConvertToMp4={convertToMp4} onStripAudio={stripAudio} isWebm={isWebm} />
+            converting={converting} onConvertToMp4={convertToMp4} onStripAudio={stripAudio} onChangeVoice={changeVoice} isWebm={isWebm} />
         ))}
 
         {byPersona.length === 0 && (
@@ -303,7 +350,7 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
   )
 }
 
-function PersonaGroup({ persona, items, busyUpload, onUpload, onSetStatus, onRemove, onOpenNote, onRename, onDeletePerma, selectedIds, onToggleSelect, converting, onConvertToMp4, onStripAudio, isWebm }) {
+function PersonaGroup({ persona, items, busyUpload, onUpload, onSetStatus, onRemove, onOpenNote, onRename, onDeletePerma, selectedIds, onToggleSelect, converting, onConvertToMp4, onStripAudio, onChangeVoice, isWebm }) {
   const fileRef = useRef(null)
   const counts = items.reduce((c, r) => ({ ...c, [r.qc_status]: (c[r.qc_status] || 0) + 1 }), {})
 
@@ -373,7 +420,7 @@ function PersonaGroup({ persona, items, busyUpload, onUpload, onSetStatus, onRem
               onSetStatus={onSetStatus} onRemove={onRemove} onOpenNote={onOpenNote}
               onRename={onRename} onDeletePerma={onDeletePerma}
               isWebm={isWebm?.(r)} converting={converting?.id === r.id ? converting : null}
-              onConvertToMp4={() => onConvertToMp4?.(r)} onStripAudio={() => onStripAudio?.(r)} />
+              onConvertToMp4={() => onConvertToMp4?.(r)} onStripAudio={() => onStripAudio?.(r)} onChangeVoice={() => onChangeVoice?.(r)} />
           ))}
         </div>
       )}
@@ -405,7 +452,7 @@ function qcCardEqual(prev, next) {
 // memo'd: with 300 cards on the page, toggling one selected state was
 // re-rendering all 299 siblings. Now: only the card whose `r` or `selected`
 // actually changed re-renders.
-const QCCard = memo(function QCCard({ result: r, onSetStatus, onRemove, onOpenNote, onRename, onDeletePerma, selected, onToggleSelect, isWebm, converting, onConvertToMp4, onStripAudio }) {
+const QCCard = memo(function QCCard({ result: r, onSetStatus, onRemove, onOpenNote, onRename, onDeletePerma, selected, onToggleSelect, isWebm, converting, onConvertToMp4, onStripAudio, onChangeVoice }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(r.label || '')
   const statusCfg = STATUSES.find((s) => s.v === r.qc_status) || STATUSES[0]
@@ -486,6 +533,13 @@ const QCCard = memo(function QCCard({ result: r, onSetStatus, onRemove, onOpenNo
               title="Strip audio biar TikTok auto-add music kerja (TikTok cuma add music kalo video silent)"
               className="text-[10px] px-1.5 py-1 rounded bg-pink-500/30 hover:bg-pink-500/50 text-pink-200 border border-pink-500/40 font-semibold disabled:opacity-50">
               🔇 Mute
+            </button>
+          )}
+          {isWebm && (
+            <button onClick={onChangeVoice} disabled={!!converting}
+              title="Ganti suara AI di video ini ke cloned voice persona (ElevenLabs S2S — lip-sync kejaga). Hasilnya jadi result baru di sebelahnya."
+              className="text-[10px] px-1.5 py-1 rounded bg-purple-500/30 hover:bg-purple-500/50 text-purple-200 border border-purple-500/40 font-semibold disabled:opacity-50">
+              🎙 Voice
             </button>
           )}
           <button onClick={() => onRemove(r.id)} title="Keluarin dari QC" className="text-[10px] px-1.5 py-1 rounded text-[var(--muted)] hover:bg-[var(--surface)]">✕</button>
