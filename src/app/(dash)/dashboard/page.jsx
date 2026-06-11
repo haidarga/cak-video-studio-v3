@@ -89,8 +89,17 @@ export default async function DashboardPage() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-1">📊 Dashboard</h1>
-      <p className="text-sm text-[var(--muted)] mb-6">Halo, {user?.email}</p>
+      {/* Hero header — gradient headline over the layout's dome glow */}
+      <div className="hero-halo mb-6 fade-in-up">
+        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-[var(--accent)]/40 bg-[var(--accent)]/10 text-[9px] uppercase tracking-[0.2em] font-bold text-[var(--accent)] mb-2">
+          <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] pulse-live" />
+          Mission Control
+        </div>
+        <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight">
+          <span className="gradient-text-strong">Dashboard</span>
+        </h1>
+        <p className="text-sm text-[var(--muted)] mt-1">Halo, {user?.email}</p>
+      </div>
 
       {/* Budget banner — fires on over-budget OR forecast-over-limit. */}
       {(overBudget || forecastOver || nearAlert) && (
@@ -191,11 +200,11 @@ export default async function DashboardPage() {
 
 function Card({ title, count, icon, sub, color }) {
   return (
-    <div className="p-4 rounded-lg bg-[var(--surface)] border border-[var(--border)]">
+    <div className="p-4 glass-deep card-lift">
       <div className="text-[10px] uppercase text-[var(--muted)] tracking-wider font-semibold flex items-center gap-1">
         {icon && <span>{icon}</span>} {title}
       </div>
-      <div className={`text-2xl font-bold mt-1 ${color || ''}`}>{count}</div>
+      <div className={`text-2xl font-bold mt-1 ${color || 'gradient-text'}`}>{count}</div>
       {sub && <div className="text-[10px] text-[var(--muted2)] mt-0.5">{sub}</div>}
     </div>
   )

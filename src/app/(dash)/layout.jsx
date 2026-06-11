@@ -105,10 +105,16 @@ export default async function DashLayout({ children }) {
   return (
     <div className="min-h-screen flex">
       <MobileNav>{sidebarContent}</MobileNav>
-      <aside className="hidden md:flex w-56 border-r border-[var(--border)] bg-[var(--surface)] p-4 flex-col gap-1">
+      {/* Sidebar: frosted glass over the cosmic background + neon inner edge
+          on the content side — reads as a floating HUD panel (web3 refs). */}
+      <aside className="hidden md:flex w-56 glass p-4 flex-col gap-1 border-r-0"
+        style={{ boxShadow: 'inset -1px 0 0 rgba(168,85,247,0.22), 8px 0 32px rgba(0,0,0,0.35)' }}>
         {sidebarContent}
       </aside>
-      <main className="flex-1 p-4 md:p-8 overflow-y-auto pt-16 md:pt-8">{children}</main>
+      {/* Main: dome-glow = luminous purple horizon rising behind every page
+          header (Fintech ref); cyber-grid = faint masked perspective grid.
+          Both static pseudo-layers — zero per-frame cost. */}
+      <main className="flex-1 p-4 md:p-8 overflow-y-auto pt-16 md:pt-8 dome-glow cyber-grid">{children}</main>
       <GlobalSearch workspaceId={activeWs.id} />
       <HelpModal />
     </div>

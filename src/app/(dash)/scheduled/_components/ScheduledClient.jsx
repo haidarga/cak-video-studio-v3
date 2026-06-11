@@ -187,7 +187,7 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
 
   return (
     <div>
-      <h1 className="text-3xl font-bold mb-1">📅 Scheduled</h1>
+      <h1 className="text-3xl font-extrabold tracking-tight mb-1">📅 <span className="gradient-text-strong">Scheduled</span></h1>
       <p className="text-sm text-[var(--muted)] mb-6">Approved → Post Now atau jadwalin. Status sync realtime dari Postiz.</p>
 
       {err && <div className="mb-3 text-xs text-red-400 bg-red-900/20 border border-red-900/40 p-3 rounded">⚠ {err}</div>}

@@ -240,7 +240,7 @@ export default function SettingsClient({ initialStatus, initialBudget }) {
   return (
     <div className="max-w-2xl space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">⚙️ Settings</h1>
+        <h1 className="text-3xl font-extrabold tracking-tight">⚙️ <span className="gradient-text-strong">Settings</span></h1>
         <p className="text-sm text-[var(--muted)] mt-1">
           Workspace API keys — disimpan di Supabase, dipake oleh API routes server-side. Browser gak pernah liat key-nya.
         </p>

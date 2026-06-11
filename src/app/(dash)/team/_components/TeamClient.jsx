@@ -67,7 +67,7 @@ export default function TeamClient({ workspaceId, workspaceName, userId, myRole,
   return (
     <div className="space-y-6 max-w-3xl">
       <div>
-        <h1 className="text-3xl font-bold mb-1">👥 Team</h1>
+        <h1 className="text-3xl font-extrabold tracking-tight mb-1">👥 <span className="gradient-text-strong">Team</span></h1>
         <p className="text-sm text-[var(--muted)]">Workspace <strong>{workspaceName}</strong> · {members.length} member{members.length !== 1 ? 's' : ''}</p>
       </div>
 

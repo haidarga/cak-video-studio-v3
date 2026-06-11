@@ -54,7 +54,7 @@ export default function RefsClient({ workspaceId, userId, initialRefs }) {
       <div className="flex items-start justify-between mb-4">
         <div>
           <div className="text-[10px] uppercase text-[var(--muted)] tracking-wider font-semibold">Library</div>
-          <h1 className="text-3xl font-bold mt-1">🖼 References</h1>
+          <h1 className="text-3xl font-extrabold tracking-tight mt-1">🖼 <span className="gradient-text-strong">References</span></h1>
           <p className="text-sm text-[var(--muted)] mt-1">Pool foto karakter & produk. Tiap ref bisa punya product knowledge sendiri (teks kemasan, aturan visual).</p>
         </div>
         <input ref={fileRef} type="file" accept="image/*" multiple className="hidden"

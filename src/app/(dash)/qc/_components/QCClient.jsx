@@ -217,7 +217,7 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
     <div>
       <div className="flex items-start justify-between mb-4">
         <div>
-          <h1 className="text-3xl font-bold mb-1">🧪 QC</h1>
+          <h1 className="text-3xl font-extrabold tracking-tight mb-1">🧪 <span className="gradient-text-strong">QC</span></h1>
           <p className="text-sm text-[var(--muted)]">Auto-group per persona. Approve → siap upload (Post Now / Schedule). Bisa upload video eksternal yang udah lu edit di luar platform.</p>
         </div>
         {totalCounts.approved > 0 && (

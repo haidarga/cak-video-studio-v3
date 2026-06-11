@@ -32,7 +32,7 @@ export default function ErrorsClient({ initial, initialFilters }) {
     <div>
       <div className="flex items-baseline justify-between mb-4">
         <div>
-          <h1 className="text-2xl font-bold">🚨 Errors</h1>
+          <h1 className="text-2xl font-extrabold tracking-tight">🚨 <span className="gradient-text-strong">Errors</span></h1>
           <p className="text-sm text-[var(--muted)] mt-1">Last 200 server-side errors di workspace lu. Auto-logged dari API routes.</p>
         </div>
         <div className="text-xs text-[var(--muted)]">{filtered.length} shown / {errors.length} total</div>

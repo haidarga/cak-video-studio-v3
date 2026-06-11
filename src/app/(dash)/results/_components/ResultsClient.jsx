@@ -70,7 +70,7 @@ export default function ResultsClient({ workspaceId, initialResults, personas })
 
   return (
     <div>
-      <h1 className="text-3xl font-bold mb-1">📁 Results</h1>
+      <h1 className="text-3xl font-extrabold tracking-tight mb-1">📁 <span className="gradient-text-strong">Results</span></h1>
       <p className="text-sm text-[var(--muted)] mb-5">Hasil generate, auto-grouped per persona. Approved → bisa di-Schedule.</p>
 
       {err && <div className="mb-3 text-xs text-red-400">⚠ {err}</div>}

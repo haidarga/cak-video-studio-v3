@@ -175,7 +175,7 @@ export default function PostingClient({ workspaceId, initialPersonas }) {
 
   return (
     <div>
-      <h1 className="text-3xl font-bold mb-1">Posting Dashboard</h1>
+      <h1 className="text-3xl font-extrabold tracking-tight mb-1">📮 <span className="gradient-text-strong">Posting</span></h1>
       <p className="text-sm text-[var(--muted)] mb-6">Monitor status Postiz channels — sinkron data akun yang ter-link ke pipeline posting.</p>
 
       <div className="bg-[var(--surface)] border border-[var(--border)] rounded-lg p-4 mb-4 flex items-center gap-4">

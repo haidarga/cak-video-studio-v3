@@ -912,7 +912,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold">✂️ Editor <span className="text-xs text-[var(--muted2)] font-normal">v4 multi-track</span></h1>
+          <h1 className="text-2xl font-extrabold tracking-tight">✂️ <span className="gradient-text-strong">Editor</span> <span className="text-xs text-[var(--muted2)] font-normal">v4 multi-track</span></h1>
           <p className="text-xs text-[var(--muted)]">Multi-track stacking · B-roll overlay · Transitions · Filters · Subtitle · MP4</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">

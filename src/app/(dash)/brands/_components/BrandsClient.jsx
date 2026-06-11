@@ -39,7 +39,7 @@ export default function BrandsClient({ workspaceId, activeBrandId: initialActive
       <div className="flex items-start justify-between mb-6">
         <div>
           <div className="text-[10px] uppercase text-[var(--muted)] tracking-wider font-semibold">Direktori</div>
-          <h1 className="text-3xl font-bold mt-1">Brands</h1>
+          <h1 className="text-3xl font-extrabold tracking-tight mt-1">🏷 <span className="gradient-text-strong">Brands</span></h1>
         </div>
         <button onClick={() => setEditing({ isNew: true })}
           className="px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-semibold hover:opacity-90">

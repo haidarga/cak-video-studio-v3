@@ -139,7 +139,7 @@ export default function PersonasClient({ workspaceId, userId, activeBrandId, act
       <div className="flex items-start justify-between mb-1">
         <div>
           <div className="text-[10px] uppercase text-[var(--muted)] tracking-wider font-semibold">{activeBrandName || 'No brand'}</div>
-          <h1 className="text-3xl font-bold mt-1">Personas</h1>
+          <h1 className="text-3xl font-extrabold tracking-tight mt-1">🎭 <span className="gradient-text-strong">Personas</span></h1>
           <p className="text-sm text-[var(--muted)] mt-1">Tiap persona = 1 akun TikTok/IG. Upload foto refs → otomatis dipakai pas generate.</p>
         </div>
         <div className="flex gap-2 flex-wrap">

@@ -107,18 +107,41 @@ html, body {
   overflow-x: hidden;
 }
 
-/* LIQUID BLOB MESH BACKGROUND (dark mode only — light mode kept clean) */
+/* COSMIC BACKGROUND — liquid blob mesh + static starfield (dark mode).
+   Stars are plain radial-gradient dots: zero animation = zero paint cost,
+   but the page instantly reads as "web3 space" (Nike/A-SPACE reference). */
 body::before {
   content: '';
   position: fixed;
   inset: 0;
   z-index: -2;
   background:
+    /* starfield — three dot sizes, irregular positions */
+    radial-gradient(1px 1px at 8% 12%, rgba(255,255,255,0.55), transparent 100%),
+    radial-gradient(1px 1px at 22% 64%, rgba(255,255,255,0.35), transparent 100%),
+    radial-gradient(1.5px 1.5px at 33% 28%, rgba(217,70,239,0.5), transparent 100%),
+    radial-gradient(1px 1px at 41% 81%, rgba(255,255,255,0.4), transparent 100%),
+    radial-gradient(1px 1px at 52% 9%, rgba(255,255,255,0.5), transparent 100%),
+    radial-gradient(1.5px 1.5px at 61% 47%, rgba(168,85,247,0.45), transparent 100%),
+    radial-gradient(1px 1px at 69% 86%, rgba(255,255,255,0.35), transparent 100%),
+    radial-gradient(1px 1px at 76% 23%, rgba(255,255,255,0.5), transparent 100%),
+    radial-gradient(1.5px 1.5px at 84% 62%, rgba(6,182,212,0.45), transparent 100%),
+    radial-gradient(1px 1px at 91% 38%, rgba(255,255,255,0.4), transparent 100%),
+    radial-gradient(1px 1px at 14% 42%, rgba(255,255,255,0.3), transparent 100%),
+    radial-gradient(1px 1px at 95% 88%, rgba(255,255,255,0.45), transparent 100%),
+    /* blob mesh */
     radial-gradient(900px 700px at 12% 8%, var(--bg-overlay-1), transparent 60%),
     radial-gradient(700px 600px at 92% 18%, var(--bg-overlay-2), transparent 65%),
     radial-gradient(800px 800px at 78% 92%, var(--bg-overlay-1), transparent 60%),
     radial-gradient(600px 500px at 18% 88%, rgba(6,182,212,0.06), transparent 65%);
   pointer-events: none;
+}
+/* light mode: no starfield, keep only the soft mesh */
+[data-theme="light"] body::before {
+  background:
+    radial-gradient(900px 700px at 12% 8%, var(--bg-overlay-1), transparent 60%),
+    radial-gradient(700px 600px at 92% 18%, var(--bg-overlay-2), transparent 65%),
+    radial-gradient(800px 800px at 78% 92%, var(--bg-overlay-1), transparent 60%);
 }
 body::after {
   content: '';
@@ -545,3 +568,118 @@ select { background-color: var(--surface2); }
   50% { transform: translateY(-6px); }
 }
 .float-soft { animation: float-soft 4s ease-in-out infinite; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   WEB3 REVAMP v2 — dome glow, deep glass, cyber grid
+   References: Fintech (purple dome hero), Wildberries (magenta aurora
+   glass), Nike (cosmic starfield), A-SPACE (space hero).
+   All effects are static or transform/opacity-only — GPU safe.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* DOME GLOW — the glowing half-circle horizon from the Fintech reference.
+   Put on a page's top wrapper; renders a luminous dome rising behind the
+   header. Pure gradients, zero animation. */
+.dome-glow {
+  position: relative;
+  isolation: isolate;
+}
+.dome-glow::before {
+  content: '';
+  position: absolute;
+  top: -180px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(1100px, 140%);
+  height: 420px;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    /* bright rim of the dome */
+    radial-gradient(ellipse 50% 42% at 50% 100%, rgba(217,70,239,0.5) 58%, rgba(245,240,255,0.65) 60%, transparent 62%),
+    /* inner glow body */
+    radial-gradient(ellipse 48% 40% at 50% 100%, rgba(168,85,247,0.55) 0%, rgba(168,85,247,0.18) 55%, transparent 70%);
+  filter: blur(18px);
+  opacity: 0.8;
+}
+.dome-glow::after {
+  /* wide soft ambience around the dome */
+  content: '';
+  position: absolute;
+  top: -240px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(1400px, 180%);
+  height: 560px;
+  z-index: -2;
+  pointer-events: none;
+  background: radial-gradient(ellipse 55% 45% at 50% 90%, var(--accent-glow) 0%, transparent 70%);
+  filter: blur(80px);
+  opacity: 0.7;
+}
+[data-theme="light"] .dome-glow::before { opacity: 0.35; }
+[data-theme="light"] .dome-glow::after { opacity: 0.3; }
+
+/* CYBER GRID — faint perspective grid for section backgrounds (web3 floor).
+   Static, masked so it fades out — depth without noise. */
+.cyber-grid {
+  position: relative;
+}
+.cyber-grid::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(168,85,247,0.18) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(168,85,247,0.18) 1px, transparent 1px);
+  background-size: 44px 44px;
+  opacity: 0.14;
+  -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, black 20%, transparent 75%);
+  mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, black 20%, transparent 75%);
+}
+
+/* DEEP GLASS — Wildberries-style aurora glass card: frosted, neon edge,
+   inner top highlight. Use instead of .glass for hero/stat cards. */
+.glass-deep {
+  background: linear-gradient(180deg, rgba(40,30,70,0.5) 0%, rgba(22,15,38,0.65) 100%);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid rgba(181,82,255,0.28);
+  border-radius: 16px;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.08),
+    0 12px 40px rgba(0,0,0,0.45),
+    0 0 24px rgba(168,85,247,0.10);
+}
+[data-theme="light"] .glass-deep {
+  background: linear-gradient(180deg, rgba(255,255,255,0.85) 0%, rgba(244,238,255,0.75) 100%);
+  border: 1px solid rgba(147,51,234,0.2);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.9), 0 12px 32px rgba(124,58,237,0.12);
+}
+
+/* NUMBERED FEATURE CARD — the "01 / 02 / 03" trust cards from the Fintech
+   reference. Pair with .glass-deep. */
+.num-badge {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 1.6rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, #fff 30%, var(--magenta) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  letter-spacing: -0.02em;
+}
+
+/* Neon divider — thin gradient line with center glow */
+.neon-divider {
+  height: 1px;
+  border: 0;
+  background: linear-gradient(90deg, transparent, var(--accent) 35%, var(--magenta) 65%, transparent);
+  box-shadow: 0 0 12px var(--accent-glow);
+  opacity: 0.6;
+}
+
+/* Press feedback for cards/buttons — subtle scale per HIG */
+.press-scale { transition: transform 0.15s ease; }
+.press-scale:active { transform: scale(0.97); }
