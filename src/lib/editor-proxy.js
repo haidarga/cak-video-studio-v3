@@ -1,23 +1,31 @@
-// Route cross-origin asset URLs through /api/proxy so they ride past the
-// COEP=require-corp header set on /editor.
+// proxify() — now a PASSTHROUGH. Media streams DIRECT from its host.
 //
-// Why this exists: /editor needs SharedArrayBuffer for ffmpeg.wasm, which
-// requires the document to be cross-origin-isolated (COEP=require-corp,
-// COOP=same-origin). Side effect: any cross-origin resource the browser
-// fetches must have Cross-Origin-Resource-Policy: cross-origin or it gets
-// blocked with ERR_BLOCKED_BY_RESPONSE.NotSameOriginAfterDefaultedToSameOriginByCoep.
-// fal.media and Supabase storage don't send CORP — so we proxy.
+// History: /editor used to set COEP=require-corp (SharedArrayBuffer for
+// multi-threaded ffmpeg.wasm), which forced every cross-origin asset
+// through /api/proxy. COEP was removed (ffmpeg runs single-threaded now)
+// but proxify kept routing ALL editor media through the Vercel function
+// "as a defensive net" — and that net cost real money: every video
+// preview/render streamed its full bytes through Vercel = 63GB of Fast
+// Origin Transfer against the 10GB Hobby cap → ACCOUNT PAUSED.
 //
-// Same-origin URLs, blob:, data:, and falsy values pass through unchanged.
+// Current reality: fal.media sends Access-Control-Allow-Origin: * and the
+// R2 bucket has CORS rules, so direct fetch + crossOrigin='anonymous'
+// canvas access both work without any proxy. R2 egress is free; Vercel
+// origin transfer is not.
+//
+// The defensive net lives on ONLY in fetchToUint8 (editor-render.js):
+// direct fetch first, /api/proxy retry on CORS failure. Media elements
+// (<video>/<img>/<audio>) get the raw URL — playback never needed CORS,
+// and canvas capture works because the hosts send ACAO.
 
 export function proxify(url) {
+  return url
+}
+
+// Explicit proxy-wrapping for the rare host that doesn't send CORS headers.
+// Used by fetchToUint8's retry path — never as a default route.
+export function proxyUrl(url) {
   if (!url || typeof url !== 'string') return url
-  if (url.startsWith('blob:') || url.startsWith('data:')) return url
-  if (url.startsWith('/')) return url // already same-origin
-  try {
-    const here = typeof window !== 'undefined' ? window.location.href : 'https://x.local'
-    const u = new URL(url, here)
-    if (typeof window !== 'undefined' && u.origin === window.location.origin) return url
-    return `/api/proxy?url=${encodeURIComponent(url)}`
-  } catch { return url }
+  if (url.startsWith('blob:') || url.startsWith('data:') || url.startsWith('/')) return url
+  return `/api/proxy?url=${encodeURIComponent(url)}`
 }

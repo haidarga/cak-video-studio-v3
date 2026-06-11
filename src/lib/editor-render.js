@@ -14,7 +14,7 @@
 // Two backends: ffmpeg.wasm (MP4, full features) or canvas+MediaRecorder (WebM fallback).
 
 import { getFontCss } from './editor-fonts.js'
-import { proxify } from './editor-proxy.js'
+import { proxify, proxyUrl } from './editor-proxy.js'
 
 let ffmpegInstance = null
 let ffmpegLoading = null
@@ -66,8 +66,14 @@ export async function getFFmpeg(onLog) {
 }
 
 export async function fetchToUint8(url) {
-  const target = proxify(url)
-  const res = await fetch(target, { cache: 'no-store' })
+  // Direct fetch first — fal.media + R2 send CORS headers, so this works
+  // and the bytes DON'T flow through Vercel (origin transfer = $$).
+  // /api/proxy is the fallback for the rare host without CORS.
+  try {
+    const res = await fetch(url, { cache: 'no-store' })
+    if (res.ok) return new Uint8Array(await res.arrayBuffer())
+  } catch { /* CORS/network — fall through to proxy */ }
+  const res = await fetch(proxyUrl(url), { cache: 'no-store' })
   if (!res.ok) throw new Error(`fetch ${url.slice(-40)} -> ${res.status}`)
   return new Uint8Array(await res.arrayBuffer())
 }
