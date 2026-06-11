@@ -350,7 +350,7 @@ const TOOLS = {
           }
           model = i2vMap[cfg.video_model] || 'fal-ai/kling-video/v3/image-to-video'
         } else {
-          model = cfg.video_model || 'bytedance/seedance-2.0/fast/reference-to-video'
+          model = cfg.video_model || 'xai/grok-imagine-video/reference-to-video'
         }
       }
 
@@ -1682,7 +1682,7 @@ function buildSystemPrompt(ctx) {
   const cfgBlock = `
 Current config defaults (from user's picker bar):
   - Image model: ${cfg.image_model || 'fal-ai/nano-banana/edit'}
-  - Video model: ${cfg.video_model || 'bytedance/seedance-2.0/fast/reference-to-video'}
+  - Video model: ${cfg.video_model || 'xai/grok-imagine-video/reference-to-video'}
   - Aspect ratio: ${cfg.ar || '9:16'}
   - Duration: ${cfg.duration || 5}s
   - Audio: ${cfg.audio === false ? 'off' : 'on'}

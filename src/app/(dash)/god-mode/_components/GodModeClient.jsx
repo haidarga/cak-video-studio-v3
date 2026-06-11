@@ -50,7 +50,9 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
   // User can also override per-message via chat ("pakai Kling Pro").
   const [genConfig, setGenConfig] = useState({
     image_model: 'fal-ai/nano-banana/edit',
-    video_model: 'bytedance/seedance-2.0/fast/reference-to-video',
+    // Grok r2v default: multi-ref no-grid-morph kayak Seedance, tapi
+    // $0.07/dtk vs $0.24/dtk — 3.4x lebih murah buat iterasi harian.
+    video_model: 'xai/grok-imagine-video/reference-to-video',
     ar: '9:16',
     duration: 5,
     audio: true,
