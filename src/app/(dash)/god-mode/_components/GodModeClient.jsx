@@ -271,6 +271,21 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
     setPendingAttachments([])
     setBusy(true)
     try {
+      // Slim tool results ride along so server-side tools (continue_shot,
+      // edit_video) can find "the last gen" in conversation history. Full
+      // toolResult objects can be huge (campaign packages) — send only the
+      // fields those tools actually scan for.
+      const slimResult = (r) => {
+        if (!r || typeof r !== 'object') return undefined
+        const pick = (x) => x && {
+          type: x.type, url: x.url, result_id: x.result_id,
+          regen_payload: x.regen_payload, request_id: x.request_id,
+          model: x.model, ar: x.ar, duration: x.duration,
+        }
+        const out = pick(r)
+        if (Array.isArray(r.items)) out.items = r.items.slice(0, 5).map(pick)
+        return out
+      }
       const res = await fetch('/api/god-mode/agent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -280,6 +295,7 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
             role: m.role,
             content: m.content,
             attachments: m.attachments || undefined,
+            result: m.toolResult ? slimResult(m.toolResult) : undefined,
           })),
           activeBrand,
           personaCount: personas.length,

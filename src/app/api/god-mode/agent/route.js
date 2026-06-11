@@ -24,6 +24,7 @@ import {
   falCall,
   fetchUrlAsHtml,
   buildProductFidelityDirective,
+  buildVideoEditInput,
   mirrorToR2,
   mirrorToFalStorage,
 } from '@/lib/god-mode-builders'
@@ -277,7 +278,7 @@ const TOOLS = {
       // Resolve config defaults with per-call overrides.
       const cfg = ctx.activeConfig || {}
       const finalAr = ar || cfg.ar || '9:16'
-      const dur = Math.max(3, Math.min(15, parseInt(duration) || parseInt(cfg.duration) || 5))
+      let dur = Math.max(3, Math.min(15, parseInt(duration) || parseInt(cfg.duration) || 5))
       const audioOn = cfg.audio !== false
 
       // Compose final motion prompt with active preset appended.
@@ -371,6 +372,22 @@ const TOOLS = {
           }
           model = r2vMap[model] || model.replace('/image-to-video', '/text-to-video')
         }
+      }
+
+      // TEXT-ONLY AUTO-DETECT — ref-to-video with ZERO refs and no start
+      // image = guaranteed 422 ("reference_image_urls: List should have at
+      // least 1 item"). This is the pure-text path: user asks "bikin video X"
+      // with nothing pinned and no upload. Switch to the SAME family's
+      // text-to-video variant so style/cost expectations carry over.
+      if (model.includes('reference-to-video') && refUrls.length === 0 && !finalImageUrl) {
+        const t2vMap = {
+          'xai/grok-imagine-video/reference-to-video': 'xai/grok-imagine-video/text-to-video',
+          'bytedance/seedance-2.0/fast/reference-to-video': 'bytedance/seedance-2.0/text-to-video',
+          'alibaba/happy-horse/reference-to-video': 'alibaba/happy-horse/text-to-video',
+          'fal-ai/kling-video/v3/reference-to-video': 'fal-ai/kling-video/v3/standard/text-to-video',
+          'fal-ai/kling-video/v2.5-turbo/pro/ref-to-video': 'fal-ai/kling-video/v3/standard/text-to-video',
+        }
+        model = t2vMap[model] || 'xai/grok-imagine-video/text-to-video'
       }
 
       // Build input via centralized per-model helper. Handles Kling's
@@ -1601,6 +1618,123 @@ Output JSON only:
     },
   },
 
+  // ─ AI Video Edit — transform an existing video via text instruction ─
+  edit_video: {
+    description: 'EDIT/transform an EXISTING video with a text instruction (AI video edit / reprompt). Use when user says "edit video ini", "benerin video barusan", "ganti background/warna/mood video itu", "colorize", "ubah video jadi X", "videonya kureng, coba bikin Y" — referring to a video already generated in this chat or attached. Inputs: edit_prompt (English instruction, what to change), optional video_url (defaults to attached video or the most recent video result in this conversation). Model auto-picked: Happy Horse video-edit when reference images are involved (pinned product/persona or image attachments — identity/product-anchored edit), else Grok edit-video (cheap global edit ~$0.08/s).',
+    handler: async ({ edit_prompt, video_url }, ctx) => {
+      const falKey = await getFalKey(ctx.supabase, ctx.workspaceId)
+      if (!falKey) return { type: 'error', error: 'no fal.ai key configured' }
+
+      let finalPrompt = String(edit_prompt || '').trim()
+      if (finalPrompt.length < 3 && ctx.lastUserText) finalPrompt = ctx.lastUserText
+      if (finalPrompt.length < 3) {
+        return { type: 'error', error: 'Edit prompt kosong. Contoh: "ganti background jadi pantai sunset, pertahankan karakter".' }
+      }
+
+      // Resolve source video: explicit > attached video > last video result
+      // in this conversation (same scan continue_shot uses).
+      let srcVideo = (video_url && /^https?:/.test(video_url)) ? video_url : null
+      if (!srcVideo) {
+        const attVid = (ctx.recentAttachments || []).find((a) => a.type === 'video' && a.url)
+        if (attVid) srcVideo = attVid.url
+      }
+      if (!srcVideo) {
+        for (let i = (ctx.messages || []).length - 1; i >= 0; i--) {
+          const r = ctx.messages[i]?.result
+          if (r?.type === 'gen_video_result' && r.url) { srcVideo = r.url; break }
+        }
+      }
+      if (!srcVideo) {
+        return { type: 'error', error: 'Gak nemu video buat di-edit. Upload videonya via 📎 atau generate dulu, baru bilang "edit video ini: ..."' }
+      }
+
+      // Refs (image attachments + pinned product/persona) decide the model:
+      // refs present → Happy Horse video-edit (anchored edit, keeps identity);
+      // none → Grok edit-video (3.5x cheaper, global transforms).
+      const refUrls = []
+      for (const att of ctx.recentAttachments || []) {
+        if (att.type === 'image' && att.url) refUrls.push(att.url)
+      }
+      if (ctx.activeProduct?.fal_url) refUrls.push(ctx.activeProduct.fal_url)
+      const model = refUrls.length > 0 ? 'alibaba/happy-horse/video-edit' : 'xai/grok-imagine-video/edit-video'
+
+      // Product fidelity — same anti-drift anchor as gen tools.
+      const editProductDirective = buildProductFidelityDirective(ctx.activeProduct)
+      if (editProductDirective) finalPrompt += editProductDirective
+
+      let input
+      try {
+        input = buildVideoEditInput(model, {
+          prompt: finalPrompt,
+          video_url: srcVideo,
+          reference_image_urls: refUrls,
+          resolution: ctx.activeConfig?.resolution,
+        })
+      } catch (e) {
+        return { type: 'error', error: e.message }
+      }
+
+      try {
+        // Budget gate — duration unknown until fal probes the input video;
+        // assume 10s worst case for the pre-check.
+        const projected = estimateFalCost(model, { ...input, duration: 10 })
+        const gate = await assertBudget(ctx.supabase, ctx.workspaceId, { projectedUsd: projected })
+        if (!gate.ok) return { type: 'error', error: gate.reason, gate }
+
+        const wireModel = canonicalFalPath(model)
+        const r = await fetch(`https://queue.fal.run/${wireModel}`, {
+          method: 'POST',
+          headers: { 'Authorization': `Key ${falKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(input),
+        })
+        let d = await r.json().catch(() => ({}))
+        if (!r.ok) {
+          // file_download_error retry — same r2.dev rate-limit issue as gen.
+          const errStr = JSON.stringify(d).toLowerCase()
+          if (/failed to download|file_download_error|inaccessible/i.test(errStr)) {
+            const mirroredVideo = await mirrorToFalStorage(srcVideo, falKey)
+            const mirroredRefs = await Promise.all(refUrls.map((u) => mirrorToFalStorage(u, falKey)))
+            const input2 = buildVideoEditInput(model, {
+              prompt: finalPrompt, video_url: mirroredVideo,
+              reference_image_urls: mirroredRefs, resolution: ctx.activeConfig?.resolution,
+            })
+            const retry = await fetch(`https://queue.fal.run/${wireModel}`, {
+              method: 'POST',
+              headers: { 'Authorization': `Key ${falKey}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify(input2),
+            })
+            d = await retry.json().catch(() => ({}))
+            if (!retry.ok) throw new Error(d?.detail ? JSON.stringify(d.detail).slice(0, 300) : `fal ${retry.status} (after mirror retry)`)
+          } else {
+            throw new Error(d?.detail ? JSON.stringify(d.detail).slice(0, 300) : d?.error || `fal ${r.status}`)
+          }
+        }
+        const requestId = d?.request_id
+        if (!requestId) throw new Error('no request_id from fal')
+
+        // Return queued shape — the existing GenVideoQueued poller UI handles
+        // status checks + result save, no new frontend renderer needed.
+        return {
+          type: 'gen_video_queued',
+          request_id: requestId,
+          model: wireModel,
+          status_url: d?.status_url,
+          response_url: d?.response_url,
+          ar: ctx.activeConfig?.ar || '9:16',
+          duration: null,
+          motion: finalPrompt,
+          image_url: null,
+          refs: refUrls,
+          persona_id: ctx.activePersona?.id || null,
+          regen_payload: { motion_prompt: edit_prompt, image_url: null, model, refs: refUrls.slice(0, 8) },
+          _edit_of: srcVideo,
+        }
+      } catch (e) {
+        return { type: 'error', error: e.message }
+      }
+    },
+  },
+
   // ─ Soul / LoRA training ─────────────────────────────────────────
   train_persona_soul: {
     description: 'Start training a Soul (LoRA) for a persona. Use when user explicitly asks to train soul, train persona, lock character via training. Requires persona_id + reference image URLs (from user attachments or persona refs).',
@@ -1740,6 +1874,23 @@ MODEL VARIANT RULES (CRITICAL):
 - If user uploaded image to chat OR has pinned source: pick the /edit variant for that family.
 - For video: if user uploaded image OR pinned product → use image-to-video variant. If only personas pinned (multi-ref) → use reference-to-video. If pure text → text-to-video.
 
+SMART MODEL ROUTER (pick the BEST video model for the task — mention pilihan + alasan 1 kalimat di "text"):
+- STEP 1, detect the INPUT TYPE first:
+  * PURE TEXT (no upload, no pin, no URL) → text-to-video. The handler also auto-falls-back r2v→t2v, but YOU should pass the right t2v model explicitly.
+  * ONE source image (upload/pin) → image-to-video.
+  * IDENTITY matters (persona + product must stay consistent / multi-ref) → reference-to-video.
+  * EXISTING VIDEO to change ("benerin/ubah/edit video itu", "videonya kureng, ganti X") → call edit_video tool, NOT gen_video.
+- STEP 2, pick within the variant by need:
+  * Default/cheap/draft/iterasi → Grok family ('xai/grok-imagine-video/text-to-video' | '/image-to-video' | '/reference-to-video', ~$0.07/dtk, audio).
+  * Higher-quality i2v with audio → 'xai/grok-imagine-video/v1.5/image-to-video' (~$0.14/dtk).
+  * Cinematic multi-shot scene from text → 'fal-ai/kling-video/v3/standard/text-to-video' (audio, multi-shot).
+  * Native-audio 1080p text video → 'alibaba/happy-horse/text-to-video'.
+  * Premium photoreal hero shot from text → 'bytedance/seedance-2.0/text-to-video' (~$0.30/dtk — ONLY when user signals "paling bagus"/"final"/"hero", it's pricey).
+  * Best i2v quality → 'fal-ai/kling-video/v3/pro/image-to-video'.
+  * Strong identity fidelity r2v → 'bytedance/seedance-2.0/fast/reference-to-video'.
+- Budget words ("murah", "hemat", "draft", "iterasi") → Grok. Quality words ("paling bagus", "final", "buat posting") → Kling Pro / Seedance 2.
+- Dialog/voiceover/sound needed → audio-capable models (Grok family, Kling O3/T2V, Happy Horse T2V, Seedance T2V).
+
 - For gen_image/gen_video: use config defaults from above UNLESS user explicitly mentions a different model / AR / duration / audio in their message — then override via tool_input.
 - If user says e.g. "pakai Kling Pro 1:1 10 detik no audio", pass { model: 'fal-ai/kling-video/v3/pro/image-to-video', ar: '1:1', duration: 10 } to gen_video (and bake "silent" into motion_prompt).
 - SOURCE RESOLUTION (CRITICAL — read carefully):
@@ -1754,7 +1905,7 @@ MODEL VARIANT RULES (CRITICAL):
   - URL + "bikin foto/image/poster" → gen_image_from_url.
   - **COUNT DETECTION**: parse N from user text — "2 video" / "3 variasi" / "bikinin 5 promo" → pass count=N to gen_marketing_video_from_url (URL path) OR gen_video (upload path). BOTH tools support count. Capped server-side at 5. If user says just "video" with no number, default count=1. **CRITICAL**: never silently downgrade — if user says "3 video" and you only call once, you're broken.
   - Bare URL no clear instruction → scrape_url_for_marketing (preview).
-  - Detect model overrides in prompt: "pake Kling 3" -> 'fal-ai/kling-video/v3/image-to-video', "Kling Pro" -> '/v3/pro/image-to-video', "Seedance" -> 'bytedance/seedance-2.0/fast/image-to-video', "Veo" -> 'fal-ai/veo3', "Grok" -> 'xai/grok-imagine-video/image-to-video', "GPT Image 2 Edit" -> 'openai/gpt-image-2/edit', "Nano Banana" -> 'fal-ai/nano-banana/edit'.
+  - Detect model overrides in prompt: "pake Kling 3" -> 'fal-ai/kling-video/v3/image-to-video', "Kling Pro" -> '/v3/pro/image-to-video', "Seedance" -> 'bytedance/seedance-2.0/fast/image-to-video', "Veo" -> 'fal-ai/veo3', "Grok" -> 'xai/grok-imagine-video/image-to-video', "Grok 1.5" -> 'xai/grok-imagine-video/v1.5/image-to-video', "GPT Image 2 Edit" -> 'openai/gpt-image-2/edit', "Nano Banana" -> 'fal-ai/nano-banana/edit'. Text-only + family name: "Grok" -> '.../text-to-video', "Kling" -> 'fal-ai/kling-video/v3/standard/text-to-video', "Happy Horse" -> 'alibaba/happy-horse/text-to-video', "Seedance" -> 'bytedance/seedance-2.0/text-to-video'.
 - If user uploads/attaches a video and says "analyze" or "make like this", call analyze_reference_video.
 - If user uploads/attaches image/video and asks to score / predict virality, call predict_virality.
 

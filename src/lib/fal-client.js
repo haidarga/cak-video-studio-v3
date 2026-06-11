@@ -296,6 +296,24 @@ export function buildImgInput(imgModel, { prompt, refUrls = [], ar = '9:16' }) {
 // ── Video input builder, ported from v2's src/lib/api.js ──
 export function buildVidInput(vidModel, { prompt, image_url, reference_urls, duration, aspect_ratio }) {
   const isRef = vidModel.includes('reference-to-video')
+  // Pure text-to-video — NO image fields at all (sending them 422s on some
+  // endpoints). Per-family shapes from the fal dashboards.
+  if (vidModel.includes('text-to-video')) {
+    const d = parseInt(duration) || 5
+    if (vidModel.includes('kling-video')) {
+      return { prompt, duration: Math.max(5, Math.min(10, d)), aspect_ratio, generate_audio: true }
+    }
+    if (vidModel.includes('seedance')) {
+      return { prompt, duration: String(Math.max(4, Math.min(15, d))), resolution: '720p', aspect_ratio, generate_audio: true }
+    }
+    if (vidModel.includes('happy-horse')) {
+      return { prompt, duration: Math.max(3, Math.min(15, d)), aspect_ratio, resolution: '720p' }
+    }
+    if (vidModel.includes('grok-imagine')) {
+      return { prompt, duration: Math.max(5, Math.min(10, d)), resolution: '720p', aspect_ratio: aspect_ratio || 'auto' }
+    }
+    return { prompt, duration: d, aspect_ratio }
+  }
   if (vidModel.includes('kling-video')) {
     const isO3 = vidModel.includes('/o3/')
     const dur = Math.max(5, Math.min(15, parseInt(duration) || 5))
@@ -429,7 +447,10 @@ export function getVideoMaxDuration(vidModel) {
   if (!vidModel) return 10
   const m = vidModel
   const isRef = m.includes('reference-to-video') || m.includes('ref-to-video')
-  if (m.includes('grok-imagine')) return isRef ? 10 : 15
+  if (m.includes('grok-imagine')) {
+    if (m.includes('text-to-video')) return 10 // conservative — t2v form defaults to 6s
+    return isRef ? 10 : 15
+  }
   if (m.includes('seedance-2.0/fast')) return 15        // both ref + i2v accept 4-15s per fal.ai dashboard
   if (m.includes('seedance')) return 15
   if (m.includes('happy-horse')) return 15
@@ -444,15 +465,27 @@ export function getVideoMaxDuration(vidModel) {
 export const VIDEO_MODELS = [
   { v: 'xai/grok-imagine-video/image-to-video', l: 'Grok Imagine — ~$0.07/dtk 720p (audio) 💰' },
   { v: 'xai/grok-imagine-video/reference-to-video', l: '🎭 Grok Imagine Ref-to-Video — ~$0.07/dtk (multi-ref, NO grid morph) 💰' },
+  { v: 'xai/grok-imagine-video/text-to-video', l: '📝 Grok T2V — ~$0.07/dtk (pure text, audio) 💰' },
   { v: 'fal-ai/kling-video/v3/standard/image-to-video', l: 'Kling v3 — ~$0.08/dtk 💰' },
   { v: 'fal-ai/kling-video/o3/standard/image-to-video', l: 'Kling O3 — ~$0.11/dtk (audio)' },
   { v: 'fal-ai/kling-video/v2.5-turbo/pro/ref-to-video', l: '🎭 Kling 2.5 Pro Ref-to-Video — ~$0.12/dtk (NO morphing dari grid)' },
+  { v: 'fal-ai/kling-video/v3/standard/text-to-video', l: '📝 Kling 3 T2V — ~$0.13/dtk (audio, multi-shot)' },
   { v: 'alibaba/happy-horse/image-to-video', l: 'Happy Horse 1.0 — ~$0.14/dtk' },
   { v: 'alibaba/happy-horse/reference-to-video', l: '🎭 Happy Horse Ref-to-Video — ~$0.14/dtk' },
+  { v: 'alibaba/happy-horse/text-to-video', l: '📝 Happy Horse T2V — ~$0.14/dtk 720p (native audio, 1080p $0.28)' },
+  { v: 'xai/grok-imagine-video/v1.5/image-to-video', l: 'Grok 1.5 i2v — ~$0.14/dtk 720p (audio, higher quality)' },
   { v: 'fal-ai/bytedance/seedance/v1/lite/reference-to-video', l: '🎭 Seedance Lite Ref-to-Video — ~$0.16/dtk' },
   { v: 'bytedance/seedance-2.0/fast/image-to-video', l: 'Seedance 2 Fast — ~$0.24/dtk' },
   { v: 'bytedance/seedance-2.0/fast/reference-to-video', l: '🎭 Seedance 2 Fast Ref-to-Video — ~$0.24/dtk' },
   { v: 'fal-ai/kling-video/v3/pro/image-to-video', l: 'Kling v3 Pro — ~$0.28/dtk (best quality)' },
+  { v: 'bytedance/seedance-2.0/text-to-video', l: '📝 Seedance 2 T2V — ~$0.30/dtk 720p (cinematic, native audio, premium)' },
+]
+
+// AI video EDIT models — transform an EXISTING video via text instruction.
+// Not generation models; used by god-mode edit_video tool (and future UIs).
+export const VIDEO_EDIT_MODELS = [
+  { v: 'xai/grok-imagine-video/edit-video', l: '✂️ Grok Edit Video — ~$0.08/dtk (cheap global edits: colorize, style, mood)' },
+  { v: 'alibaba/happy-horse/video-edit', l: '✂️ Happy Horse Video Edit — ~$0.28/dtk 720p (ref-image-guided edits, up to 5 refs, 1080p $0.56)' },
 ]
 export const IMAGE_MODELS = [
   { v: 'fal-ai/nano-banana-2/edit', l: 'Nano Banana 2 — fast multi-ref, outfit adapts' },

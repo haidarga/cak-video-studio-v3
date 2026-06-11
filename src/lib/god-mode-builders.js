@@ -100,6 +100,9 @@ export function buildVideoInputForModel(model, { motion_prompt, image_url, image
       const elements = refsArr.slice(0, 4).map((u) => ({ frontal_image_url: u }))
       return { prompt: motion_prompt, ...(elements.length ? { elements } : {}), duration: dur, aspect_ratio: ar }
     }
+    if (isT2V) {
+      return { prompt: motion_prompt, duration: String(Math.min(10, parseInt(dur))), aspect_ratio: ar, generate_audio: true }
+    }
     return { prompt: motion_prompt, duration: dur, aspect_ratio: ar }
   }
 
@@ -134,6 +137,9 @@ export function buildVideoInputForModel(model, { motion_prompt, image_url, image
       // "reference_image_urls: Field required" when we sent image_urls.
       return { prompt: motion_prompt, reference_image_urls: refsArr.slice(0, 6), duration: parseInt(dur), aspect_ratio: ar }
     }
+    if (isT2V) {
+      return { prompt: motion_prompt, duration: Math.min(10, parseInt(dur)), resolution: resolution || '720p', aspect_ratio: ar }
+    }
     return { prompt: motion_prompt, duration: parseInt(dur), aspect_ratio: ar }
   }
 
@@ -158,6 +164,28 @@ export function buildVideoInputForModel(model, { motion_prompt, image_url, image
     duration: parseInt(dur),
     aspect_ratio: ar,
   }
+}
+
+// ── Video EDIT input builder ─────────────────────────────────────────
+// Transform an EXISTING video via text instruction. Two models, two shapes:
+//   xai/grok-imagine-video/edit-video : { prompt, video_url } — cheap global
+//     edits (colorize, style, mood). ~$0.08/s.
+//   alibaba/happy-horse/video-edit    : { video_url, prompt,
+//     reference_image_urls?, resolution } — ref-image-GUIDED edits (swap
+//     product/character look while anchored to refs, up to 5). ~$0.28/s 720p.
+export function buildVideoEditInput(model, { prompt, video_url, reference_image_urls, resolution }) {
+  if (!video_url) throw new Error('video_url required for video edit')
+  if (model.includes('happy-horse')) {
+    const refs = (reference_image_urls || []).filter(Boolean).slice(0, 5)
+    return {
+      video_url,
+      prompt,
+      ...(refs.length ? { reference_image_urls: refs } : {}),
+      resolution: resolution === '1080p' ? '1080p' : '720p',
+    }
+  }
+  // grok edit-video
+  return { prompt, video_url }
 }
 
 // ── Image input builder ──────────────────────────────────────────────
