@@ -62,7 +62,7 @@ export async function POST(req) {
     const admin = createAdminClient()
     const kind = classify(model)
     const duration_seconds = kind === 'video' ? extractDuration(input) : null
-    await admin.from('gen_jobs').insert({
+    const { error: insErr } = await admin.from('gen_jobs').insert({
       request_id: result.request_id,
       workspace_id: wsId,
       user_id: user.id,
@@ -80,6 +80,19 @@ export async function POST(req) {
         response_url: result.response_url,
       },
     })
+
+    // Insert failure used to be SILENT — the fal job was already submitted,
+    // the webhook would later find no row to update, and the UI sat on
+    // "pending/unknown" forever with zero clue. Classic cause: wrong
+    // SUPABASE_SERVICE_ROLE_KEY (anon key works → login fine, admin writes
+    // fail). Surface it loudly with the request_id so the gen is recoverable.
+    if (insErr) {
+      return NextResponse.json({
+        ok: false,
+        error: `Gen UDAH ke-submit ke fal (request_id ${result.request_id}) tapi gagal nyatet job ke DB: ${insErr.message}. Kemungkinan SUPABASE_SERVICE_ROLE_KEY di Vercel salah/lama. Video tetap jalan di fal — cek fal.ai dashboard.`,
+        request_id: result.request_id,
+      }, { status: 500 })
+    }
 
     return NextResponse.json({ ok: true, ...result })
   } catch (e) {
