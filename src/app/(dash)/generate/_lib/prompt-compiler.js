@@ -1,9 +1,9 @@
-// Visual Prompt Compiler — the single source of truth for assembling image and
+﻿// Visual Prompt Compiler â€” the single source of truth for assembling image and
 // video prompts from structured inputs.
 //
 // Why this exists: prior code concatenated style-preset + IMG_QUALITY +
 // productDirective + wardrobe + CONTINUITY by hand in GenerateClient.jsx.
-// That produced 11 documented contradictions per gen (per workflow audit) —
+// That produced 11 documented contradictions per gen (per workflow audit) â€”
 // e.g. "shot on Samsung A13" + "Professional high-detail photography" in the
 // same prompt. The model resolved them randomly and often picked the wrong
 // aesthetic.
@@ -18,9 +18,9 @@
 //      ('Professional high-detail photography, sharp focus, ...') with a
 //      preset-appropriate one-liner.
 
-import { getCameraPreset } from './camera-presets.js'
+import { getCameraPreset } from '@/lib/camera-presets'
 
-// Contradiction rules — pattern that matches "loser" tokens + conditions
+// Contradiction rules â€” pattern that matches "loser" tokens + conditions
 // under which they should be dropped. The sanitizer runs over each prompt
 // layer separately so we can drop tokens regardless of where they appeared.
 export const CONTRADICTION_RULES = [
@@ -60,7 +60,7 @@ export const CONTRADICTION_RULES = [
     match: /(realistic skin texture|photographic still|natural realistic skin|authentic skin pores)/gi,
     conflicts_with: ['camera:animation_2d', 'camera:pixar_3d'],
   },
-  // Wasted tokens — sound buzzwords that don't change pixels at all.
+  // Wasted tokens â€” sound buzzwords that don't change pixels at all.
   // Dropped unconditionally regardless of camera preset.
   {
     name: 'wasted award/marketing tokens',
@@ -79,7 +79,7 @@ export const CONTRADICTION_RULES = [
     match: /(9 (panels?|beats?|scenes?|storyboards?)|multi-scene)/gi,
     conflicts_with: ['continuousShot=true'],
   },
-  // 'IGNORE outfit from reference' line is harmful when there is no override —
+  // 'IGNORE outfit from reference' line is harmful when there is no override â€”
   // model gets told to randomize the outfit for no reason.
   {
     name: 'ignore-outfit vs no-wardrobe-override',
@@ -141,7 +141,7 @@ function pickQuality(cam, media, skipProduct) {
     : `Anatomically correct, well-composed.${product}`
 }
 
-// Layer order constant — referenced by tests/logs.
+// Layer order constant â€” referenced by tests/logs.
 export const LAYER_ORDER = [
   'L1_camera',
   'L1b_grid_header',
@@ -157,11 +157,11 @@ export const LAYER_ORDER = [
   'L11_edit_commands',
 ]
 
-// ── IMAGE PATH ──
+// â”€â”€ IMAGE PATH â”€â”€
 // Full 11-layer compile for STILL FRAME gen (nano-banana-2/edit, gpt-image-2,
 // grok-imagine-image, seedream, qwen-image-edit, etc).
 //
-// Output structure (per user spec — matches Gambar 1 reference):
+// Output structure (per user spec â€” matches Gambar 1 reference):
 //   L1   camera preset tokens (UGC / cinematic / animation etc)
 //   L1b  grid header (storyboard mode only)
 //   L2   Subject:   <identity>
@@ -177,7 +177,7 @@ export const LAYER_ORDER = [
 //   L10  Avoid: <preset negatives>.
 //   L11  CHANGE the subjects' outfit ... (trailing imperative for edit endpoints)
 //
-// Camera preset / quality / negatives are ALWAYS injected — user wants the full
+// Camera preset / quality / negatives are ALWAYS injected â€” user wants the full
 // preset structure as the default. To opt out of preset injection, the user
 // picks a different cameraPreset in the UI (not autodetected from naskah).
 //
@@ -215,7 +215,7 @@ export function compileImagePrompt(spec) {
   const L3_wardrobe = wardrobe ? `Wardrobe: ${wardrobe}.` : ''
   const L4_environment = environment ? `Setting: ${environment}.` : ''
   const L5_action = action || ''
-  // L6_brand — strong product fidelity directive when a product brief is
+  // L6_brand â€” strong product fidelity directive when a product brief is
   // attached. Previously this was just `Product: ${brand}` which the model
   // treated as a soft hint -> drift across shots (UGREEN turns into
   // generic black charger by panel 5). CRITICAL anchor language + "exactly
@@ -225,21 +225,21 @@ export function compileImagePrompt(spec) {
     : ''
   const L7_format = `${ar} composition.`
   const L8_continuity = refsCount ? 'Keep character identity consistent with references.' : ''
-  // L8b — STYLE reference anchor. Tells the model the trailing N images are
+  // L8b â€” STYLE reference anchor. Tells the model the trailing N images are
   // AESTHETIC inspiration (palette, lighting, rendering, composition), NOT
   // identity sources. Without this, models like nano-banana / grok-imagine /
   // seedream treat every image_url as a face-identity source and bleed the
   // style ref's people into the output.
   const styleN = Math.max(0, Number(styleRefsCount) || 0)
   const L8b_style = styleN > 0
-    ? `STYLE REFERENCE: the last ${styleN === 1 ? 'image is a style reference' : `${styleN} images are style references`} — match their color palette, lighting, rendering style, and overall aesthetic. Do NOT copy characters, faces, or specific objects from them. Use them ONLY as visual mood/style guide.`
+    ? `STYLE REFERENCE: the last ${styleN === 1 ? 'image is a style reference' : `${styleN} images are style references`} â€” match their color palette, lighting, rendering style, and overall aesthetic. Do NOT copy characters, faces, or specific objects from them. Use them ONLY as visual mood/style guide.`
     : ''
   const L9_quality = pickQuality(cam, 'image', skipProduct)
   const L10_negatives = cam.negatives?.length ? `Avoid: ${cam.negatives.join(', ')}.` : ''
 
-  // L11 — trailing imperative for edit endpoints (recency bias).
+  // L11 â€” trailing imperative for edit endpoints (recency bias).
   const L11_edit_commands = wardrobe
-    ? `CHANGE the subjects' outfit to: ${wardrobe}. Replace the reference photo outfit completely. Keep face, hair, body and identity IDENTICAL — only swap clothing.`
+    ? `CHANGE the subjects' outfit to: ${wardrobe}. Replace the reference photo outfit completely. Keep face, hair, body and identity IDENTICAL â€” only swap clothing.`
     : ''
 
   const layers = [L1_camera, L1b_grid, L2_identity, L3_wardrobe, L4_environment, L5_action, L5b_camera_echo, L6_brand, L7_format, L8_continuity, L9_quality]
@@ -253,9 +253,9 @@ export function compileImagePrompt(spec) {
   return cleaned.join('\n')
 }
 
-// ── VIDEO PATH ──
+// â”€â”€ VIDEO PATH â”€â”€
 // Image-to-video gen takes a still that ALREADY contains identity + wardrobe +
-// camera style baked in. Video model's job is to animate that still — so the
+// camera style baked in. Video model's job is to animate that still â€” so the
 // prompt only needs MOTION + ACTION TIMELINE. Camera tokens, quality blob, and
 // negatives are noise here: they describe how the FRAME looks (already locked)
 // not how it should MOVE.
@@ -263,7 +263,7 @@ export function compileImagePrompt(spec) {
 // Owns: minimum context (subject + setting), the action timeline verbatim from
 // naskah.video_motion (passed in via `action`), AR, continuity. Nothing else.
 //
-// Per user directive — "TUGAS ELU CUMAN MASUKIN PRMPTNYA KE FAL.AI": no
+// Per user directive â€” "TUGAS ELU CUMAN MASUKIN PRMPTNYA KE FAL.AI": no
 // 11-layer compile, no preset injection, no sanitizer rewrites. Just pass
 // the naskah motion through.
 export function compileVideoPrompt(spec) {
@@ -286,7 +286,7 @@ export function compileVideoPrompt(spec) {
   return lines.filter(Boolean).join('\n')
 }
 
-// @deprecated — use compileImagePrompt / compileVideoPrompt directly.
+// @deprecated â€” use compileImagePrompt / compileVideoPrompt directly.
 // Kept as a thin alias so any stale import doesn't crash.
 export function compilePrompt(spec) {
   return spec?.media === 'video' ? compileVideoPrompt(spec) : compileImagePrompt(spec)

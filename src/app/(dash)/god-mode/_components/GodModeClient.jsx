@@ -202,6 +202,34 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
     let prompt = null
     if (action === 'continue_shot') {
       prompt = 'Lanjutin shot ini — sama persona/style/setting tapi advance ke moment berikutnya. Bikin shot 2.'
+      // Continuity anchor — ride the previous shot's actual pixels into the
+      // next gen. Video: extract the LAST frame client-side (Vercel has no
+      // ffmpeg) + upload to R2. Image: attach the image itself. gen_video
+      // auto-promotes the first image attachment to start frame; gen_image
+      // picks it up as the first ref. Without this, continue_shot is
+      // prompt-only and the character/setting drifts.
+      let anchorAtts = null
+      try {
+        if ((result.type === 'gen_video_result' || result.video || /\.(mp4|webm|mov)(\?|$)/i.test(result.url || '')) && result.url) {
+          setInput('🎬 Ngambil frame terakhir shot sebelumnya buat kontinuiti...')
+          const { extractLastFrame } = await import('@/lib/ffmpeg-extract')
+          const blob = await extractLastFrame(result.url)
+          const file = new File([blob], `prev-shot-frame-${Date.now()}.jpg`, { type: blob.type || 'image/jpeg' })
+          const { url } = await uploadFile(file, 'continuation')
+          anchorAtts = [{ type: 'image', url, name: 'frame terakhir shot sebelumnya', mime: 'image/jpeg', size: blob.size }]
+          prompt += ' (Attached: frame TERAKHIR dari shot sebelumnya — pakai sebagai start_frame_url / start frame biar nyambung mulus.)'
+        } else if (result.url) {
+          anchorAtts = [{ type: 'image', url: result.url, name: 'shot sebelumnya', mime: 'image/jpeg' }]
+          prompt += ' (Attached: gambar shot sebelumnya — pakai sebagai anchor identity/style.)'
+        }
+      } catch {
+        // frame extract failed (codec/CORS) — continue prompt-only, the
+        // server still carries the source refs forward via regen_payload
+      }
+      setInput(prompt)
+      await new Promise((r) => requestAnimationFrame(r))
+      await send(prompt, anchorAtts || undefined)
+      return
     } else if (action === 'regen_image') {
       const p = result.regen_payload || {}
       prompt = `Regenerate ulang gambar barusan${p.prompt ? `: ${p.prompt}` : ''}`
@@ -221,14 +249,18 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
     await send(prompt)
   }
 
-  async function send(textOverride) {
+  async function send(textOverride, attachmentsOverride) {
     const text = (textOverride ?? input).trim()
-    if ((!text && pendingAttachments.length === 0) || busy) return
+    // attachmentsOverride lets result-action handlers (continue_shot) attach
+    // a freshly-extracted frame in the same tick — setPendingAttachments +
+    // immediate send() would read the stale closure value instead.
+    const atts = attachmentsOverride ?? pendingAttachments
+    if ((!text && atts.length === 0) || busy) return
     setErr('')
     const newUser = {
       role: 'user',
       content: text || '(attachment only)',
-      attachments: pendingAttachments.length > 0 ? pendingAttachments : undefined,
+      attachments: atts.length > 0 ? atts : undefined,
     }
     const conversation = [...messages, newUser]
     setMessages(conversation)

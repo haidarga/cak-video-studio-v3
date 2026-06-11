@@ -34,22 +34,60 @@ export default function LoginPage() {
 
   return (
     <main className="min-h-screen relative flex items-center justify-center p-6 overflow-hidden bg-[var(--bg)]">
-      {/* Ambient halo orbs — animated radial gradients, mirror landing-page style refs */}
-      <div className="absolute inset-0 pointer-events-none -z-10">
-        <div className="absolute top-[-20%] left-[-10%] w-[60rem] h-[60rem] rounded-full opacity-40"
-             style={{ background: 'radial-gradient(closest-side, var(--accent-glow) 0%, transparent 70%)', filter: 'blur(80px)' }} />
-        <div className="absolute bottom-[-20%] right-[-10%] w-[55rem] h-[55rem] rounded-full opacity-35"
-             style={{ background: 'radial-gradient(closest-side, rgba(217,70,239,0.45) 0%, transparent 70%)', filter: 'blur(90px)' }} />
-        <div className="absolute top-[30%] right-[15%] w-[30rem] h-[30rem] rounded-full opacity-25"
-             style={{ background: 'radial-gradient(closest-side, rgba(6,182,212,0.4) 0%, transparent 70%)', filter: 'blur(70px)' }} />
+      {/* Scoped login animations — pure CSS so the screen stays light. GPU-only
+          properties (transform/opacity) to avoid jank on weak machines, and
+          fully disabled under prefers-reduced-motion. */}
+      <style>{`
+        @keyframes loginOrbDrift {
+          0%   { transform: translate3d(0,0,0) scale(1); }
+          50%  { transform: translate3d(4rem,-3rem,0) scale(1.08); }
+          100% { transform: translate3d(-3rem,2rem,0) scale(0.96); }
+        }
+        @keyframes loginAurora {
+          0%   { transform: rotate(0deg) scale(1.4); opacity: .14; }
+          50%  { opacity: .22; }
+          100% { transform: rotate(360deg) scale(1.4); opacity: .14; }
+        }
+        @keyframes loginScan {
+          0%   { transform: translateY(-110vh); }
+          100% { transform: translateY(110vh); }
+        }
+        .login-orb { animation: loginOrbDrift 16s ease-in-out infinite alternate; will-change: transform; }
+        .login-aurora { animation: loginAurora 38s linear infinite; will-change: transform, opacity; }
+        .login-scan { animation: loginScan 9s linear infinite; will-change: transform; }
+        @media (prefers-reduced-motion: reduce) {
+          .login-orb, .login-aurora, .login-scan { animation: none; }
+        }
+      `}</style>
+
+      {/* Rotating aurora sheet — the "web3" depth layer behind everything */}
+      <div className="absolute inset-0 pointer-events-none -z-20 overflow-hidden">
+        <div className="login-aurora absolute left-1/2 top-1/2 w-[140vmax] h-[140vmax] -ml-[70vmax] -mt-[70vmax] rounded-full"
+             style={{ background: 'conic-gradient(from 0deg, transparent 0%, rgba(168,85,247,0.5) 12%, transparent 28%, rgba(6,182,212,0.35) 46%, transparent 60%, rgba(217,70,239,0.45) 78%, transparent 100%)', filter: 'blur(110px)' }} />
       </div>
 
-      {/* Subtle grid backdrop — gives depth without distracting from card */}
-      <div className="absolute inset-0 -z-10 opacity-[0.04] pointer-events-none"
+      {/* Ambient halo orbs — now drifting slowly for a living background */}
+      <div className="absolute inset-0 pointer-events-none -z-10">
+        <div className="login-orb absolute top-[-20%] left-[-10%] w-[60rem] h-[60rem] rounded-full opacity-40"
+             style={{ background: 'radial-gradient(closest-side, var(--accent-glow) 0%, transparent 70%)', filter: 'blur(80px)' }} />
+        <div className="login-orb absolute bottom-[-20%] right-[-10%] w-[55rem] h-[55rem] rounded-full opacity-35"
+             style={{ background: 'radial-gradient(closest-side, rgba(217,70,239,0.45) 0%, transparent 70%)', filter: 'blur(90px)', animationDelay: '-6s', animationDuration: '20s' }} />
+        <div className="login-orb absolute top-[30%] right-[15%] w-[30rem] h-[30rem] rounded-full opacity-25"
+             style={{ background: 'radial-gradient(closest-side, rgba(6,182,212,0.4) 0%, transparent 70%)', filter: 'blur(70px)', animationDelay: '-11s', animationDuration: '13s' }} />
+      </div>
+
+      {/* Subtle grid backdrop + scanning light beam sweeping down it */}
+      <div className="absolute inset-0 -z-10 opacity-[0.05] pointer-events-none"
            style={{
              backgroundImage: 'linear-gradient(rgba(255,255,255,0.5) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.5) 1px, transparent 1px)',
              backgroundSize: '40px 40px',
+             maskImage: 'radial-gradient(ellipse 90% 70% at 50% 45%, black 30%, transparent 75%)',
+             WebkitMaskImage: 'radial-gradient(ellipse 90% 70% at 50% 45%, black 30%, transparent 75%)',
            }} />
+      <div className="absolute inset-x-0 -z-10 pointer-events-none overflow-hidden" style={{ top: 0, bottom: 0 }}>
+        <div className="login-scan absolute inset-x-0 h-40 opacity-[0.12]"
+             style={{ background: 'linear-gradient(180deg, transparent, rgba(217,70,239,0.7) 50%, transparent)' }} />
+      </div>
 
       {/* Left side — brand hero (hidden on mobile) */}
       <div className="hidden lg:flex flex-col gap-5 max-w-md mr-12 select-none">

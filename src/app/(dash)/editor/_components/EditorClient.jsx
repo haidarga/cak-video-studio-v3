@@ -404,16 +404,20 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
     } catch (e) { setErr('Upload audio: ' + e.message) }
   }
 
-  async function autoSubtitle({ karaoke = false } = {}) {
-    if (baseClips.length === 0) { setErr('Tambah base clip dulu'); return }
+  // clips: pass explicit clip array (with FINAL in_track positions) when the
+  // caller just re-laid-out the timeline in the same tick — the baseClips
+  // memo is still stale at that point. skipHistory: caller already snapshot.
+  async function autoSubtitle({ karaoke = false, clips = null, skipHistory = false } = {}) {
+    const targets = clips || baseClips
+    if (targets.length === 0) { setErr('Tambah base clip dulu'); return }
     setTranscribing(true); setErr('')
-    pushHistory(project)
+    if (!skipHistory) pushHistory(project)
     let allNewClips = []
     try {
       // Iterate ALL base clips — transcribe per clip + offset segments by clip's in_track
-      for (let i = 0; i < baseClips.length; i++) {
-        const clip = baseClips[i]
-        setTranscribeProgress(`Transcribing clip ${i + 1}/${baseClips.length}...`)
+      for (let i = 0; i < targets.length; i++) {
+        const clip = targets[i]
+        setTranscribeProgress(`Transcribing clip ${i + 1}/${targets.length}...`)
         const res = await fetch('/api/transcribe', {
           method: 'POST', headers: { 'Content-Type': 'application/json', 'x-word-level': karaoke ? 'true' : 'false' },
           body: JSON.stringify({ url: clip.src_url }),
@@ -442,9 +446,53 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
         })
       }
       patch((p) => ({ ...p, text_clips: [...p.text_clips, ...allNewClips] }))
-      setTranscribeProgress(`✓ Generated ${allNewClips.length} subtitle clips dari ${baseClips.length} base clip${baseClips.length > 1 ? 's' : ''}${karaoke ? ' (karaoke)' : ''}`)
+      setTranscribeProgress(`✓ Generated ${allNewClips.length} subtitle clips dari ${targets.length} base clip${targets.length > 1 ? 's' : ''}${karaoke ? ' (karaoke)' : ''}`)
     } catch (e) { setErr(`Auto-subtitle gagal: ${e.message}`); setTranscribeProgress('') }
     setTranscribing(false)
+  }
+
+  // ── ⚡ AUTO EDIT — one-click assembly ─────────────────────────────
+  // Takes whatever is on the base track and turns it into a publish-ready
+  // cut: clips snapped sequentially (no gaps), crossfade between every cut,
+  // alternating subtle punch-in (the TikTok retention trick), BGM stretched
+  // under the whole video + ducked below dialog level, then word-level
+  // karaoke subtitles over the FINAL clip positions. Everything is one
+  // history entry so a single Ctrl+Z reverts the whole thing.
+  async function autoEdit() {
+    if (baseClips.length === 0) { setErr('Tambah minimal 1 clip ke base track dulu — Auto Edit nyusun dari situ'); return }
+    if (transcribing || exporting) return
+    pushHistory(project)
+    setErr('')
+    const XFADE = 0.4
+    let acc = 0
+    const newBase = baseClips.map((clip, i) => {
+      if (i > 0) acc -= XFADE // crossfade overlaps the clips by its duration
+      const punchIn = i % 2 === 1 // every 2nd clip gets a subtle zoom
+      const c = {
+        ...clip,
+        in_track: acc,
+        transition_in: i === 0 ? { type: 'cut', duration: 0 } : { type: 'crossfade', duration: XFADE },
+        zoom: punchIn ? Math.max(clip.zoom ?? 1, 1.12) : (clip.zoom ?? 1),
+        // bias the punch-in toward the upper-center (face area on 9:16 talking shots)
+        ...(punchIn ? { pan_x_pct: 50, pan_y_pct: 42 } : {}),
+      }
+      acc += clipDuration(clip)
+      return c
+    })
+    const totalLen = Math.max(1, acc)
+    const byId = Object.fromEntries(newBase.map((c) => [c.id, c]))
+    setProject((p) => ({
+      ...p,
+      video_clips: p.video_clips.map((c) => byId[c.id] || c),
+      // BGM underlay: cover the whole cut, sit below dialog (0.22), keep duck
+      audio_clips: (p.audio_clips || []).map((a) => ({
+        ...a, start: 0, duration: totalLen, volume: Math.min(a.volume ?? 0.3, 0.22),
+      })),
+    }))
+    // Subtitles last — offsets depend on the FINAL in_track layout, so pass
+    // the freshly computed clips (state from setProject is stale this tick).
+    await autoSubtitle({ karaoke: true, clips: newBase, skipHistory: true })
+    setTranscribeProgress(`⚡ Auto Edit beres — ${newBase.length} clip disusun + crossfade + punch-in + karaoke subtitle. Total ${totalLen.toFixed(1)}s. Ctrl+Z buat undo semua.`)
   }
 
   function applyTikTokStyle() {
@@ -978,6 +1026,11 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
 
           <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-2 space-y-1">
             <div className="text-[10px] uppercase font-semibold text-[var(--muted)] mb-1">+ Overlay & audio</div>
+            <button onClick={autoEdit} disabled={transcribing || exporting || baseClips.length === 0}
+              className="w-full text-xs px-2 py-2 rounded bg-gradient-to-r from-cyan-400 via-purple-500 to-pink-500 hover:opacity-90 text-white font-extrabold tracking-wide disabled:opacity-50 shadow-[0_0_12px_rgba(168,85,247,0.45)]"
+              title="Susun clips + crossfade + punch-in + karaoke subtitle + BGM duck — sekali klik">
+              {transcribing ? '⏳ Auto editing...' : `⚡ AUTO EDIT (${baseClips.length} clip)`}
+            </button>
             <button onClick={() => autoSubtitle({ karaoke: false })} disabled={transcribing || baseClips.length === 0}
               className="w-full text-xs px-2 py-1.5 rounded bg-gradient-to-r from-pink-500 to-purple-500 hover:opacity-90 text-white font-bold disabled:opacity-50">
               {transcribing ? '⏳ Transcribing...' : `✨ Auto-subtitle (${baseClips.length} clip)`}

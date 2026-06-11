@@ -95,7 +95,7 @@ const TOOLS = {
   // ─ Generation tools ──────────────────────────────────────────────
   gen_image: {
     description: 'Generate ONE image (NOT video) from a text prompt. Trigger phrases: "bikin foto/gambar", "buat image", "generate foto", "render gambar", "kasih foto", "potret", "hasilin gambar", "bikin poster", "edit gambar diatas". Use this when user explicitly wants an IMAGE not video. **CRITICAL**: if user uploaded image(s) to chat AND asks to edit/use them ("dari gambar diatas", "dari gambar yang gua upload"), those attachments AUTO-include as source refs — DO NOT tell user to pin anything. Pass visual prompt. Optional: model, ar override. Refs auto-stack: chat attachments + pinned persona refs + pinned product.',
-    handler: async ({ prompt, ar, model: modelOverride }, ctx) => {
+    handler: async ({ prompt, ar, model: modelOverride, extra_ref_urls }, ctx) => {
       const falKey = await getFalKey(ctx.supabase, ctx.workspaceId)
       if (!falKey) return { type: 'error', error: 'no fal.ai key configured' }
 
@@ -104,11 +104,16 @@ const TOOLS = {
       const finalAr = ar || cfg.ar || 'auto'
 
       // Build ref_image_urls stack — IMPORTANT priority order:
+      //   0. Continuity refs from continue_shot (previous shot's frame + its
+      //      original refs) — strongest anchor, must be seen first
       //   1. Recent chat attachments (user uploaded image to chat) — primary
       //      source for "edit gambar yang gua upload" / "dari gambar diatas"
       //   2. Pinned persona refs
       //   3. Pinned product ref
       const refUrls = []
+      for (const u of Array.isArray(extra_ref_urls) ? extra_ref_urls : []) {
+        if (u && /^https?:/.test(u)) refUrls.push(u)
+      }
       for (const att of ctx.recentAttachments || []) {
         if (att.type === 'image' && att.url) refUrls.push(att.url)
       }
@@ -118,6 +123,12 @@ const TOOLS = {
         for (const r of pRefs || []) if (r.refs?.fal_url) refUrls.push(r.refs.fal_url)
       }
       if (ctx.activeProduct?.fal_url) refUrls.push(ctx.activeProduct.fal_url)
+      // Dedupe keeping FIRST occurrence (continuity ref can also arrive as a
+      // chat attachment) — preserves priority order, and duplicate ref URLs
+      // waste model attention / 422 on some endpoints.
+      const dedupedRefs = [...new Set(refUrls)]
+      refUrls.length = 0
+      refUrls.push(...dedupedRefs)
 
       // Model selection priority:
       //   1. Explicit override from agent ("pake gpt-image-2")
@@ -219,8 +230,9 @@ const TOOLS = {
         return {
           type: 'gen_image_result',
           url, model, ar: finalAr, result_id: row?.id, prompt: finalPrompt,
-          // Re-gen payload — frontend uses this to fire identical re-gen call
-          regen_payload: { prompt, ar, model: modelOverride },
+          // Re-gen payload — frontend uses this to fire identical re-gen call.
+          // refs included so continue_shot can carry the same anchors forward.
+          regen_payload: { prompt, ar, model: modelOverride, refs: refUrls.slice(0, 8) },
         }
       } catch (e) {
         // SPA shell detected — page has no embeddable product data
@@ -239,7 +251,7 @@ const TOOLS = {
 
   gen_video: {
     description: 'Generate one OR MORE videos. Pass motion_prompt (what happens, camera moves). Optional: duration (3-15s), image_url for image-to-video, ar (override), model (override config), count (1-5, parallel parallel gens — pass when user says "3 video" / "5 variasi"). If active persona/product, refs auto-attach. If active preset, its motion prompt appended.',
-    handler: async ({ motion_prompt, duration, image_url, ar, model: modelOverride, count = 1 }, ctx) => {
+    handler: async ({ motion_prompt, duration, image_url, ar, model: modelOverride, count = 1, extra_ref_urls }, ctx) => {
       const falKey = await getFalKey(ctx.supabase, ctx.workspaceId)
       if (!falKey) return { type: 'error', error: 'no fal.ai key configured' }
 
@@ -271,6 +283,8 @@ const TOOLS = {
       if (vidProductDirective) finalMotion += vidProductDirective
 
       // Build refs from active context. PRIORITY ORDER:
+      //   0. Continuity refs from continue_shot (previous shot's frame + its
+      //      original refs) — strongest anchor, must be seen first
       //   1. Chat attachments (images user uploaded in this turn — primary
       //      source when user says "gambar 2 dan produk di gambar 3")
       //   2. Pinned persona refs
@@ -278,7 +292,10 @@ const TOOLS = {
       // This mirrors gen_image's behavior; without this, ref-to-video models
       // (Grok, Seedance r2v, Kling r2v) 422 on empty reference_image_urls
       // even when the user clearly uploaded ref images.
-      const refUrls = []
+      let refUrls = []
+      for (const u of Array.isArray(extra_ref_urls) ? extra_ref_urls : []) {
+        if (u && /^https?:/.test(u)) refUrls.push(u)
+      }
       for (const att of ctx.recentAttachments || []) {
         if (att.type === 'image' && att.url) refUrls.push(att.url)
       }
@@ -288,6 +305,9 @@ const TOOLS = {
         for (const r of pRefs || []) if (r.refs?.fal_url) refUrls.push(r.refs.fal_url)
       }
       if (ctx.activeProduct?.fal_url) refUrls.push(ctx.activeProduct.fal_url)
+      // Dedupe keeping FIRST occurrence — continuity ref can also arrive as
+      // a chat attachment; duplicates waste model attention / 422 sometimes.
+      refUrls = [...new Set(refUrls)]
 
       // Auto-promote source image_url: explicit > recent chat attachment > refs[0].
       // This is what fixes the "start_image_url Field required" 422 — when user
@@ -422,7 +442,7 @@ const TOOLS = {
               ar: finalAr, duration: dur,
               motion: finalMotion, image_url: finalImageUrl,
               label: `Video ${s.idx + 1}/${reqCount}`,
-              regen_payload: { motion_prompt, duration, image_url, ar, model: modelOverride },
+              regen_payload: { motion_prompt, duration, image_url: finalImageUrl || image_url, ar, model: modelOverride, refs: refUrls.slice(0, 8) },
             } : { type: 'error', idx: s.idx, error: s.error }),
           }
         }
@@ -505,7 +525,7 @@ const TOOLS = {
             type: 'gen_video_result',
             url, model: wireModel, ar: finalAr, duration: dur, result_id: row?.id, motion: finalMotion,
             audio: audioOn,
-            regen_payload: { motion_prompt, duration, image_url, ar, model: modelOverride },
+            regen_payload: { motion_prompt, duration, image_url: finalImageUrl || image_url, ar, model: modelOverride, refs: refUrls.slice(0, 8) },
           }
         }
 
@@ -527,7 +547,7 @@ const TOOLS = {
           image_url: image_url || null,
           refs: refUrls,
           persona_id: ctx.activePersona?.id || null,
-          regen_payload: { motion_prompt, duration, image_url, ar, model: modelOverride },
+          regen_payload: { motion_prompt, duration, image_url: finalImageUrl || image_url, ar, model: modelOverride, refs: refUrls.slice(0, 8) },
         }
       } catch (e) {
         // SPA shell detected — page has no embeddable product data
@@ -1417,8 +1437,8 @@ Return JSON only, no prose. No markdown fences. Be specific, no generic filler.`
 
   // ─ Continue shot — next image/video in a sequence ────────────────
   continue_shot: {
-    description: 'Generate the NEXT shot in a sequence based on the most recent gen_image / gen_video in this conversation. Same character/style/setting carried over, only the action/moment advances. Use when user says "next shot", "lanjutin", "shot 2", "continue dari yang tadi", "shot berikutnya tapi dia lagi X". Optional `next_action` describes what the new shot shows.',
-    handler: async ({ next_action, kind }, ctx) => {
+    description: 'Generate the NEXT shot in a sequence based on the most recent gen_image / gen_video in this conversation. Same character/style/setting carried over, only the action/moment advances. Use when user says "next shot", "lanjutin", "shot 2", "continue dari yang tadi", "shot berikutnya tapi dia lagi X". Optional `next_action` describes what the new shot shows. Optional `start_frame_url`: if the user message says a last-frame image of the previous shot is attached, pass that attachment URL here.',
+    handler: async ({ next_action, kind, start_frame_url }, ctx) => {
       // Find most recent gen result in conversation history. Cover all
       // gen-producing types — original bug: only checked gen_image_result
       // and gen_video_result so multi-queued / url-marketing / still-
@@ -1503,6 +1523,25 @@ Output JSON only:
         newPrompt = `${sourcePrompt}\n\nNext moment: ${next_action || 'continue the scene naturally'}`
       }
 
+      // ── Continuity anchors ──
+      // The single biggest anti-drift lever: start the next shot FROM the
+      // previous shot's actual pixels, and re-attach the refs the source
+      // gen used (persona/product/uploads) so identity doesn't reset.
+      //   anchor priority: explicit start_frame_url (client extracts the
+      //   video's last frame and attaches it) > image attachment in the
+      //   continue message > source image itself (image sources).
+      const srcRefs = Array.isArray(srcPayload.refs) ? srcPayload.refs.filter(Boolean) : []
+      let anchorUrl = (start_frame_url && /^https?:/.test(start_frame_url)) ? start_frame_url : null
+      if (!anchorUrl) {
+        const attImg = (ctx.recentAttachments || []).find((a) => a.type === 'image' && a.url)
+        if (attImg) anchorUrl = attImg.url
+      }
+      if (!anchorUrl && !isVideoSource) anchorUrl = lastGen.url
+
+      if (anchorUrl) {
+        newPrompt += `\n\nCONTINUITY: this is the NEXT shot of the SAME scene. The first reference image is the final frame of the previous shot — begin from that exact pose, setting and lighting. Keep character identity, wardrobe, color grade and art style IDENTICAL to it. Only the action advances.`
+      }
+
       // Dispatch to gen_image or gen_video tool internally — re-use all
       // their existing logic (budget gate, refs, fidelity directive, etc).
       // This keeps continue_shot as a thin orchestrator, not a duplicate
@@ -1514,13 +1553,18 @@ Output JSON only:
             duration: srcPayload.duration,
             ar: srcPayload.ar,
             model: srcPayload.model,
-            // If source was an image, use its URL as start frame for video continuation
-            image_url: !isVideoSource ? lastGen.url : srcPayload.image_url,
+            // Start frame: previous shot's last frame (or the source image
+            // itself when continuing from an image). Falls back to the source
+            // gen's own start frame as a weaker-but-better-than-nothing anchor.
+            image_url: anchorUrl || (!isVideoSource ? lastGen.url : srcPayload.image_url),
+            extra_ref_urls: srcRefs,
           }
         : {
             prompt: newPrompt,
             ar: srcPayload.ar,
             model: srcPayload.model,
+            // Anchor frame rides as the FIRST ref so edit-models lock onto it.
+            extra_ref_urls: [anchorUrl, ...srcRefs].filter(Boolean),
           }
       const result = await targetTool.handler(toolInput, ctx)
       if (result && result.type !== 'error') {

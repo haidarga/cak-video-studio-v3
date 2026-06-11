@@ -8,8 +8,11 @@ import {
   getVideoMaxDuration,
 } from '@/lib/fal-client'
 import { imageCost, videoCost, fmtCost } from '@/lib/cost-table'
-import { STYLE_PRESETS } from '@/lib/style-presets'
-import { compileImagePrompt, compileVideoPrompt } from '@/lib/prompt-compiler'
+// Generate-ONLY libs — live under generate/_lib so god-mode work can never
+// touch them (and vice versa). God Mode has its own prompt path in
+// src/lib/god-mode-builders.js. Keep it that way.
+import { STYLE_PRESETS } from '../_lib/style-presets'
+import { compileImagePrompt, compileVideoPrompt } from '../_lib/prompt-compiler'
 import { CAMERA_PRESETS, listAllPresets, DEFAULT_CAMERA, getCameraPreset } from '@/lib/camera-presets'
 import { buildIdentitySentence, productNotesShort } from '@/lib/identity'
 import { uploadFile } from '@/lib/upload-client'

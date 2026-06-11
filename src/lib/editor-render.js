@@ -583,20 +583,21 @@ export async function renderWithFFmpeg(project, onProgress) {
     // Encoder quality. preset=ultrafast was producing visible micro-stutter
     // because the encoder skips B-frame analysis and motion estimation that
     // smooth out playback. veryfast is the right balance: still fast (~2x
-    // ultrafast wall-clock), MUCH cleaner output. crf 20 is near-visually-
-    // lossless for the kind of content we render (faces/products/text).
-    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
+    // ultrafast wall-clock), MUCH cleaner output. crf 18 is visually
+    // lossless for the kind of content we render (faces/products/text) and
+    // leaves headroom for TikTok/IG's own re-encode pass.
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18',
     '-profile:v', 'high', '-level', '4.1',
     // CRITICAL: force constant frame rate at exactly 30fps. Source clips can
     // be VFR (variable) from generation services; without -r + -fps_mode cfr
     // ffmpeg passes timing through unchanged, TikTok's player sees
     // inconsistent frame timestamps and renders it as stutter. CFR fixes it.
     '-r', '30', '-fps_mode', 'cfr',
-    // Audio: 192k AAC at standard 48kHz so TikTok/IG don't re-resample.
+    // Audio: 256k AAC at standard 48kHz so TikTok/IG don't re-resample.
     // NO -async 1 — it caused audible noise / pitch artifacts by force-stretching
     // audio when filter graph introduced tiny timing diffs. Let ffmpeg sync
     // naturally; filter chain (atrim + asetpts + concat) already handles timing.
-    '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
+    '-c:a', 'aac', '-b:a', '256k', '-ar', '48000',
     '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
     '-y', 'output.mp4'
   )
