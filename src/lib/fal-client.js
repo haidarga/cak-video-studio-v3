@@ -148,6 +148,7 @@ async function falRunOnce(model, input, { onProgress, maxWaitMs, workspaceId, du
       if (channel) { try { channel.unsubscribe() } catch {} channel = null }
       if (fallbackInterval) clearInterval(fallbackInterval)
       if (timeoutHandle) clearTimeout(timeoutHandle)
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible)
     }
     const finish = (row) => {
       if (settled) return
@@ -188,7 +189,7 @@ async function falRunOnce(model, input, { onProgress, maxWaitMs, workspaceId, du
     //      states the user can SEE — much better UX than a silent timer.
     //      Without this, user sees "lama bro" with no signal whether fal
     //      is queued (will eventually move) or stuck (need to bail).
-    fallbackInterval = setInterval(async () => {
+    const pollOnce = async () => {
       if (settled) return
       const elapsed = Math.round((Date.now() - start) / 1000)
       const { data } = await supabase.from('gen_jobs').select('*').eq('request_id', requestId).maybeSingle()
@@ -198,6 +199,16 @@ async function falRunOnce(model, input, { onProgress, maxWaitMs, workspaceId, du
       try {
         const qs = new URLSearchParams({ request_id: requestId, model })
         const r = await fetch(`/api/god-mode/gen-status?${qs}`, { cache: 'no-store' })
+        // 401 = session token expired mid-gen (laptop sleep / background-tab
+        // timer throttling stops supabase-js's auto-refresh). Refresh the
+        // session and let the next tick retry — without this the poll 401s
+        // forever, the badge sits on "pending" even though fal finished, and
+        // the user eventually gets bounced to /login.
+        if (r.status === 401) {
+          try { await supabase.auth.refreshSession() } catch {}
+          onProgress?.(`session refresh, retrying... (${elapsed}s)`)
+          return
+        }
         const j = await r.json().catch(() => ({}))
         if (j.ok && j.status === 'done' && j.url) {
           // gen-status already saved the result row + would have triggered
@@ -212,7 +223,15 @@ async function falRunOnce(model, input, { onProgress, maxWaitMs, workspaceId, du
       } catch {
         onProgress?.(`waiting (${elapsed}s)`)
       }
-    }, 20000)
+    }
+    fallbackInterval = setInterval(pollOnce, 20000)
+
+    // Instant recovery when the tab comes back: background tabs throttle
+    // timers (and sleep suspends them entirely), so the 20s interval may not
+    // have run for minutes. One immediate poll on focus snaps the UI to
+    // reality instead of waiting for the next tick.
+    const onVisible = () => { if (document.visibilityState === 'visible') pollOnce() }
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible)
 
     // Hard timeout — if no webhook AND fallback never sees done, give up.
     // Video gen defaults to 20 min (Grok ref-to-video + Kling Pro under

@@ -25,6 +25,7 @@ import {
   fetchUrlAsHtml,
   buildProductFidelityDirective,
   mirrorToR2,
+  mirrorToFalStorage,
 } from '@/lib/god-mode-builders'
 
 export const runtime = 'nodejs'
@@ -214,7 +215,25 @@ const TOOLS = {
       if (!imgGate.ok) return { type: 'error', error: imgGate.reason, gate: imgGate }
 
       try {
-        const data = await falCall(model, input, falKey)
+        let data
+        try {
+          data = await falCall(model, input, falKey)
+        } catch (err) {
+          // file_download_error retry — refs on r2.dev get rate-limited for
+          // fal's downloaders. Re-host refs on fal storage and retry once.
+          if (/failed to download|file_download_error|inaccessible/i.test(String(err?.message || '')) && refUrls.length) {
+            const mirroredRefs = await Promise.all(refUrls.map((u) => mirrorToFalStorage(u, falKey)))
+            const input2 = buildImageInputForModel(model, {
+              prompt: finalPrompt, refs: mirroredRefs, ar: finalAr, quality: cfg.resolution,
+            })
+            if (model.includes('flux-lora') && ctx.activePersona?.lora_url) {
+              input2.loras = [{ path: ctx.activePersona.lora_url, scale: 1.0 }]
+            }
+            data = await falCall(model, input2, falKey)
+          } else {
+            throw err
+          }
+        }
         const url = data?.images?.[0]?.url || data?.image?.url || data?.url
         if (!url) return { type: 'error', error: 'no image url in fal response' }
 
@@ -412,17 +431,21 @@ const TOOLS = {
             try {
               const res = await submitOnce(input)
               if (!res.ok) {
-                // Try mirror-to-R2 retry on "Failed to download" errors.
+                // "Failed to download" retry — re-host EVERY image input on
+                // fal's own storage. r2.dev public dev-domain is rate-limited
+                // by Cloudflare, so fal's downloader intermittently 429s on
+                // attachments even though the URL opens fine in a browser.
                 const errStr = JSON.stringify(res.data).toLowerCase()
-                if (/failed to download|inaccessible/i.test(errStr) && finalImageUrl) {
-                  const mirrored = await mirrorToR2(finalImageUrl, 'fal-source-mirror')
+                if (/failed to download|file_download_error|inaccessible/i.test(errStr) && (finalImageUrl || refUrls.length)) {
+                  const mirroredStart = finalImageUrl ? await mirrorToFalStorage(finalImageUrl, falKey) : undefined
+                  const mirroredRefs = await Promise.all(refUrls.map((u) => mirrorToFalStorage(u, falKey)))
                   const input2 = buildVideoInputForModel(model, {
-                    motion_prompt, image_url: mirrored,
-                    image_urls: refUrls.length ? [mirrored, ...refUrls] : undefined,
+                    motion_prompt, image_url: mirroredStart,
+                    image_urls: mirroredRefs.length ? mirroredRefs : undefined,
                     duration: dur, aspect_ratio: finalAr, resolution: cfg.resolution,
                   })
                   const retry = await submitOnce(input2)
-                  if (!retry.ok) return { ok: false, idx, error: retry.data?.detail || `fal ${retry.status} (after mirror retry)` }
+                  if (!retry.ok) return { ok: false, idx, error: retry.data?.detail || `fal ${retry.status} (after fal-storage mirror retry)` }
                   return { ok: true, idx, request_id: retry.data?.request_id, status_url: retry.data?.status_url, response_url: retry.data?.response_url }
                 }
                 return { ok: false, idx, error: res.data?.detail || res.data?.error || `fal ${res.status}` }
@@ -451,12 +474,15 @@ const TOOLS = {
         let submitRes_ = await submitOnce(input)
         if (!submitRes_.ok) {
           const errStr = JSON.stringify(submitRes_.data).toLowerCase()
-          if (/failed to download|inaccessible/i.test(errStr) && finalImageUrl) {
-            // Mirror + retry
-            const mirrored = await mirrorToR2(finalImageUrl, 'fal-source-mirror')
+          if (/failed to download|file_download_error|inaccessible/i.test(errStr) && (finalImageUrl || refUrls.length)) {
+            // Re-host EVERY image input on fal storage + retry. r2.dev URLs
+            // are rate-limited for fal's downloader fleet — mirroring R2→R2
+            // (old behavior) couldn't fix that.
+            const mirroredStart = finalImageUrl ? await mirrorToFalStorage(finalImageUrl, falKey) : undefined
+            const mirroredRefs = await Promise.all(refUrls.map((u) => mirrorToFalStorage(u, falKey)))
             const input2 = buildVideoInputForModel(model, {
-              motion_prompt, image_url: mirrored,
-              image_urls: refUrls.length ? [mirrored, ...refUrls] : undefined,
+              motion_prompt, image_url: mirroredStart,
+              image_urls: mirroredRefs.length ? mirroredRefs : undefined,
               duration: dur, aspect_ratio: finalAr, resolution: cfg.resolution,
             })
             submitRes_ = await submitOnce(input2)

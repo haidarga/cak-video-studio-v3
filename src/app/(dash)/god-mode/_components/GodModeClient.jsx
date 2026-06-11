@@ -18,6 +18,7 @@ import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { IMAGE_MODELS, VIDEO_MODELS } from '@/lib/fal-client'
 import { uploadFile } from '@/lib/upload-client'
+import { createClient } from '@/lib/supabase/client'
 
 const WELCOME_MESSAGE = {
   role: 'assistant',
@@ -1373,6 +1374,14 @@ function GenVideoQueued({ result, onResolved }) {
         ...(result.response_url ? { response_url: result.response_url } : {}),
       })
       const r = await fetch(`/api/god-mode/gen-status?${qs}`, { cache: 'no-store' })
+      // 401 = session token expired while waiting (laptop sleep / throttled
+      // background tab stops supabase-js auto-refresh). Refresh + let the
+      // next tick retry instead of surfacing "unauthorized" forever.
+      if (r.status === 401) {
+        try { await createClient().auth.refreshSession() } catch {}
+        if (!cancelRef.current) setErr('Session ke-refresh, retry otomatis...')
+        return false
+      }
       const j = await r.json().catch(() => ({ ok: false, error: 'non-json response' }))
       if (cancelRef.current) return
       if (j.ok && j.status === 'done') {

@@ -284,6 +284,33 @@ export async function mirrorToR2(externalUrl, folder = 'mirrored') {
   }
 }
 
+// ── Mirror to FAL STORAGE — for "Failed to download the file" retries ──
+// Root cause this fixes: attachments live on R2's pub-*.r2.dev dev domain,
+// which Cloudflare RATE-LIMITS. fal's downloader intermittently gets 429
+// → submit/gen fails with file_download_error even though the URL works
+// in a browser. Mirroring R2→R2 (mirrorToR2) can't fix that. Re-hosting
+// the file on fal's OWN storage (fal.media) can — fal always reads its
+// own bucket. Server fetch from r2.dev is fine (we're not rate-limited
+// the way fal's fleet is).
+// Returns the fal.media URL, or the original URL if anything fails.
+export async function mirrorToFalStorage(externalUrl, falKey) {
+  try {
+    const res = await fetch(externalUrl)
+    if (!res.ok) {
+      console.warn('[mirrorToFalStorage] source fetch failed:', res.status, externalUrl.slice(-60))
+      return externalUrl
+    }
+    const blob = await res.blob()
+    const { fal } = await import('@fal-ai/client')
+    fal.config({ credentials: falKey })
+    const url = await fal.storage.upload(blob)
+    return url || externalUrl
+  } catch (e) {
+    console.warn('[mirrorToFalStorage] error:', e.message, '— falling back to original URL')
+    return externalUrl
+  }
+}
+
 // ── Fetch URL → structured product data + trimmed HTML ──────────────
 // Used by url_marketing tools.
 //
