@@ -6,6 +6,7 @@ import { LazyVideo } from '@/lib/use-lazy-video'
 import { convertVideoToMp4 } from '@/lib/video-convert'
 import { stripAudioFromVideo } from '@/lib/strip-audio'
 import { swapAudioInVideo } from '@/lib/swap-audio'
+import { probeDurations, compilePlanToProject } from '@/lib/ai-edit-compose'
 
 const STATUSES = [
   { v: 'pending',  l: '⏳ Review',   color: 'bg-blue-500/20 text-blue-400 border-blue-500/40' },
@@ -158,6 +159,40 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
     }
   }
 
+  // ── 🪄 AI Edit — prompt-driven edit on selected QC videos ──────────
+  // Select videos → describe the edit → Gemini plans a timeline (order,
+  // trims, transitions, punch-ins, hook text, karaoke subtitles) → plan
+  // compiles into an editor project → opens in /editor for preview →
+  // export lands back here in QC. See src/lib/ai-edit-compose.js.
+  const [aiEdit, setAiEdit] = useState(null) // { prompt, busy, stage } | null
+  async function runAiEdit() {
+    const vids = results.filter((r) => selectedIds.has(r.id) && r.type === 'video' && r.url)
+    if (vids.length === 0) { setErr('Pilih minimal 1 VIDEO buat AI Edit'); return }
+    if (!aiEdit?.prompt?.trim()) { setErr('Tulis dulu mau diedit kayak gimana'); return }
+    setAiEdit((s) => ({ ...s, busy: true, stage: 'Baca durasi video...' }))
+    setErr('')
+    try {
+      const videos = await probeDurations(vids.map((r) => ({ url: r.url, label: r.label || 'untitled' })))
+      setAiEdit((s) => ({ ...s, stage: 'AI nyusun edit plan...' }))
+      const res = await fetch('/api/editor/ai-compose', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: aiEdit.prompt, videos }),
+      })
+      const j = await res.json().catch(() => ({ ok: false, error: 'non-json response' }))
+      if (!j.ok) throw new Error(j.error || 'ai-compose failed')
+      setAiEdit((s) => ({ ...s, stage: 'Nyimpen project...' }))
+      const config = compilePlanToProject(j.plan, videos, { ar: vids[0].ar || '9:16' })
+      const { data: row, error: insErr } = await supabase.from('editor_projects')
+        .insert({ workspace_id: workspaceId, name: config.name, config, created_by: userId })
+        .select('id').single()
+      if (insErr) throw insErr
+      window.location.href = `/editor?project=${row.id}`
+    } catch (e) {
+      setErr('AI Edit gagal: ' + (e?.message || e))
+      setAiEdit((s) => (s ? { ...s, busy: false, stage: '' } : s))
+    }
+  }
+
   // ── 🎙 Change Voice — swap the AI video's voice for the persona's cloned
   // voice. ElevenLabs Speech-to-Speech keeps the original audio's timing
   // and phonemes 1:1, so LIP-SYNC SURVIVES — only the timbre changes.
@@ -289,10 +324,45 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
         )}
       </div>
 
+      {/* 🪄 AI Edit modal — prompt-driven edit on selected videos */}
+      {aiEdit && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6"
+          onClick={(e) => { if (e.target === e.currentTarget && !aiEdit.busy) setAiEdit(null) }}>
+          <div className="w-full max-w-xl glass-deep">
+            <div className="px-6 py-4 border-b border-[var(--border)] flex items-center justify-between">
+              <h2 className="text-lg font-extrabold">🪄 <span className="gradient-text-strong">AI Edit</span> — {results.filter((r) => selectedIds.has(r.id) && r.type === 'video').length} video</h2>
+              <button onClick={() => !aiEdit.busy && setAiEdit(null)} className="text-[var(--muted)] hover:text-white">✕</button>
+            </div>
+            <div className="p-6 space-y-3">
+              <textarea rows={5} value={aiEdit.prompt} autoFocus
+                onChange={(e) => setAiEdit((s) => ({ ...s, prompt: e.target.value }))}
+                placeholder={'Deskripsiin editannya. Contoh:\n"Gabungin jadi 1 video 30 detik, ambil bagian paling menarik tiap clip, crossfade antar cut, kasih hook text di 2 detik pertama, karaoke subtitle, style TikTok"'}
+                className="w-full text-sm px-3 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)]" />
+              <div className="text-[10px] text-[var(--muted2)]">
+                AI nyusun timeline-nya (urutan, trim, transisi, punch-in, text, subtitle) → kebuka di Editor buat preview → Export → hasilnya balik ke QC. Catatan: ngubah ISI footage (ganti background dll) bukan di sini — itu lewat God Mode "edit video".
+              </div>
+              {aiEdit.stage && <div className="text-xs text-[var(--accent)]">⏳ {aiEdit.stage}</div>}
+            </div>
+            <div className="px-6 py-4 border-t border-[var(--border)] flex justify-end gap-3">
+              <button onClick={() => setAiEdit(null)} disabled={aiEdit.busy}
+                className="text-xs px-4 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] disabled:opacity-50">Batal</button>
+              <button onClick={runAiEdit} disabled={aiEdit.busy || !aiEdit.prompt.trim()}
+                className="text-xs px-5 py-2 rounded bg-gradient-to-r from-purple-500 to-pink-500 text-white font-bold disabled:opacity-50">
+                {aiEdit.busy ? '⏳ Nyusun...' : '🪄 Susun Edit → Editor'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Batch actions toolbar — sticky on top when selection active */}
       {selectedIds.size > 0 && (
         <div className="sticky top-0 z-30 mb-4 bg-[var(--accent)]/15 border border-[var(--accent)]/50 rounded p-2.5 flex items-center gap-2 flex-wrap">
           <span className="text-xs font-bold text-[var(--accent)]">⚡ {selectedIds.size} selected</span>
+          <button onClick={() => setAiEdit({ prompt: '', busy: false, stage: '' })} disabled={batchBusy}
+            className="text-xs px-3 py-1 rounded bg-gradient-to-r from-cyan-400 via-purple-500 to-pink-500 text-white font-extrabold disabled:opacity-50 shadow-[0_0_10px_rgba(168,85,247,0.4)]">
+            🪄 AI Edit
+          </button>
           <button onClick={() => batchSetStatus('approved')} disabled={batchBusy}
             className="text-xs px-3 py-1 rounded bg-green-500 hover:bg-green-600 text-white font-bold disabled:opacity-50">
             ✅ Approve all

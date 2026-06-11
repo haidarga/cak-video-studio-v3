@@ -540,13 +540,38 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
     setErr('')
     const { data, error } = await supabase.from('editor_projects').select('*').eq('id', id).single()
     if (error) { setErr(error.message); return }
-    setProject(normalizeProject(data.config))
+    const normalized = normalizeProject(data.config)
+    setProject(normalized)
     setProjectId(data.id); setSelected(null); setCurrentTime(0)
+    // AI Edit handoff (QC 🪄 → /editor?project=id): the plan asked for auto
+    // karaoke subtitles. Run transcription against the freshly-loaded clips
+    // (baseClips memo is stale this tick — pass explicitly), then clear the
+    // flag in DB so manual re-loads don't re-transcribe (= re-billing).
+    const ai = data.config?._ai
+    if (ai?.auto_subtitle) {
+      const base = (normalized.video_clips || [])
+        .filter((c) => (c.track_idx || 0) === 0)
+        .sort((a, b) => (a.in_track || 0) - (b.in_track || 0))
+      supabase.from('editor_projects')
+        .update({ config: { ...data.config, _ai: { ...ai, auto_subtitle: false } } })
+        .eq('id', data.id)
+        .then(() => {})
+      if (base.length > 0) autoSubtitle({ karaoke: ai.karaoke !== false, clips: base, skipHistory: true })
+    }
   }
   function newProject() {
     pushHistory(project)
     setProject(DEFAULT_PROJECT); setProjectId(null); setSelected(null); setCurrentTime(0)
   }
+
+  // Deep-link: /editor?project=<id> auto-loads that project — used by the
+  // QC 🪄 AI Edit handoff (and shareable links generally).
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const pid = new URLSearchParams(window.location.search).get('project')
+    if (pid) loadProject(pid)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Clone current project
   async function cloneProject() {
