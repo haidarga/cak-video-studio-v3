@@ -173,7 +173,7 @@ export function buildVideoInputForModel(model, { motion_prompt, image_url, image
 //   alibaba/happy-horse/video-edit    : { video_url, prompt,
 //     reference_image_urls?, resolution } — ref-image-GUIDED edits (swap
 //     product/character look while anchored to refs, up to 5). ~$0.28/s 720p.
-export function buildVideoEditInput(model, { prompt, video_url, reference_image_urls, resolution }) {
+export function buildVideoEditInput(model, { prompt, video_url, reference_image_urls, resolution, duration }) {
   if (!video_url) throw new Error('video_url required for video edit')
   if (model.includes('happy-horse')) {
     const refs = (reference_image_urls || []).filter(Boolean).slice(0, 5)
@@ -184,8 +184,30 @@ export function buildVideoEditInput(model, { prompt, video_url, reference_image_
       resolution: resolution === '1080p' ? '1080p' : '720p',
     }
   }
+  if (model.includes('extend-video')) {
+    // Grok extend — continues the actual footage. duration = seconds ADDED.
+    return { prompt, video_url, duration: Math.max(5, Math.min(15, parseInt(duration) || 10)) }
+  }
   // grok edit-video
   return { prompt, video_url }
+}
+
+// Strict fal-storage mirror — returns NULL when the source can't be fetched
+// (dead host, 404, expired signature) instead of falling back to the original
+// URL. Retry paths use this to DROP dead refs rather than resubmitting a URL
+// fal already told us it can't download (r2.ai-assist.me ghosts, etc).
+export async function mirrorToFalStorageStrict(externalUrl, falKey) {
+  try {
+    const res = await fetch(externalUrl)
+    if (!res.ok) return null
+    const blob = await res.blob()
+    const { fal } = await import('@fal-ai/client')
+    fal.config({ credentials: falKey })
+    const url = await fal.storage.upload(blob)
+    return url || null
+  } catch {
+    return null
+  }
 }
 
 // ── Image input builder ──────────────────────────────────────────────

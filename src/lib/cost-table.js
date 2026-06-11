@@ -30,6 +30,7 @@ export const VIDEO_COSTS_PER_SECOND = {
   'bytedance/seedance-2.0/text-to-video': 0.31,        // 720p $0.3034/s; 1080p $0.682/s
   // Video EDIT models (per second of OUTPUT; input charged too on some)
   'xai/grok-imagine-video/edit-video': 0.08,           // 720p $0.07 out + $0.01 in
+  'xai/grok-imagine-video/extend-video': 0.08,         // same pricing as edit-video
   'alibaba/happy-horse/video-edit': 0.28,              // 720p $0.14 in + $0.14 out; 1080p $0.56
   'fal-ai/kling-video/v3/standard/image-to-video': 0.08,
   'fal-ai/kling-video/o3/standard/image-to-video': 0.11,

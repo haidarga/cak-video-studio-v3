@@ -27,6 +27,7 @@ import {
   buildVideoEditInput,
   mirrorToR2,
   mirrorToFalStorage,
+  mirrorToFalStorageStrict,
 } from '@/lib/god-mode-builders'
 
 export const runtime = 'nodejs'
@@ -454,11 +455,15 @@ const TOOLS = {
                 // attachments even though the URL opens fine in a browser.
                 const errStr = JSON.stringify(res.data).toLowerCase()
                 if (/failed to download|file_download_error|inaccessible/i.test(errStr) && (finalImageUrl || refUrls.length)) {
-                  const mirroredStart = finalImageUrl ? await mirrorToFalStorage(finalImageUrl, falKey) : undefined
-                  const mirroredRefs = await Promise.all(refUrls.map((u) => mirrorToFalStorage(u, falKey)))
+                  const startM = finalImageUrl ? await mirrorToFalStorageStrict(finalImageUrl, falKey) : null
+                  const refsM = (await Promise.all(refUrls.map((u) => mirrorToFalStorageStrict(u, falKey)))).filter(Boolean)
+                  const aliveStart = startM || refsM[0] || null
+                  if (!aliveStart && refsM.length === 0) {
+                    return { ok: false, idx, error: 'Semua gambar sumber gak bisa di-download (host mati) — re-upload ref-nya' }
+                  }
                   const input2 = buildVideoInputForModel(model, {
-                    motion_prompt, image_url: mirroredStart,
-                    image_urls: mirroredRefs.length ? mirroredRefs : undefined,
+                    motion_prompt, image_url: aliveStart || undefined,
+                    image_urls: refsM.length ? refsM : undefined,
                     duration: dur, aspect_ratio: finalAr, resolution: cfg.resolution,
                   })
                   const retry = await submitOnce(input2)
@@ -492,14 +497,18 @@ const TOOLS = {
         if (!submitRes_.ok) {
           const errStr = JSON.stringify(submitRes_.data).toLowerCase()
           if (/failed to download|file_download_error|inaccessible/i.test(errStr) && (finalImageUrl || refUrls.length)) {
-            // Re-host EVERY image input on fal storage + retry. r2.dev URLs
-            // are rate-limited for fal's downloader fleet — mirroring R2→R2
-            // (old behavior) couldn't fix that.
-            const mirroredStart = finalImageUrl ? await mirrorToFalStorage(finalImageUrl, falKey) : undefined
-            const mirroredRefs = await Promise.all(refUrls.map((u) => mirrorToFalStorage(u, falKey)))
+            // Re-host every image input on fal storage and DROP the ones that
+            // can't be fetched at all (dead hosts like old r2.ai-assist.me
+            // refs) — resubmitting a dead URL just fails identically.
+            const startM = finalImageUrl ? await mirrorToFalStorageStrict(finalImageUrl, falKey) : null
+            const refsM = (await Promise.all(refUrls.map((u) => mirrorToFalStorageStrict(u, falKey)))).filter(Boolean)
+            const aliveStart = startM || refsM[0] || null
+            if (!aliveStart && refsM.length === 0) {
+              throw new Error(`Semua gambar sumber gak bisa di-download (host mati / expired). URL bermasalah: ${(finalImageUrl || refUrls[0] || '').slice(0, 90)}... — re-upload ref/persona image-nya, yang lama nunjuk storage yang udah gak ada.`)
+            }
             const input2 = buildVideoInputForModel(model, {
-              motion_prompt, image_url: mirroredStart,
-              image_urls: mirroredRefs.length ? mirroredRefs : undefined,
+              motion_prompt, image_url: aliveStart || undefined,
+              image_urls: refsM.length ? refsM : undefined,
               duration: dur, aspect_ratio: finalAr, resolution: cfg.resolution,
             })
             submitRes_ = await submitOnce(input2)
@@ -1585,6 +1594,24 @@ Output JSON only:
         newPrompt += `\n\nCONTINUITY: this is the NEXT shot of the SAME scene. The first reference image is the final frame of the previous shot — begin from that exact pose, setting and lighting. Keep character identity, wardrobe, color grade and art style IDENTICAL to it. Only the action advances.`
       }
 
+      // VIDEO → VIDEO continuation: Grok EXTEND-VIDEO continues the ACTUAL
+      // footage (pixels + motion + audio) natively — strictly stronger than
+      // re-generating from an extracted last frame. Frame-anchor path below
+      // stays as the fallback when extend fails or source URL is missing.
+      if (isVideoSource && targetKind === 'video' && lastGen.url) {
+        const ext = await TOOLS.extend_video.handler({
+          prompt: newPrompt,
+          video_url: lastGen.url,
+          duration: srcPayload.duration,
+        }, ctx)
+        if (ext && ext.type !== 'error') {
+          ext._continuation_of = lastGen.result_id || null
+          ext._continuity_note = continuityNote || 'Lanjutan langsung dari footage sebelumnya (extend)'
+          return ext
+        }
+        // extend failed — fall through to start-frame anchoring below
+      }
+
       // Dispatch to gen_image or gen_video tool internally — re-use all
       // their existing logic (budget gate, refs, fidelity directive, etc).
       // This keeps continue_shot as a thin orchestrator, not a duplicate
@@ -1728,6 +1755,79 @@ Output JSON only:
           persona_id: ctx.activePersona?.id || null,
           regen_payload: { motion_prompt: edit_prompt, image_url: null, model, refs: refUrls.slice(0, 8) },
           _edit_of: srcVideo,
+        }
+      } catch (e) {
+        return { type: 'error', error: e.message }
+      }
+    },
+  },
+
+  // ─ Extend Video — natively continue existing footage ──────────────
+  extend_video: {
+    description: 'EXTEND an existing video — natively continues the ACTUAL footage with new motion (Grok extend-video). Use when user says "panjangin videonya", "terusin videonya X detik lagi", "extend", "tambahin durasi". Inputs: prompt (English — what happens in the extension), optional video_url (defaults to attached video or last video result in chat), optional duration (seconds to ADD, 5-15). Also used internally by continue_shot for video continuation.',
+    handler: async ({ prompt, video_url, duration }, ctx) => {
+      const falKey = await getFalKey(ctx.supabase, ctx.workspaceId)
+      if (!falKey) return { type: 'error', error: 'no fal.ai key configured' }
+
+      let finalPrompt = String(prompt || '').trim()
+      if (finalPrompt.length < 3 && ctx.lastUserText) finalPrompt = ctx.lastUserText
+      if (finalPrompt.length < 3) return { type: 'error', error: 'Prompt kosong — bilang kelanjutannya ngapain.' }
+
+      let srcVideo = (video_url && /^https?:/.test(video_url)) ? video_url : null
+      if (!srcVideo) {
+        const attVid = (ctx.recentAttachments || []).find((a) => a.type === 'video' && a.url)
+        if (attVid) srcVideo = attVid.url
+      }
+      if (!srcVideo) {
+        for (let i = (ctx.messages || []).length - 1; i >= 0; i--) {
+          const r = ctx.messages[i]?.result
+          if (r?.type === 'gen_video_result' && r.url) { srcVideo = r.url; break }
+        }
+      }
+      if (!srcVideo) return { type: 'error', error: 'Gak nemu video buat di-extend. Upload via 📎 atau generate dulu.' }
+
+      const model = 'xai/grok-imagine-video/extend-video'
+      const input = buildVideoEditInput(model, { prompt: finalPrompt, video_url: srcVideo, duration })
+
+      try {
+        const projected = estimateFalCost(model, { ...input })
+        const gate = await assertBudget(ctx.supabase, ctx.workspaceId, { projectedUsd: projected })
+        if (!gate.ok) return { type: 'error', error: gate.reason, gate }
+
+        const wireModel = canonicalFalPath(model)
+        const submit = async (body) => {
+          const r = await fetch(`https://queue.fal.run/${wireModel}`, {
+            method: 'POST',
+            headers: { 'Authorization': `Key ${falKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          })
+          return { ok: r.ok, status: r.status, data: await r.json().catch(() => ({})) }
+        }
+        let res = await submit(input)
+        if (!res.ok) {
+          const errStr = JSON.stringify(res.data).toLowerCase()
+          if (/failed to download|file_download_error|inaccessible/i.test(errStr)) {
+            const mirrored = await mirrorToFalStorageStrict(srcVideo, falKey)
+            if (!mirrored) return { type: 'error', error: `Video sumber gak bisa di-download (host mati): ${srcVideo.slice(0, 80)}...` }
+            res = await submit(buildVideoEditInput(model, { prompt: finalPrompt, video_url: mirrored, duration }))
+          }
+          if (!res.ok) return { type: 'error', error: res.data?.detail ? JSON.stringify(res.data.detail).slice(0, 300) : `fal ${res.status}` }
+        }
+        if (!res.data?.request_id) return { type: 'error', error: 'no request_id from fal' }
+        return {
+          type: 'gen_video_queued',
+          request_id: res.data.request_id,
+          model: wireModel,
+          status_url: res.data.status_url,
+          response_url: res.data.response_url,
+          ar: ctx.activeConfig?.ar || '9:16',
+          duration: parseInt(duration) || 10,
+          motion: finalPrompt,
+          image_url: null,
+          refs: [],
+          persona_id: ctx.activePersona?.id || null,
+          regen_payload: { motion_prompt: finalPrompt, image_url: null, model, refs: [] },
+          _extend_of: srcVideo,
         }
       } catch (e) {
         return { type: 'error', error: e.message }
@@ -1879,7 +1979,8 @@ SMART MODEL ROUTER (pick the BEST video model for the task — mention pilihan +
   * PURE TEXT (no upload, no pin, no URL) → text-to-video. The handler also auto-falls-back r2v→t2v, but YOU should pass the right t2v model explicitly.
   * ONE source image (upload/pin) → image-to-video.
   * IDENTITY matters (persona + product must stay consistent / multi-ref) → reference-to-video.
-  * EXISTING VIDEO to change ("benerin/ubah/edit video itu", "videonya kureng, ganti X") → call edit_video tool, NOT gen_video.
+  * EXISTING VIDEO to change → edit_video tool, NOT gen_video. **HARD RULE**: kalau di chat BARU AJA ada video result dan pesan user minta SESUATU DI DALAM video itu berubah — subjek, objek, warna, background, mood — itu edit_video. Trigger: "ubah/ganti/jadiin/bikin jadi X", "edit video itu", "colorize", "anjingnya jadiin naga", "bajunya ganti merah", "backgroundnya jadi pantai". JANGAN gen_video ulang — itu buang duit dan kehilangan footage aslinya.
+  * EXISTING VIDEO to make LONGER → extend_video tool. Trigger: "panjangin", "extend", "terusin videonya X detik lagi", "tambah durasi". (continue_shot juga otomatis pakai ini buat lanjutan video.)
 - STEP 2, pick within the variant by need:
   * Default/cheap/draft/iterasi → Grok family ('xai/grok-imagine-video/text-to-video' | '/image-to-video' | '/reference-to-video', ~$0.07/dtk, audio).
   * Higher-quality i2v with audio → 'xai/grok-imagine-video/v1.5/image-to-video' (~$0.14/dtk).

@@ -485,6 +485,7 @@ export const VIDEO_MODELS = [
 // Not generation models; used by god-mode edit_video tool (and future UIs).
 export const VIDEO_EDIT_MODELS = [
   { v: 'xai/grok-imagine-video/edit-video', l: '✂️ Grok Edit Video — ~$0.08/dtk (cheap global edits: colorize, style, mood)' },
+  { v: 'xai/grok-imagine-video/extend-video', l: '➕ Grok Extend Video — ~$0.08/dtk (nerusin footage asli — dipakai continue-shot)' },
   { v: 'alibaba/happy-horse/video-edit', l: '✂️ Happy Horse Video Edit — ~$0.28/dtk 720p (ref-image-guided edits, up to 5 refs, 1080p $0.56)' },
 ]
 export const IMAGE_MODELS = [
