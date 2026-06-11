@@ -897,6 +897,22 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       // frame), tell the model the LAST ref is the final frame of the
       // previous segment and the new sequence should start where it ended.
       let finalMotion = motion
+      // Opsi A (narrow, opted-in by user): append a short identity-anchor
+      // note for SHOTS / DIRECT + r2v. WITHOUT this note, r2v models
+      // (Grok / Seedance / Kling / Happy Horse) default to "animate the
+      // first ref as-is" — copying reference pose/location/expression
+      // instead of using refs as identity inspiration. User-reported
+      // "plek ketiplek sama referencenya" bug.
+      //
+      // Scope: ONLY shots/direct (non-storyboard) r2v with at least 1 ref.
+      // Storyboard r2v has its own dedicated prompt below.
+      // Storyboard i2v unchanged.
+      // Refs can be character / product / object — note covers all.
+      if (!isGrid && isRefVid && vidRefUrls.length > 0) {
+        finalMotion = `${motion}
+
+NOTE: Reference images are IDENTITY anchors only (character look, product/object appearance, art style — apapun yang muncul di refs). Render the SCENE and ACTION exactly as described in the brief above — do NOT replicate the reference pose, location, expression, or background. The brief is authoritative; refs only lock the visual identity of subjects shown in the brief.`
+      }
       if (isGrid && isRefVid && shot.image?.url) {
         let cont = ''
         // Branch on continuity_fallback flag (set by continueStoryboard when
