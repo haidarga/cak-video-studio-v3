@@ -12,6 +12,29 @@
 
 import { getFFmpeg, fetchToUint8 } from './editor-render.js'
 
+// Extract a tiny speech-grade audio track from a video — for transcription.
+// Gemini inline caps at ~18MB and ad videos often exceed it, but speech
+// recognition only needs AUDIO: mono 16kHz 48kbps mp3 ≈ 360KB/min, so even
+// a 10-minute video fits with room to spare.
+export async function extractAudioForTranscribe(videoUrl, onProgress) {
+  onProgress?.('Loading ffmpeg...')
+  const ff = await getFFmpeg((msg) => {
+    if (msg.includes('time=')) onProgress?.('Extracting audio...')
+  })
+  onProgress?.('Downloading source...')
+  await ff.writeFile('ta-in.mp4', await fetchToUint8(videoUrl))
+  await ff.exec([
+    '-i', 'ta-in.mp4',
+    '-vn', '-ac', '1', '-ar', '16000', '-b:a', '48k',
+    '-y', 'ta-out.mp3',
+  ])
+  const data = await ff.readFile('ta-out.mp3')
+  try { await ff.deleteFile('ta-in.mp4') } catch {}
+  try { await ff.deleteFile('ta-out.mp3') } catch {}
+  if (!data || data.length < 200) throw new Error('audio extract produced empty output')
+  return new Blob([data.buffer], { type: 'audio/mpeg' })
+}
+
 export async function swapAudioInVideo(videoUrl, audioUrl, onProgress) {
   onProgress?.('Loading ffmpeg...')
   const ff = await getFFmpeg((msg) => {

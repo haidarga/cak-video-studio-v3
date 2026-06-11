@@ -417,10 +417,23 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
       // Iterate ALL base clips — transcribe per clip + offset segments by clip's in_track
       for (let i = 0; i < targets.length; i++) {
         const clip = targets[i]
+        // Audio-first: Gemini inline caps at ~18MB and gen videos often blow
+        // past it. Speech recognition only needs AUDIO — extract a mono
+        // 16kHz mp3 client-side (20MB video → <1MB), upload, transcribe
+        // THAT. Falls back to the raw video URL if extraction fails (small
+        // clips still pass the inline limit fine).
+        let transcribeUrl = clip.src_url
+        try {
+          const { extractAudioForTranscribe } = await import('@/lib/swap-audio')
+          setTranscribeProgress(`Extract audio clip ${i + 1}/${targets.length}...`)
+          const audioBlob = await extractAudioForTranscribe(clip.src_url, (s) => setTranscribeProgress(`Clip ${i + 1}: ${s}`))
+          const { url: audioUrl } = await uploadBlob(audioBlob, `transcribe-${Date.now()}-${i}.mp3`, 'transcribe-audio')
+          transcribeUrl = audioUrl
+        } catch { /* extraction failed (codec/CORS) — try the video URL directly */ }
         setTranscribeProgress(`Transcribing clip ${i + 1}/${targets.length}...`)
         const res = await fetch('/api/transcribe', {
           method: 'POST', headers: { 'Content-Type': 'application/json', 'x-word-level': karaoke ? 'true' : 'false' },
-          body: JSON.stringify({ url: clip.src_url }),
+          body: JSON.stringify({ url: transcribeUrl }),
         })
         const data = await res.json()
         if (!data.ok) throw new Error(`Clip ${i + 1}: ${data.error}`)
