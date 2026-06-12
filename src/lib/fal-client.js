@@ -66,9 +66,20 @@ function isVideoModel(model) {
   return /video|veo3|kling|seedance|wan|grok-imagine-video|happy-horse/i.test(model)
 }
 
+// Some IMAGE models are too slow for the sync path. The /api/fal/sync route
+// is capped at maxDuration=60s (Vercel function limit). GPT Image 2 (OpenAI
+// via fal) routinely takes 45-90s with multiple refs — it blows past 60s and
+// Vercel kills the function → the browser sees a 504 ("sync fal call failed").
+// Route these through the async webhook path (submit + realtime) which has NO
+// function-duration limit: fal does the work and webhooks us when done.
+// Fast models (nano-banana ~15s) stay on the snappy sync path.
+function isSlowImageModel(model) {
+  return /gpt-image-2/i.test(model || '')
+}
+
 export async function falRun(model, input, opts = {}) {
   const { onProgress, maxRetries = 3 } = opts
-  const useSync = !isVideoModel(model)
+  const useSync = !isVideoModel(model) && !isSlowImageModel(model)
   const runner = useSync ? falRunSync : falRunOnce
   let lastErr
   for (let attempt = 0; attempt < maxRetries; attempt++) {
