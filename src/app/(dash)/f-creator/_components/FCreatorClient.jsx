@@ -292,19 +292,42 @@ export default function FCreatorClient({ workspaceId, userId, activeBrand, perso
           </button>
         </div>
 
-        {/* refs picker */}
+        {/* refs picker — thumbnail cards so 20 refs named "UGREEN Charger
+            GaN..." are tellable apart at a glance */}
         <div className="col-span-2 md:col-span-4">
-          <span className="text-[10px] uppercase font-bold text-[var(--muted)]">Refs ({cfgRefs.length} kepakai — refs persona auto, klik buat nambah produk/lainnya)</span>
-          <div className="flex flex-wrap gap-1.5 mt-1.5 max-h-24 overflow-y-auto">
+          <span className="text-[10px] uppercase font-bold text-[var(--muted)]">Refs ({cfgRefs.length} kepakai — refs persona auto ✓, klik foto buat nambah produk/lainnya)</span>
+          <div className="flex flex-wrap gap-2 mt-1.5 max-h-56 overflow-y-auto pr-1">
             {workspaceRefs.map((r) => {
               const auto = personaRefIds.has(r.id)
               const on = auto || extraRefIds.has(r.id)
               return (
                 <button key={r.id} disabled={running || auto}
                   onClick={() => setExtraRefIds((s) => { const n = new Set(s); n.has(r.id) ? n.delete(r.id) : n.add(r.id); return n })}
-                  title={auto ? 'Auto (ref persona)' : (r.label || '')}
-                  className={`text-[9px] px-2 py-1 rounded border truncate max-w-[140px] ${on ? 'bg-[var(--accent)]/25 border-[var(--accent)]' : 'bg-[var(--surface2)] border-[var(--border)] text-[var(--muted2)]'}`}>
-                  {r.kind === 'product' ? '📦' : r.kind === 'style' ? '🎨' : '👤'} {r.label || 'ref'}{auto ? ' •' : ''}
+                  title={`${r.label || 'ref'}${auto ? ' — auto (ref persona)' : ''}`}
+                  className={`relative w-[72px] rounded-lg overflow-hidden border-2 transition-all press-scale text-left ${
+                    on ? 'border-[var(--accent)] shadow-[0_0_10px_var(--accent-glow)]'
+                       : 'border-[var(--border)] opacity-60 hover:opacity-100 hover:border-[var(--border-bright)]'
+                  }`}>
+                  {r.fal_url ? (
+                    <img src={r.fal_url} alt={r.label || 'ref'} loading="lazy"
+                      className="w-full h-[72px] object-cover bg-black/40" />
+                  ) : (
+                    <div className="w-full h-[72px] flex items-center justify-center bg-[var(--surface2)] text-lg">
+                      {r.kind === 'product' ? '📦' : r.kind === 'style' ? '🎨' : '👤'}
+                    </div>
+                  )}
+                  {/* kind badge + selected check */}
+                  <span className="absolute top-0.5 left-0.5 text-[9px] px-1 rounded bg-black/70">
+                    {r.kind === 'product' ? '📦' : r.kind === 'style' ? '🎨' : '👤'}
+                  </span>
+                  {on && (
+                    <span className={`absolute top-0.5 right-0.5 w-4 h-4 rounded-full text-[9px] flex items-center justify-center font-bold text-white ${auto ? 'bg-[var(--muted2)]' : 'bg-[var(--accent)]'}`}>
+                      ✓
+                    </span>
+                  )}
+                  <div className="px-1 py-0.5 text-[8px] leading-tight truncate bg-[var(--surface)]/90">
+                    {r.label || 'ref'}
+                  </div>
                 </button>
               )
             })}

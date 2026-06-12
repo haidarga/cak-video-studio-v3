@@ -770,7 +770,7 @@ function ToolResult({ result, personas, onPresetUse, onPersonaPick, onProductPic
     return <GenVideoResult result={result} onAction={onAction} />
   }
   if (result.type === 'gen_video_queued') {
-    return <GenVideoQueued result={result} />
+    return <GenVideoQueued result={result} onAction={onAction} />
   }
   if (result.type === 'url_marketing_proposal') {
     return <UrlMarketingProposal result={result} />
@@ -809,7 +809,7 @@ function ToolResult({ result, personas, onPresetUse, onPersonaPick, onProductPic
           <div key={i}>
             {item.type === 'error'
               ? <div className="text-xs text-red-400 bg-red-900/20 p-2 rounded border border-red-900/40">Video {(item.idx || i) + 1}: {item.error}</div>
-              : <GenVideoQueued result={item} />}
+              : <GenVideoQueued result={item} onAction={onAction} />}
           </div>
         ))}
       </div>
@@ -1365,7 +1365,7 @@ function GenVideoResult({ result, onAction }) {
 
 // Video gen returned queued (didn't complete in 30s inline poll). Auto-poll
 // /api/god-mode/gen-status every 5s and swap to GenVideoResult when ready.
-function GenVideoQueued({ result, onResolved }) {
+function GenVideoQueued({ result, onResolved, onAction }) {
   const [status, setStatus] = useState('queued')
   const [resolved, setResolved] = useState(null)
   const [err, setErr] = useState('')
@@ -1457,7 +1457,11 @@ function GenVideoQueued({ result, onResolved }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result.request_id])
 
-  if (resolved) return <GenVideoResult result={resolved} />
+  // Merge queued metadata (regen_payload, model, ar, duration) with the
+  // resolved poll result (url) — and PASS onAction through. Without
+  // onAction every button on a queue-resolved video (Continue/Regenerate/
+  // Score/QC) rendered but silently did nothing.
+  if (resolved) return <GenVideoResult result={{ ...result, ...resolved, type: 'gen_video_result' }} onAction={onAction} />
   return (
     <div className="mt-3 bg-[var(--surface)] border border-[var(--border)] rounded-lg p-4">
       <div className="flex items-center gap-2">
