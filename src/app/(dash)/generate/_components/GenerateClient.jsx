@@ -942,6 +942,16 @@ INSTRUCTIONS:
 MOTION DETAILS:
 ${motion}`
       }
+      // PRODUCT ANTI-MORPH — i2v models re-paint the product every frame
+      // after frame 1; without a rigid-object directive the shape/label
+      // warps mid-video even when the start image was perfect (the
+      // "image oke, video DUARR" failure mode). Strong fidelity block,
+      // appended only when a product is actually in play.
+      if (!globalConfig.skipProduct && brand) {
+        finalMotion += `
+
+PRODUCT FIDELITY (critical): the product is a RIGID manufactured object — its shape, proportions, port/button layout, colors and label text must stay IDENTICAL to the first frame in EVERY frame. No warping, no morphing, no melting, no re-imagined details, no gibberish text on the label. Keep the product itself mostly static; movement comes from the camera and the person, never from the product deforming.`
+      }
       const vidInput = buildVidInput(vidModel, {
         prompt: finalMotion,
         image_url: isDirect ? undefined : shot.image?.url,
