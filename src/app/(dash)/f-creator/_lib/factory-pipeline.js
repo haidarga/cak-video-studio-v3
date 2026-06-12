@@ -84,7 +84,10 @@ export async function stageParse(item, cfg) {
         skipOnscreen: !!cfg.noText,
         skipProduct: !!cfg.noProduct,
       },
-      shotCount: cfg.shotCount || null,
+      // Target duration drives shot math: "20 detik" in the naskah TEXT is
+      // a wish the LLM may ignore — this field is the machine contract.
+      shotCount: cfg.shotCount
+        || (cfg.targetDuration ? Math.max(1, Math.min(8, Math.round(cfg.targetDuration / (cfg.duration || 5)))) : null),
     }),
   })
   const data = await res.json()
@@ -116,6 +119,13 @@ export async function stageParse(item, cfg) {
   if (!items.length) throw new Error('parser balikin 0 shot')
   const sharedEnv = toStr(data.parsed.environment)
   const sharedWardrobe = toStr(data.parsed.wardrobe)
+  // Duration allocation: with a target, each shot gets target/n (clamped
+  // 3-15s) so the SUM hits the target — parser's own duration guesses and
+  // the per-shot config can't overshoot it anymore (the "naskah bilang 20
+  // detik, hasil 30 detik" bug).
+  const perShotAlloc = cfg.targetDuration
+    ? Math.max(3, Math.min(15, Math.round(cfg.targetDuration / items.length)))
+    : null
   return items.map((it, i) => ({
     id: uid(),
     raw: {
@@ -124,7 +134,7 @@ export async function stageParse(item, cfg) {
       dialogue: toStr(it.dialogue),
       environment: sharedEnv,
       wardrobe: sharedWardrobe,
-      duration: it.duration || cfg.duration || 5,
+      duration: perShotAlloc || Math.min(it.duration || cfg.duration || 5, cfg.duration || 15),
     },
     label: `Shot ${it.shot || i + 1}`,
     image: null, video: null,
@@ -301,8 +311,9 @@ export async function stageAssemble(item, videoUrls, cfg, deps, onProgress) {
     'Trim hanya jika ada dead-air jelas di awal/akhir clip; default pakai full durasi.',
     cfg.autoEdit.transitions ? 'Kasih transisi crossfade 0.4s antar clip.' : 'Transisi: cut polos antar clip.',
     cfg.autoEdit.hook ? `Tambahkan SATU hook text (2-4 kata, bahasa ${cfg.lang}) di 0-2.5 detik pertama, posisi top, style tiktok — angkat dari inti naskah ini: "${item.naskah.slice(0, 200)}"` : 'Jangan tambahkan text overlay apapun.',
+    cfg.targetDuration ? `Total durasi final harus sedekat mungkin dengan ${cfg.targetDuration} detik.` : '',
     'Jangan set auto_subtitle (subtitle ditangani sistem terpisah). Jangan tambah text selain yang diminta.',
-  ].join(' ')
+  ].filter(Boolean).join(' ')
   const res = await fetch('/api/editor/ai-compose', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt: composePrompt, videos }),
@@ -310,7 +321,8 @@ export async function stageAssemble(item, videoUrls, cfg, deps, onProgress) {
   const j = await res.json().catch(() => ({ ok: false, error: 'non-json' }))
   if (!j.ok) throw new Error(j.error || 'ai-compose failed')
   j.plan.auto_subtitle = false
-  const project = compilePlanToProject(j.plan, videos, { ar: cfg.ar })
+  // maxTrimPct caps LLM over-trimming (broken-jump-cut feel) at 25% per end
+  const project = compilePlanToProject(j.plan, videos, { ar: cfg.ar, maxTrimPct: 0.25 })
   project.name = item.label
 
   // Everything from here uses ffmpeg.wasm (audio extract + final render) —

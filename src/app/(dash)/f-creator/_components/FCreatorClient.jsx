@@ -52,6 +52,7 @@ export default function FCreatorClient({ workspaceId, userId, activeBrand, perso
   const [ar, setAr] = useState('9:16')
   const [duration, setDuration] = useState(5)
   const [shotCount, setShotCount] = useState('') // '' = auto
+  const [targetDur, setTargetDur] = useState('') // '' = bebas; angka = total detik final
   const [chips, setChips] = useState({ noCuts: true, noDialog: false, noText: true, noProduct: false })
   const [konti, setKonti] = useState(true)
   const [autoEdit, setAutoEdit] = useState({ subtitle: true, transitions: true, hook: true })
@@ -92,7 +93,7 @@ export default function FCreatorClient({ workspaceId, userId, activeBrand, perso
     try {
       const payload = {
         workspace_id: workspaceId, created_by: userId, status,
-        config: { personaId, mode, imgModel, vidModel, ar, duration, shotCount, chips, konti, autoEdit, voiceSwap, lang, cameraPreset, extraRefIds: [...extraRefIds] },
+        config: { personaId, mode, imgModel, vidModel, ar, duration, shotCount, targetDur, chips, konti, autoEdit, voiceSwap, lang, cameraPreset, extraRefIds: [...extraRefIds] },
         items: itemsRef.current,
         updated_at: new Date().toISOString(),
       }
@@ -141,6 +142,7 @@ export default function FCreatorClient({ workspaceId, userId, activeBrand, perso
     if (c.autoEdit) setAutoEdit(c.autoEdit)
     if (c.voiceSwap != null) setVoiceSwap(c.voiceSwap)
     if (c.cameraPreset) setCameraPreset(c.cameraPreset)
+    if (c.targetDur != null) setTargetDur(c.targetDur)
     if (Array.isArray(c.extraRefIds)) setExtraRefIds(new Set(c.extraRefIds))
     const loaded = (resumeRun.items || []).map((it) => ({ ...it, detail: it.stage === 'done' ? '✓ Siap QC' : (it.stage === 'error' ? it.error : 'resume dari sini') }))
     setItems(loaded); itemsRef.current = loaded
@@ -179,6 +181,7 @@ export default function FCreatorClient({ workspaceId, userId, activeBrand, perso
       persona, refs: cfgRefs, brand: activeBrand,
       mode, imgModel, vidModel, ar, duration,
       shotCount: parseInt(shotCount) || null,
+      targetDuration: parseInt(targetDur) || null,
       ...chips, konti: mode === 'storyboard' ? false : konti,
       autoEdit, voiceSwap, lang,
       cameraPreset, userPresets: userCameraPresets,
@@ -294,6 +297,13 @@ export default function FCreatorClient({ workspaceId, userId, activeBrand, perso
           <input type="number" min={1} max={8} placeholder="auto" value={shotCount} disabled={running}
             onChange={(e) => setShotCount(e.target.value)}
             className="w-full mt-1 px-2 py-2 rounded bg-[var(--surface2)] border border-[var(--border)]" />
+        </label>
+        <label className="block">
+          <span className="text-[10px] uppercase font-bold text-[var(--muted)]">🎯 Target total (dtk)</span>
+          <input type="number" min={5} max={120} placeholder="bebas" value={targetDur} disabled={running}
+            onChange={(e) => setTargetDur(e.target.value)}
+            title="Durasi total final. Sistem bagi rata ke shots — naskah bilang 20 detik? Isi 20 di sini, ini kontrak mesinnya."
+            className="w-full mt-1 px-2 py-2 rounded bg-[var(--surface2)] border border-[var(--accent)]/40" />
         </label>
         <div className="block">
           <span className="text-[10px] uppercase font-bold text-[var(--muted)]">Konti (chain antar shot)</span>

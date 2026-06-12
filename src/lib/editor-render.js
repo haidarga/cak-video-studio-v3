@@ -422,8 +422,29 @@ function buildFilterGraph(project, canvasDims, musicInputIdx, clonedAudioInputSt
       lines.push(`[${idx}:a]${audioClipFilter(c, `[ba${idx}]`)}`)
     }
   })
-  const baseAudioLabels = base.map((c) => `[ba${inputIdx.get(c.id)}]`).join('')
-  lines.push(`${baseAudioLabels}concat=n=${base.length}:v=0:a=1[aseq]`)
+  // Audio chain MIRRORS the video chain: cut → concat, transition →
+  // acrossfade with the SAME duration. The old code plain-concated all
+  // base audio regardless of transitions — video shortened by each xfade
+  // overlap while audio stayed full length, so every transition added
+  // ~0.4s of progressive A/V desync (lips drift, cuts read as stutter).
+  if (base.length === 1) {
+    lines.push(`[ba${inputIdx.get(base[0].id)}]anull[aseq]`)
+  } else {
+    let aCurrent = `[ba${inputIdx.get(base[0].id)}]`
+    for (let i = 1; i < base.length; i++) {
+      const c = base[i]
+      const tr = c.transition_in || { type: 'cut' }
+      const next = `[ba${inputIdx.get(c.id)}]`
+      const out = i === base.length - 1 ? '[aseq]' : `[acat${i}]`
+      if (tr.type === 'cut') {
+        lines.push(`${aCurrent}${next}concat=n=2:v=0:a=1${out}`)
+      } else {
+        const dur = Math.max(0.1, tr.duration || 0.5)
+        lines.push(`${aCurrent}${next}acrossfade=d=${dur.toFixed(3)}${out}`)
+      }
+      aCurrent = out
+    }
+  }
 
   // Each overlay audio: delayed to in_track + mixed with base.
   // Same silencing logic for overlays with cloned voice.

@@ -33,14 +33,21 @@ export async function probeDurations(videos) {
 
 // plan (from /api/editor/ai-compose) + videos [{url,label,duration}] →
 // editor project config JSON.
-export function compilePlanToProject(plan, videos, { ar = '9:16' } = {}) {
+export function compilePlanToProject(plan, videos, { ar = '9:16', maxTrimPct = null } = {}) {
   let acc = 0
   const video_clips = (plan.clips || []).map((c, i) => {
     const v = videos[Math.max(0, Math.min(videos.length - 1, parseInt(c.video_index) || 0))]
     const dur = Math.max(0.5, v.duration || 10)
-    const sIn = Math.max(0, Math.min(parseFloat(c.trim_start) || 0, dur - 0.3))
+    let sIn = Math.max(0, Math.min(parseFloat(c.trim_start) || 0, dur - 0.3))
     const sOutRaw = c.trim_end == null ? dur : parseFloat(c.trim_end)
-    const sOut = Math.max(sIn + 0.3, Math.min(Number.isFinite(sOutRaw) ? sOutRaw : dur, dur))
+    let sOut = Math.max(sIn + 0.3, Math.min(Number.isFinite(sOutRaw) ? sOutRaw : dur, dur))
+    // Over-trim guard (opt-in): the LLM sometimes hacks 40%+ off a clip and
+    // the result reads as broken jump cuts. F Creator caps trims at 25% per
+    // end; QC AI Edit stays uncapped (compilations legitimately trim hard).
+    if (maxTrimPct != null) {
+      sIn = Math.min(sIn, dur * maxTrimPct)
+      sOut = Math.max(sOut, Math.max(sIn + 0.3, dur * (1 - maxTrimPct)))
+    }
     const speed = Math.max(0.5, Math.min(2, parseFloat(c.speed) || 1))
     const tType = i === 0 ? 'cut' : (c.transition || 'cut')
     const tDur = tType === 'cut' ? 0 : Math.max(0.2, Math.min(0.8, parseFloat(c.transition_duration) || 0.4))
