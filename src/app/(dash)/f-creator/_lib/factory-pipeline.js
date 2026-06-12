@@ -16,7 +16,7 @@ import {
   getVideoMaxDuration,
 } from '@/lib/fal-client'
 import { compileImagePrompt, compileVideoPrompt } from '../../generate/_lib/prompt-compiler'
-import { DEFAULT_CAMERA } from '@/lib/camera-presets'
+import { DEFAULT_CAMERA, getCameraPreset } from '@/lib/camera-presets'
 import { productNotesShort } from '@/lib/identity'
 import { uploadBlob } from '@/lib/upload-client'
 import { compilePlanToProject, probeDurations } from '@/lib/ai-edit-compose'
@@ -125,12 +125,19 @@ function promptCtx(cfg) {
     ? `${cfg.persona.name} (${cfg.persona.character_prompt.slice(0, 200)})`
     : null
   const brand = !cfg.noProduct ? productNotesShort(productKnowledge || cfg.brand?.notes) : null
-  return { characterProductUrls, identity, brand }
+  // Camera preset = L1 of the compiler (highest priority) — THE style lock.
+  // Custom presets can carry their own mood-board (style_ref_urls); those
+  // ride along as trailing style refs, exactly like Generate does.
+  const camera = cfg.cameraPreset || DEFAULT_CAMERA
+  const userPresets = cfg.userPresets || []
+  const cam = getCameraPreset(camera, userPresets)
+  const styleUrls = Array.isArray(cam?.style_ref_urls) ? cam.style_ref_urls.filter(Boolean) : []
+  return { characterProductUrls, identity, brand, camera, userPresets, styleUrls }
 }
 
 // ── Stage 2a: gen image for one shot ──────────────────────────────────
 export async function stageImage(shot, cfg, deps, onProgress) {
-  const { characterProductUrls, identity, brand } = promptCtx(cfg)
+  const { characterProductUrls, identity, brand, camera, userPresets, styleUrls } = promptCtx(cfg)
   const isGrid = !!shot.raw.panels
   const gridHeader = isGrid
     ? buildStoryboardGridPrompt(shot.raw.panels, cfg.ar, shot.raw.concept, {
@@ -138,7 +145,7 @@ export async function stageImage(shot, cfg, deps, onProgress) {
       })
     : null
   const fullPrompt = compileImagePrompt({
-    camera: DEFAULT_CAMERA,
+    camera,
     identity,
     wardrobe: String(shot.raw.wardrobe || '').trim() || null,
     environment: shot.raw.environment || null,
@@ -148,11 +155,13 @@ export async function stageImage(shot, cfg, deps, onProgress) {
     skipProduct: !!cfg.noProduct,
     continuousShot: !!cfg.noCuts,
     refsCount: characterProductUrls.length,
-    styleRefsCount: 0,
+    styleRefsCount: styleUrls.length,
     gridHeader,
-    userPresets: [],
+    userPresets,
   })
-  const imgInput = buildImgInput(cfg.imgModel, { prompt: fullPrompt, refUrls: characterProductUrls, ar: cfg.ar })
+  // Style refs LAST — compiler's "the last N images are style references"
+  // claim must be literally true to the model.
+  const imgInput = buildImgInput(cfg.imgModel, { prompt: fullPrompt, refUrls: [...characterProductUrls, ...styleUrls], ar: cfg.ar })
   const out = await falRun(cfg.imgModel, imgInput, { onProgress, workspaceId: deps.workspaceId })
   const url = out.images?.[0]?.url
   if (!url) throw new Error('no image URL returned')
@@ -165,7 +174,7 @@ export async function stageImage(shot, cfg, deps, onProgress) {
 // reference). Carries the same IMAGE ROLES + rigid-product directives that
 // fixed Generate's r2v drift.
 export async function stageVideo(shot, cfg, deps, { imageUrl, chainFrameUrl }, onProgress) {
-  const { characterProductUrls, identity, brand } = promptCtx(cfg)
+  const { characterProductUrls, identity, brand, camera, userPresets, styleUrls } = promptCtx(cfg)
   const vidModel = effectiveVidModel(cfg.vidModel, cfg.mode)
   const isRefVid = vidModel.includes('reference-to-video') || vidModel.includes('ref-to-video')
   const isGrid = !!shot.raw.panels
@@ -181,7 +190,7 @@ export async function stageVideo(shot, cfg, deps, { imageUrl, chainFrameUrl }, o
     : constrained
 
   const motion = compileVideoPrompt({
-    camera: DEFAULT_CAMERA,
+    camera,
     identity,
     wardrobe: String(shot.raw.wardrobe || '').trim() || null,
     environment: shot.raw.environment || null,
@@ -190,12 +199,12 @@ export async function stageVideo(shot, cfg, deps, { imageUrl, chainFrameUrl }, o
     ar: cfg.ar,
     skipProduct: !!cfg.noProduct,
     continuousShot: !!cfg.noCuts,
-    refsCount: characterProductUrls.length,
-    userPresets: [],
+    refsCount: characterProductUrls.length + styleUrls.length,
+    userPresets,
   })
 
   let finalMotion = motion
-  const vidRefUrls = [...characterProductUrls]
+  const vidRefUrls = [...characterProductUrls, ...styleUrls]
   if (isRefVid && chainFrameUrl) vidRefUrls.push(chainFrameUrl)
 
   if (isRefVid && vidRefUrls.length > 0) {
@@ -210,6 +219,10 @@ export async function stageVideo(shot, cfg, deps, { imageUrl, chainFrameUrl }, o
       } else {
         roleLines.push(`- Image ${imgIdx} = character IDENTITY only (face, hair, body, skin tone${r.label ? ` — ${r.label}` : ''}). COMPLETELY IGNORE this image's background, room, location, pose, lighting and composition.`)
       }
+      imgIdx++
+    }
+    for (let s = 0; s < styleUrls.length; s++) {
+      roleLines.push(`- Image ${imgIdx} = art style / visual tone reference only — match its aesthetic, do NOT borrow its subjects or location.`)
       imgIdx++
     }
     if (chainFrameUrl) {

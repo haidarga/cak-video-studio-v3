@@ -11,6 +11,7 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { VIDEO_MODELS, IMAGE_MODELS } from '@/lib/fal-client'
 import { imageCost, videoCost, fmtCost } from '@/lib/cost-table'
+import { listAllPresets, DEFAULT_CAMERA } from '@/lib/camera-presets'
 import { runNaskahPipeline, effectiveVidModel } from '../_lib/factory-pipeline'
 
 const MODES = [
@@ -37,6 +38,15 @@ export default function FCreatorClient({ workspaceId, userId, activeBrand, perso
   const cfgRefs = useMemo(() => workspaceRefs.filter((r) => personaRefIds.has(r.id) || extraRefIds.has(r.id)), [workspaceRefs, personaRefIds, extraRefIds])
 
   const [mode, setMode] = useState('shots')
+  // Camera preset — L1 of the prompt compiler, the strongest style lock.
+  const [cameraPreset, setCameraPreset] = useState(DEFAULT_CAMERA)
+  const [userCameraPresets, setUserCameraPresets] = useState([])
+  useEffect(() => {
+    fetch('/api/workspace/camera-presets').then((r) => r.json()).then((j) => {
+      if (j.ok) setUserCameraPresets(j.presets || [])
+    }).catch(() => {})
+  }, [])
+  const presetList = useMemo(() => listAllPresets(userCameraPresets), [userCameraPresets])
   const [imgModel, setImgModel] = useState(IMAGE_MODELS[0]?.v || 'fal-ai/nano-banana-2/edit')
   const [vidModel, setVidModel] = useState('fal-ai/kling-video/o3/standard/image-to-video')
   const [ar, setAr] = useState('9:16')
@@ -75,7 +85,7 @@ export default function FCreatorClient({ workspaceId, userId, activeBrand, perso
     try {
       const payload = {
         workspace_id: workspaceId, created_by: userId, status,
-        config: { personaId, mode, imgModel, vidModel, ar, duration, shotCount, chips, konti, autoEdit, voiceSwap, lang, extraRefIds: [...extraRefIds] },
+        config: { personaId, mode, imgModel, vidModel, ar, duration, shotCount, chips, konti, autoEdit, voiceSwap, lang, cameraPreset, extraRefIds: [...extraRefIds] },
         items: itemsRef.current,
         updated_at: new Date().toISOString(),
       }
@@ -123,6 +133,7 @@ export default function FCreatorClient({ workspaceId, userId, activeBrand, perso
     if (c.konti != null) setKonti(c.konti)
     if (c.autoEdit) setAutoEdit(c.autoEdit)
     if (c.voiceSwap != null) setVoiceSwap(c.voiceSwap)
+    if (c.cameraPreset) setCameraPreset(c.cameraPreset)
     if (Array.isArray(c.extraRefIds)) setExtraRefIds(new Set(c.extraRefIds))
     const loaded = (resumeRun.items || []).map((it) => ({ ...it, detail: it.stage === 'done' ? '✓ Siap QC' : (it.stage === 'error' ? it.error : 'resume dari sini') }))
     setItems(loaded); itemsRef.current = loaded
@@ -163,6 +174,7 @@ export default function FCreatorClient({ workspaceId, userId, activeBrand, perso
       shotCount: parseInt(shotCount) || null,
       ...chips, konti: mode === 'storyboard' ? false : konti,
       autoEdit, voiceSwap, lang,
+      cameraPreset, userPresets: userCameraPresets,
     }
     const deps = { supabase, workspaceId, userId }
     await persist('running')
@@ -270,6 +282,27 @@ export default function FCreatorClient({ workspaceId, userId, activeBrand, perso
             {konti && mode !== 'storyboard' ? '🔗 ON — frame nyambung' : 'OFF'}
           </button>
         </div>
+
+        <label className="block col-span-2 md:col-span-4">
+          <span className="text-[10px] uppercase font-bold text-[var(--muted)]">🎥 Camera preset — visual identity (L1, kunci konsistensi style)</span>
+          <select value={cameraPreset} onChange={(e) => setCameraPreset(e.target.value)} disabled={running}
+            className="w-full mt-1 px-2 py-2 rounded bg-[var(--surface2)] border border-[var(--border)]">
+            {['phone', 'cinema', 'animation'].map((cat) => {
+              const group = presetList.filter((p) => p._builtin && (p.category || 'cinema') === cat)
+              if (!group.length) return null
+              return (
+                <optgroup key={cat} label={cat.toUpperCase()}>
+                  {group.map((p) => <option key={p.id} value={p.id}>{p.label} — {p.use_case}</option>)}
+                </optgroup>
+              )
+            })}
+            {presetList.some((p) => !p._builtin) && (
+              <optgroup label="CUSTOM">
+                {presetList.filter((p) => !p._builtin).map((p) => <option key={p.id} value={p.id}>{p.label}{p.use_case ? ` — ${p.use_case}` : ''}</option>)}
+              </optgroup>
+            )}
+          </select>
+        </label>
 
         <div className="col-span-2 md:col-span-4 flex flex-wrap gap-2 pt-1">
           {[['noCuts', '🎬 No cuts'], ['noDialog', '🔇 No dialog'], ['noText', '📝 No text'], ['noProduct', '📦 No product']].map(([k, l]) => (
