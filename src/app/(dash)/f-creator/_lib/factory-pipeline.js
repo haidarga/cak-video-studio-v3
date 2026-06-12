@@ -305,10 +305,47 @@ export async function stageAssemble(item, videoUrls, cfg, deps, onProgress) {
   const wantsEdit = cfg.autoEdit.transitions || cfg.autoEdit.hook || cfg.autoEdit.subtitle
   if (videos.length === 1 && !wantsEdit) return { url: videoUrls[0], assembled: false }
 
+  // ── SPEECH MAP FIRST — transcribe every source clip BEFORE planning.
+  // The edit planner is DEAF: it only sees durations, never where speech
+  // is, so its trims used to land mid-sentence ("motong pas masih ngomong").
+  // The map feeds three things: the planner's prompt, a deterministic
+  // trim-snapper, and the subtitles (reused — no second transcribe pass).
+  const speechBySrc = {}
+  {
+    const { extractAudioForTranscribe } = await import('@/lib/swap-audio')
+    for (let i = 0; i < videos.length; i++) {
+      try {
+        onProgress?.(`Dengerin dialog clip ${i + 1}/${videos.length}...`)
+        let tUrl = videos[i].url
+        try {
+          const aBlob = await withFfmpegLock(() => extractAudioForTranscribe(videos[i].url))
+          const up = await uploadBlob(aBlob, `fcreator-tr-${Date.now()}-${i}.mp3`, 'transcribe-audio')
+          tUrl = up.url
+        } catch { /* small clips pass the inline cap with the raw video url */ }
+        const tr = await fetch('/api/transcribe', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: tUrl }),
+        })
+        const td = await tr.json().catch(() => ({ ok: false }))
+        if (td.ok && td.segments?.length) {
+          speechBySrc[videos[i].url] = td.segments
+            .map((s) => ({ start: parseFloat(s.start) || 0, end: parseFloat(s.end) || 0, text: String(s.text || '') }))
+            .filter((s) => s.end > s.start)
+        }
+      } catch { /* no speech map — snapping just won't apply to this clip */ }
+    }
+  }
+
   onProgress?.('AI nyusun timeline...')
+  const speechHint = videos.map((v, i) => {
+    const segs = speechBySrc[v.url]
+    if (!segs?.length) return `clip ${i}: tanpa dialog`
+    return `clip ${i}: dialog ${segs[0].start.toFixed(1)}s-${segs[segs.length - 1].end.toFixed(1)}s`
+  }).join('; ')
   const composePrompt = [
     `Susun ${videos.length} clip ini JADI SATU video, PERTAHANKAN urutan clip persis seperti diberikan (jangan re-order, jangan drop).`,
     'Trim hanya jika ada dead-air jelas di awal/akhir clip; default pakai full durasi.',
+    `JANGAN PERNAH memotong di tengah dialog — posisi dialog tiap clip: ${speechHint}. Trim hanya boleh di LUAR rentang dialog itu.`,
     cfg.autoEdit.transitions ? 'Kasih transisi crossfade 0.4s antar clip.' : 'Transisi: cut polos antar clip.',
     cfg.autoEdit.hook ? `Tambahkan SATU hook text (2-4 kata, bahasa ${cfg.lang}) di 0-2.5 detik pertama, posisi top, style tiktok — angkat dari inti naskah ini: "${item.naskah.slice(0, 200)}"` : 'Jangan tambahkan text overlay apapun.',
     cfg.targetDuration ? `Total durasi final harus sedekat mungkin dengan ${cfg.targetDuration} detik.` : '',
@@ -325,45 +362,53 @@ export async function stageAssemble(item, videoUrls, cfg, deps, onProgress) {
   const project = compilePlanToProject(j.plan, videos, { ar: cfg.ar, maxTrimPct: 0.25 })
   project.name = item.label
 
-  // Everything from here uses ffmpeg.wasm (audio extract + final render) —
-  // single-instance, so concurrent naskah queue on the lock.
+  // ── SPEECH-SNAP — deterministic guard, never trust the LLM's promise:
+  // any trim point that lands INSIDE a speech segment gets pushed OUT
+  // (start → before the sentence, end → after it, + breath pad). Snapping
+  // only EXPANDS the kept range, so it can't cut new words.
+  const PAD = 0.15
+  const baseClips = project.video_clips
+    .filter((c) => (c.track_idx || 0) === 0)
+    .sort((a, b) => (a.in_track || 0) - (b.in_track || 0))
+  for (const clip of baseClips) {
+    const segs = speechBySrc[clip.src_url]
+    if (!segs?.length) continue
+    for (const s of segs) {
+      if (clip.src_in > s.start && clip.src_in < s.end) clip.src_in = Math.max(0, s.start - PAD)
+      if (clip.src_out > s.start && clip.src_out < s.end) clip.src_out = Math.min(clip.src_duration, s.end + PAD)
+    }
+  }
+  // Re-layout the timeline after snapping (clip durations changed).
+  let relayout = 0
+  baseClips.forEach((clip, i) => {
+    const tr = clip.transition_in || { type: 'cut' }
+    if (i > 0 && tr.type !== 'cut') relayout -= (tr.duration || 0.4)
+    clip.in_track = Math.max(0, relayout)
+    relayout += (clip.src_out - clip.src_in) / (clip.speed || 1)
+  })
+
+  // Everything from here uses ffmpeg.wasm (final render) — single-instance,
+  // so concurrent naskah queue on the lock.
   return withFfmpegLock(async () => {
-  // Subtitles — deterministic, headless (audio-first transcription).
+  // Subtitles — REUSE the speech map (already transcribed), intersected
+  // with each clip's final trim window, mapped onto the final timeline.
   if (cfg.autoEdit.subtitle) {
-    const { extractAudioForTranscribe } = await import('@/lib/swap-audio')
-    const base = project.video_clips
-      .filter((c) => (c.track_idx || 0) === 0)
-      .sort((a, b) => (a.in_track || 0) - (b.in_track || 0))
     const subs = []
-    for (let i = 0; i < base.length; i++) {
-      const clip = base[i]
-      try {
-        onProgress?.(`Subtitle clip ${i + 1}/${base.length}...`)
-        let tUrl = clip.src_url
-        try {
-          const aBlob = await extractAudioForTranscribe(clip.src_url)
-          const up = await uploadBlob(aBlob, `fcreator-tr-${Date.now()}-${i}.mp3`, 'transcribe-audio')
-          tUrl = up.url
-        } catch { /* fall back to video url (small clips pass inline cap) */ }
-        const tr = await fetch('/api/transcribe', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: tUrl }),
+    for (const clip of baseClips) {
+      const segs = speechBySrc[clip.src_url] || []
+      const speed = clip.speed || 1
+      for (const s of segs) {
+        if (s.end <= clip.src_in || s.start >= clip.src_out) continue
+        const start = (clip.in_track || 0) + Math.max(0, s.start - clip.src_in) / speed
+        const end = (clip.in_track || 0) + Math.min(clip.src_out - clip.src_in, s.end - clip.src_in) / speed
+        subs.push({
+          id: uid(), kind: 'text', text: s.text.toUpperCase(),
+          start, end: Math.max(start + 0.4, end), track_idx: 1,
+          x_pct: 50, y_pct: 75, size: 56, scale: 1, max_width_pct: 90,
+          color: '#ffffff', weight: 900,
+          bg: 'rgba(0,0,0,0.85)', align: 'center', animation: 'fade',
         })
-        const td = await tr.json().catch(() => ({ ok: false }))
-        if (!td.ok || !td.segments?.length) continue
-        const offset = clip.in_track || 0
-        for (const s of td.segments) {
-          subs.push({
-            id: uid(), kind: 'text', text: String(s.text || '').toUpperCase(),
-            start: offset + (parseFloat(s.start) || 0),
-            end: offset + (parseFloat(s.end) || (parseFloat(s.start) || 0) + 1.5),
-            track_idx: 1,
-            x_pct: 50, y_pct: 75, size: 56, scale: 1, max_width_pct: 90,
-            color: '#ffffff', weight: 900,
-            bg: 'rgba(0,0,0,0.85)', align: 'center', animation: 'fade',
-          })
-        }
-      } catch { /* subtitle failure is non-fatal — keep assembling */ }
+      }
     }
     project.text_clips = [...(project.text_clips || []), ...subs]
   }
