@@ -1525,8 +1525,26 @@ Return JSON only, no prose. No markdown fences. Be specific, no generic filler.`
           }
         }
       }
+      // FALLBACK — the Continue button always attaches the previous shot's
+      // last frame (or the source image) + may pass start_frame_url. If the
+      // history scan found nothing (reloaded conversation drops the slim
+      // `result`, or the prior gen came from a surface that didn't tag it),
+      // treat that attached image AS the source. This is what the user is
+      // literally pointing at, so it's the most reliable anchor anyway.
       if (!lastGen) {
-        return { type: 'error', error: 'Belum ada gen result di chat ini buat dilanjutin. Bikin shot pertama dulu pake gen_image / gen_video / gen_image_from_url / gen_marketing_video_from_url.' }
+        const anchorImg = (start_frame_url && /^https?:/.test(start_frame_url))
+          ? start_frame_url
+          : (ctx.recentAttachments || []).find((a) => a.type === 'image' && a.url)?.url
+        if (anchorImg) {
+          lastGen = {
+            type: 'gen_image_result',
+            url: anchorImg,
+            regen_payload: { prompt: ctx.lastUserText || '', ar: ctx.activeConfig?.ar, refs: [] },
+          }
+        }
+      }
+      if (!lastGen) {
+        return { type: 'error', error: 'Belum ada gen result di chat ini buat dilanjutin, dan gak ada gambar yang ke-attach. Bikin shot pertama dulu (gen_image / gen_video) atau upload frame-nya via 📎.' }
       }
 
       const isVideoSource = lastGen.type === 'gen_video_result'
