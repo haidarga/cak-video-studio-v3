@@ -35,6 +35,21 @@ function withFfmpegLock(fn) {
   return run
 }
 
+// ── NETWORK RETRY — the factory runs for tens of minutes on home wifi;
+// transient drops (ERR_NETWORK_CHANGED, timeouts, QUIC hiccups) WILL
+// happen mid-run. Network-level fetch failures retry 3x with backoff
+// (2s/4s/8s); HTTP error statuses pass through to the caller's handling.
+async function fetchRetry(url, opts, tries = 3) {
+  for (let a = 0; a < tries; a++) {
+    try {
+      return await fetch(url, opts)
+    } catch (e) {
+      if (a === tries - 1) throw new Error(`network putus (${tries}x retry gagal): ${String(e?.message || e).slice(0, 80)}`)
+      await new Promise((r) => setTimeout(r, 2000 * Math.pow(2, a)))
+    }
+  }
+}
+
 const toStr = (v) => {
   if (v == null) return ''
   if (typeof v === 'string') return v
@@ -72,7 +87,7 @@ export function effectiveVidModel(vidModel, mode) {
 
 // ── Stage 1: parse naskah → shots (same shapes Generate uses) ─────────
 export async function stageParse(item, cfg) {
-  const res = await fetch('/api/parse', {
+  const res = await fetchRetry('/api/parse', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       naskah: item.naskah, lang: cfg.lang, mode: cfg.mode, ar: cfg.ar,
@@ -322,7 +337,7 @@ export async function stageAssemble(item, videoUrls, cfg, deps, onProgress) {
           const up = await uploadBlob(aBlob, `fcreator-tr-${Date.now()}-${i}.mp3`, 'transcribe-audio')
           tUrl = up.url
         } catch { /* small clips pass the inline cap with the raw video url */ }
-        const tr = await fetch('/api/transcribe', {
+        const tr = await fetchRetry('/api/transcribe', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ url: tUrl }),
         })
@@ -351,7 +366,7 @@ export async function stageAssemble(item, videoUrls, cfg, deps, onProgress) {
     cfg.targetDuration ? `Total durasi final harus sedekat mungkin dengan ${cfg.targetDuration} detik.` : '',
     'Jangan set auto_subtitle (subtitle ditangani sistem terpisah). Jangan tambah text selain yang diminta.',
   ].filter(Boolean).join(' ')
-  const res = await fetch('/api/editor/ai-compose', {
+  const res = await fetchRetry('/api/editor/ai-compose', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt: composePrompt, videos }),
   })
@@ -438,7 +453,7 @@ export async function stageAssemble(item, videoUrls, cfg, deps, onProgress) {
 export async function stageVoice(videoUrl, cfg, onProgress) {
   if (!cfg.persona?.voice_id) throw new Error('persona belum punya voice')
   onProgress?.('ElevenLabs S2S...')
-  const res = await fetch('/api/voice/convert', {
+  const res = await fetchRetry('/api/voice/convert', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ video_url: videoUrl, voice_id: cfg.persona.voice_id }),
   })
