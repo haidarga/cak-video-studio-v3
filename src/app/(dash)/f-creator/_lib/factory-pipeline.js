@@ -21,6 +21,20 @@ import { productNotesShort } from '@/lib/identity'
 import { uploadBlob } from '@/lib/upload-client'
 import { compilePlanToProject, probeDurations } from '@/lib/ai-edit-compose'
 
+// ── ffmpeg.wasm MUTEX ──────────────────────────────────────────────────
+// ffmpeg.wasm is a SINGLETON with a shared virtual FS and fixed filenames
+// (v0.mp4, swap-in.mp4, ta-in.mp4...). Two naskah hitting it concurrently
+// corrupt each other's files. Gen stages (fal/Gemini) parallelize freely;
+// anything ffmpeg-bound (assemble render, audio extract, frame extract,
+// voice mux) takes this lock and queues. Gen is 90% of wall-clock, so the
+// queue is rarely felt.
+let _ffq = Promise.resolve()
+function withFfmpegLock(fn) {
+  const run = _ffq.then(fn, fn)
+  _ffq = run.catch(() => {})
+  return run
+}
+
 const toStr = (v) => {
   if (v == null) return ''
   if (typeof v === 'string') return v
@@ -264,10 +278,12 @@ PRODUCT FIDELITY (critical): the product is a RIGID manufactured object — its 
 
 // ── KONTI helper: last frame of a video → public URL ──────────────────
 export async function chainFrameFromVideo(videoUrl) {
-  const { extractLastFrame } = await import('@/lib/ffmpeg-extract')
-  const blob = await extractLastFrame(videoUrl)
-  const { url } = await uploadBlob(blob, `fcreator-chain-${Date.now()}.jpg`, 'continuation')
-  return url
+  return withFfmpegLock(async () => {
+    const { extractLastFrame } = await import('@/lib/ffmpeg-extract')
+    const blob = await extractLastFrame(videoUrl)
+    const { url } = await uploadBlob(blob, `fcreator-chain-${Date.now()}.jpg`, 'continuation')
+    return url
+  })
 }
 
 // ── Stage 3: assemble — AI edit plan + subtitles + browser render ─────
@@ -297,6 +313,9 @@ export async function stageAssemble(item, videoUrls, cfg, deps, onProgress) {
   const project = compilePlanToProject(j.plan, videos, { ar: cfg.ar })
   project.name = item.label
 
+  // Everything from here uses ffmpeg.wasm (audio extract + final render) —
+  // single-instance, so concurrent naskah queue on the lock.
+  return withFfmpegLock(async () => {
   // Subtitles — deterministic, headless (audio-first transcription).
   if (cfg.autoEdit.subtitle) {
     const { extractAudioForTranscribe } = await import('@/lib/swap-audio')
@@ -343,6 +362,7 @@ export async function stageAssemble(item, videoUrls, cfg, deps, onProgress) {
   onProgress?.(`Upload ${(blob.size / 1024 / 1024).toFixed(1)}MB...`)
   const { url } = await uploadBlob(blob, `fcreator-${Date.now()}.${ext || 'mp4'}`, 'f-creator')
   return { url, assembled: true }
+  })
 }
 
 // ── Stage 4 (optional): voice swap to persona cloned voice ────────────
@@ -356,10 +376,12 @@ export async function stageVoice(videoUrl, cfg, onProgress) {
   const j = await res.json().catch(() => ({ ok: false, error: 'non-json' }))
   if (!j.ok) throw new Error(j.error || 'voice convert failed')
   onProgress?.('Mux cloned voice...')
-  const { swapAudioInVideo } = await import('@/lib/swap-audio')
-  const blob = await swapAudioInVideo(videoUrl, j.audio_url, onProgress)
-  const up = await uploadBlob(blob, `fcreator-voiced-${Date.now()}.mp4`, 'f-creator')
-  return { url: up.url, cloned_audio_url: j.audio_url }
+  return withFfmpegLock(async () => {
+    const { swapAudioInVideo } = await import('@/lib/swap-audio')
+    const blob = await swapAudioInVideo(videoUrl, j.audio_url, onProgress)
+    const up = await uploadBlob(blob, `fcreator-voiced-${Date.now()}.mp4`, 'f-creator')
+    return { url: up.url, cloned_audio_url: j.audio_url }
+  })
 }
 
 // ── Full pipeline for ONE naskah ───────────────────────────────────────

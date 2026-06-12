@@ -71,6 +71,7 @@ export default function FCreatorClient({ workspaceId, userId, activeBrand, perso
   const persistWarnedRef = useRef(false)
   const [resumeRun, setResumeRun] = useState(null)
 
+  const persistTimerRef = useRef(null)
   function updateItem(idx, patch) {
     setItems((prev) => {
       const next = [...prev]
@@ -78,6 +79,12 @@ export default function FCreatorClient({ workspaceId, userId, activeBrand, perso
       itemsRef.current = next
       return next
     })
+    // Debounced persist — with parallel workers, items update constantly;
+    // save run state at most ~once/second instead of per-keystroke of progress.
+    if (runIdRef.current) {
+      clearTimeout(persistTimerRef.current)
+      persistTimerRef.current = setTimeout(() => persist('running'), 1000)
+    }
   }
 
   // ── persistence (resume-safe; tolerates missing table) ──
@@ -179,19 +186,32 @@ export default function FCreatorClient({ workspaceId, userId, activeBrand, perso
     const deps = { supabase, workspaceId, userId }
     await persist('running')
 
-    for (let i = 0; i < itemsRef.current.length; i++) {
-      if (stopRef.current) break
-      const item = itemsRef.current[i]
-      if (!item.naskah.trim() || item.stage === 'done') continue
-      if (!item.label) updateItem(i, { label: `${persona.name} — ${item.naskah.trim().slice(0, 36)}${item.naskah.trim().length > 36 ? '…' : ''}` })
-      if (item.stage === 'error') updateItem(i, { stage: 'idle', error: null })
-      await runNaskahPipeline(
-        itemsRef.current[i], cfg, deps,
-        (patch) => updateItem(i, patch),
-        () => stopRef.current,
-      )
-      await persist('running')
+    // PARALLEL JEBRET — worker pool: up to 4 naskah run simultaneously.
+    // Gen stages (fal video gen = 90% of wall-clock) overlap fully; the
+    // ffmpeg-bound stages auto-queue via withFfmpegLock inside the pipeline.
+    // Pool of 4 (not unlimited) keeps Gemini/fal rate limits happy — a
+    // rate-limit error would just flag cards red for nothing.
+    const queueIdx = itemsRef.current
+      .map((it, i) => ({ it, i }))
+      .filter(({ it }) => it.naskah.trim() && it.stage !== 'done')
+      .map(({ i }) => i)
+    let cursor = 0
+    const worker = async () => {
+      while (!stopRef.current) {
+        const i = cursor < queueIdx.length ? queueIdx[cursor++] : -1
+        if (i === -1) break
+        const item = itemsRef.current[i]
+        if (!item.label) updateItem(i, { label: `${persona.name} — ${item.naskah.trim().slice(0, 36)}${item.naskah.trim().length > 36 ? '…' : ''}` })
+        if (item.stage === 'error') updateItem(i, { stage: 'idle', error: null })
+        await runNaskahPipeline(
+          itemsRef.current[i], cfg, deps,
+          (patch) => updateItem(i, patch),
+          () => stopRef.current,
+        )
+      }
     }
+    const POOL = Math.min(4, queueIdx.length)
+    await Promise.all(Array.from({ length: POOL }, () => worker()))
 
     const allDone = itemsRef.current.filter((it) => it.naskah.trim()).every((it) => it.stage === 'done')
     await persist(stopRef.current ? 'paused' : (allDone ? 'done' : 'running'))
