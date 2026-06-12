@@ -370,6 +370,16 @@ export async function stageAssemble(item, videoUrls, cfg, deps, onProgress) {
   const baseClips = project.video_clips
     .filter((c) => (c.track_idx || 0) === 0)
     .sort((a, b) => (a.in_track || 0) - (b.in_track || 0))
+  // FORCE transitions — toggle ON means crossfade happens, PERIOD. The
+  // plan prompt asks Gemini nicely but the model sometimes returns "cut";
+  // deterministic override beats a polite request.
+  if (cfg.autoEdit.transitions) {
+    baseClips.forEach((c, i) => {
+      if (i > 0 && (!c.transition_in || c.transition_in.type === 'cut')) {
+        c.transition_in = { type: 'crossfade', duration: 0.4 }
+      }
+    })
+  }
   for (const clip of baseClips) {
     const segs = speechBySrc[clip.src_url]
     if (!segs?.length) continue
