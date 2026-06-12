@@ -98,40 +98,85 @@ Platform ini 3 lapis yang terpisah jelas:
 | **Supabase** | Database (Postgres) + Auth + Realtime. |
 | **OpenAI** | GPT Image 2 (via fal.ai) + fallback LLM. |
 
-### Model VIDEO (16) — diurut dari termurah
+### Model VIDEO — yang PALING PENTING dipahami: 3 jenis input
 
-| Model | Harga/dtk | Catatan |
+Tiap keluarga model (Grok, Seedance, Happy Horse, Kling) punya **varian** dengan akhiran beda. Akhiran ini menentukan APA yang dia terima sebagai input — ini yang bikin fungsinya beda, bukan nama keluarganya:
+
+| Akhiran | Singkatan | Terima apa | Kapan dipakai |
+|---|---|---|---|
+| `image-to-video` | **i2v** | **1 gambar** sumber → dianimasiin | Mode Per-Shot: udah punya 1 image yang di-approve, tinggal gerakin. |
+| `reference-to-video` | **r2v** | **banyak gambar referensi** (orang + produk) → bikin video BARU yang ngikutin identitas/style refs | Kalau mau **produk/wajah tetep konsisten** di video TAPI komposisinya baru. Ini senjata anti-drift. |
+| `text-to-video` | **t2v** | **teks doang**, gak ada gambar | Direct Video / b-roll generik, gak perlu wajah/produk spesifik. |
+
+> **Salah kaprah yang gua tulis di versi lama dokumen ini:** "cuma Kling yang bawa refs ke video". **SALAH.** Grok, Seedance, dan Happy Horse SEMUA punya varian **r2v (reference-to-video)** yang bawa refs produk/orang ke video. Lu **gak butuh Kling** buat konsistensi produk — tinggal pakai varian r2v dari model yang lu udah suka.
+>
+> Bedanya cuma: **i2v** keluarga Grok/Seedance/Happy Horse cuma terima 1 gambar (refs ke-2 dst di-drop). Kalau pake i2v dan butuh produk konsisten → **pindah ke varian r2v-nya**, bukan pindah ke Kling.
+
+### Model VIDEO — per keluarga (diurut sesuai yang lu pakai)
+
+**🟢 GROK IMAGINE (xAI) — workhorse murah lu, ~$0.07/dtk, ada audio, 720p**
+| Varian | Harga/dtk | Max durasi | Catatan |
+|---|---|---|---|
+| Grok i2v | ~$0.07 | 15 dtk | Animasiin 1 gambar. Termurah yang ada audio. Default draft. |
+| Grok **r2v** | ~$0.07 | 10 dtk | Multi-ref (max 6), **gak morph dari grid** — ini buat jaga produk/wajah. |
+| Grok t2v | ~$0.07 | 10 dtk | Teks murni → video + audio. |
+| Grok **1.5** i2v | ~$0.14 | 15 dtk | Versi kualitas lebih tinggi, masih ada audio. Naik kelas tanpa pindah keluarga. |
+
+**🟢 SEEDANCE (ByteDance) — kualitas gerak/fidelity terbaik di rotasi lu**
+| Varian | Harga/dtk | Max durasi | Catatan |
+|---|---|---|---|
+| Seedance Lite **r2v** | ~$0.16 | 15 dtk | Multi-ref murah (max 9 refs). Pintu masuk fidelity tinggi. |
+| Seedance 2 Fast i2v | ~$0.24 | 15 dtk | Gerak paling natural, identity kuat. |
+| Seedance 2 Fast **r2v** | ~$0.24 | 15 dtk | Multi-ref (max 9) + fidelity Seedance. **Pilihan kuat buat produk.** |
+| Seedance 2 t2v | ~$0.30 | 15 dtk | Premium photoreal dari teks, native audio. Termahal. |
+
+**🟢 HAPPY HORSE (Alibaba) — serbaguna, native audio, bisa 1080p**
+| Varian | Harga/dtk | Max durasi | Catatan |
+|---|---|---|---|
+| Happy Horse i2v | ~$0.14 | 15 dtk | Animasiin 1 gambar, native audio. |
+| Happy Horse **r2v** | ~$0.14 | 15 dtk | Multi-ref (max 9). Audio + konsistensi sekaligus. |
+| Happy Horse t2v | ~$0.14 | 15 dtk | Teks → video, native audio (1080p ~$0.28/dtk). |
+
+**⚪ KLING (alternatif — JARANG lu pakai, di sini buat kelengkapan aja)**
+| Varian | Harga/dtk | Catatan |
 |---|---|---|
-| Grok Imagine i2v / r2v / t2v | ~$0.07 | Termurah, ada audio. Buat draft & konten non-produk. **Tidak bawa refs di i2v.** |
-| Kling v3 standard i2v | ~$0.08 | Bawa refs. |
-| Kling O3 i2v | ~$0.11 | **Audio + refs** — terbaik buat UGC talking-head. |
+| Kling v3 i2v | ~$0.08 | Uniknya: i2v-nya bisa terima refs tambahan (max 4) sekaligus. |
+| Kling O3 i2v | ~$0.11 | Ada audio. |
 | Kling 2.5 Pro r2v | ~$0.12 | Multi-ref, no morph. |
-| Kling v3 t2v | ~$0.13 | Audio, multi-shot dari teks. |
-| Happy Horse i2v / r2v / t2v | ~$0.14 | Native audio, bisa 1080p. |
-| Grok 1.5 i2v | ~$0.14 | Kualitas lebih tinggi + audio. |
-| Seedance Lite r2v | ~$0.16 | |
-| Seedance 2 Fast i2v / r2v | ~$0.24 | Identity fidelity kuat. |
-| Kling v3 **Pro** i2v | ~$0.28 | **Kualitas terbaik** buat final. |
-| Seedance 2 t2v | ~$0.30 | Premium photoreal dari teks. |
+| Kling v3 t2v | ~$0.13 | Multi-shot dari teks. |
+| Kling v3 Pro i2v | ~$0.28 | Kualitas paling tinggi di keluarga Kling. |
 
-**Singkatan:** i2v = image-to-video, r2v = reference-to-video, t2v = text-to-video.
+**Aturan pendek milih model video:**
+- Cuma punya **1 gambar**, gak ada produk kritis → **i2v** (Grok i2v paling murah).
+- Ada **produk/wajah** yang HARUS persis → **r2v** dari keluarga manapun (Grok r2v termurah, Seedance r2v paling fidelity).
+- **Gak ada gambar** sama sekali, b-roll generik → **t2v**.
+- Butuh **lebih cakep** tanpa ribet → naik ke Grok 1.5, atau Seedance 2 Fast.
 
-### Model VIDEO EDIT (3) — ngubah video yang udah ada
+### Model VIDEO EDIT (3) — ngubah video yang UDAH ADA (bukan generate baru)
+
+Ini bukan buat bikin video dari nol — buat nransform footage yang udah jadi. Dipakai God Mode (`edit_video` / `extend_video`).
 
 | Model | Harga/dtk | Fungsi |
 |---|---|---|
-| Grok edit-video | ~$0.08 | Edit global murah: colorize, ganti mood/style. |
-| Grok extend-video | ~$0.08 | Nerusin footage asli (dipakai continue-shot video). |
-| Happy Horse video-edit | ~$0.28 | Edit ber-anchor referensi (jaga identitas, max 5 ref). |
+| Grok edit-video | ~$0.08 | Edit global murah: colorize, ganti mood/style seluruh klip. |
+| Grok extend-video | ~$0.08 | Nyambungin/manjangin footage asli (dipakai continue-shot video). |
+| Happy Horse video-edit | ~$0.28 | Edit ber-anchor referensi — ubah sesuatu tapi identitas dijaga (max 5 ref), bisa 1080p. |
 
-### Model IMAGE (4)
+### Model IMAGE (4) — bedanya: seberapa "ngunci" referensi
 
-| Model | Catatan |
-|---|---|
-| Nano Banana 2 edit | Cepat, multi-ref, outfit adaptif. Buat draft. |
-| GPT Image 2 | Generation mode — refs sebagai hint, gak pixel-lock. |
-| GPT Image 2 **edit** | **Terbaik buat teks/label** (charger, produk berlabel), pixel-lock refs. |
-| Grok Imagine edit | Multi-ref, $0.05 (1k) / $0.07 (2k) + $0.01/input. |
+Sumbu utamanya: apakah model **mengunci pixel referensi** (hasil mirip persis foto sumber) atau cuma **menjadikan referensi sebagai petunjuk** (bebas ngikutin teks prompt buat outfit/komposisi).
+
+| Model | Harga | Sifat ref | Kapan dipakai |
+|---|---|---|---|
+| **Nano Banana 2** edit | ~$0.04 | Multi-ref (max 12), outfit **adaptif** — refs jadi panduan, outfit ngikut prompt | Default draft. Cepet, murah, fleksibel ganti baju/scene. |
+| **GPT Image 2** (generation) | ~$0.06 | Refs sebagai **hint**, gak pixel-lock | Mau wajah/style mirip tapi komposisi/outfit bebas ikut prompt. |
+| **GPT Image 2 edit** | ~$0.06 | **Pixel-lock** refs + **render teks terbaik** | Produk berlabel (charger, kemasan) — teks/logo harus tajam & bener. |
+| **Grok Imagine edit** | ~$0.05 (1k) / $0.07 (2k) + $0.01/input | Multi-ref (max 8) edit | Edit cepat ber-referensi, sejalur sama keluarga Grok. |
+
+**Aturan pendek milih model image:**
+- Draft cepat / ganti outfit-scene bebas → **Nano Banana 2**.
+- Ada **teks/label produk** yang harus legible → **GPT Image 2 edit** (pixel-lock).
+- Mau identitas mirip tapi komposisi bebas → **GPT Image 2** (generation).
 
 ---
 
@@ -172,10 +217,48 @@ approve → gen video → Send to QC
 ```
 Filosofi: **image murah, video mahal — saring di level image dulu.**
 
+#### Setup bar Generate — tiap kontrol ngapain
+
+Ini semua tombol di panel atas tab Generate (yang ada di screenshot), dijelasin satu-satu:
+
+**📷 Camera Preset (paling atas — "L1 tokens, highest priority")**
+Ini yang **paling ngedikte tampilan**. Dia nyuntik ~6 token style di prioritas tertinggi (di atas prompt naskah) — device, lighting, look. Makanya disebut L1. Grup preset:
+- **Phone** — Samsung A13 candid (UGC TikTok handheld) / iPhone 15 clean (UGC poles, talking-head).
+- **Cinema** — Studio TVC (locked-off, lighting terkontrol) / Anamorphic (hero film) / Product macro (e-commerce key visual) / Documentary handheld.
+- **Animation** — 2D explainer / Pixar-style 3D.
+- **Custom** — preset bikinan sendiri (contoh: "AceKid chibi 2D storybook").
+
+Token preset **override** quality-line generik, jadi gak ada kontradiksi "shot on Samsung A13" + "professional high-detail photography" barengan. **Pilih preset = kunci style** biar konsisten antar shot/konten. Bisa Clone / Bikin Preset baru.
+
+**🎬 Mode (Per-Shot / Storyboard / Direct)** — ini nentuin ALUR gen:
+| Mode | Cara kerja | Kapan |
+|---|---|---|
+| **Per-Shot** (image→video) | Gen 1 image per shot dulu (murah) → approve yang oke → baru animasiin ke video | Default. Kontrol + saring maksimal, hemat (buang yang jelek di level image). |
+| **Storyboard 3×3** (~15s) | Gen **1 gambar grid 3×3** berisi 9 still berurutan → dianimasiin | Cepet & murah, dapet 9 keyframe sekaligus. Anti-morph antar panel dijaga prompt grid. |
+| **Direct Video** (skip image, refs only) | Langsung ke video dari refs, **gak lewat image** | Paling cepat tapi paling mahal per percobaan & kontrol paling sedikit. Buat b-roll cepat. |
+
+**Shot Count** — Auto (LLM yang nentuin jumlah shot dari naskah) atau angka fix.
+
+**Aspect Ratio** — 9:16 vertikal (TikTok/Reels), 16:9 (YouTube landscape), 1:1.
+
+**Bahasa Dialog** — bahasa dialog yang diucapin di video (Indonesian / dst).
+
+**Image Model & Video Model** — dua dropdown pilih model (lihat tabel di Bagian 3). Image murah dipakai di tahap saring, video mahal cuma buat yang udah di-approve.
+
+**⚙️ Constraints (4 toggle bawah)** — batasan keras yang dikirim ke prompt:
+| Toggle | Efek |
+|---|---|
+| **No cuts** | Satu take kontinu, gak ada potongan cut-to-cut di dalam klip. Bunuh artefak "patah cut". |
+| **No dialog** | Gak ada omongan / gerak bibir. Buat b-roll diam. |
+| **No text** | Gak ada caption/teks ke-bake di dalam video gen. |
+| **No product** | Lifestyle only, gak ada kemasan/produk di frame. |
+
+Alur lengkap Per-Shot: `Camera Preset → pilih persona → paste naskah → Parse → gen Images (re-img sampai oke) → approve → gen Videos dari yang approved → Send to QC`.
+
 ### B. GOD MODE — Conversational
 Ngobrol bahasa biasa. AI agent (Gemini) milih tool & model yang cocok sendiri.
 ```
-"bikin video review charger UGREEN, pake Kling Pro, 10 detik, ada dialog"
+"bikin video review charger UGREEN, pake Seedance r2v, 10 detik, ada dialog"
 → AI parse maksud → pilih tool gen_video → pilih model → eksekusi
 ```
 Punya 19 tools (lihat bagian 6). Bisa edit/extend video, analisis referensi, scoring viral, dll — semua lewat chat.
@@ -239,7 +322,7 @@ Agent Gemini milih tool ini otomatis dari maksud chat lu:
 | `list_cinematic_presets` | List semua preset per kategori. |
 | `train_persona_soul` | Mulai training LoRA persona (min 4 ref image). |
 
-**Smart Model Router:** Agent punya logika milih model berdasarkan (1) tipe input — text / 1 gambar / multi-ref / video existing, lalu (2) kebutuhan — "murah/draft" → Grok, "paling bagus/final" → Kling Pro/Seedance, "ada dialog" → model ber-audio.
+**Smart Model Router:** Agent punya logika milih model berdasarkan (1) tipe input — text → t2v, 1 gambar → i2v, multi-ref/produk → r2v, video existing → edit/extend; lalu (2) kebutuhan — "murah/draft" → Grok, "paling bagus/final" → Seedance, "ada dialog/audio" → Happy Horse / Seedance / Grok (semua ber-audio).
 
 ---
 
@@ -289,7 +372,7 @@ Masalah inti AI video: karakter & produk **berubah bentuk (drift/morph)** antar 
 4. **KONTI chain / extend** — shot berikutnya mulai dari **frame terakhir** shot sebelumnya (bukan dari nol). Continue-shot 3 lapis: extend-video native > last-frame anchor > carry refs.
 5. **Image-first checkpoint** — saring di level image yang murah ($0.04) sebelum bayar video yang mahal.
 
-**Aturan praktis produk:** Image pakai GPT Image 2 Edit → approve → Video pakai **keluarga Kling** (cuma Kling yang bawa refs produk ke video; Grok/Seedance i2v gak) → produk statis kamera gerak → durasi 5 detik → sambung pakai Continue.
+**Aturan praktis produk:** Image pakai GPT Image 2 Edit (pixel-lock label) → approve → Video pakai **varian r2v** (reference-to-video) dari model manapun — **Grok r2v** (~$0.07, termurah), **Seedance r2v** (~$0.16–0.24, fidelity tertinggi), atau **Happy Horse r2v** (~$0.14, ada audio). Kuncinya **r2v, bukan i2v** — i2v cuma terima 1 gambar jadi produk gampang ilang. Lanjut: produk statis kamera gerak → durasi 5 detik → sambung pakai Continue.
 
 ---
 
@@ -357,7 +440,9 @@ Approved → Scheduled → Postiz multi-channel (TikTok/IG/YouTube). Persona bin
 1. Ref: 1 foto produk tajam single-angle + isi field KNOWLEDGE (label, port, dimensi)
 2. Mode: Per-Shot. Image model: GPT Image 2 Edit
 3. Gen image → rewel di sini → re-img sampai label kebaca + proporsi bener → OK
-4. Video model: Kling v3 (draft) / Kling Pro (final) — JANGAN Grok (gak bawa ref produk)
+4. Video model: pakai varian **r2v** (reference-to-video) biar produk kebawa —
+   Grok r2v (draft murah) / Seedance r2v (final, fidelity tinggi).
+   JANGAN varian i2v keluarga manapun kalau butuh produk persis (i2v cuma 1 gambar).
 5. Motion: produk statis, kamera gerak. Durasi 5 detik. No cuts ON
 6. Multi-shot: pakai Continue (bukan gen baru) buat nyambung
 ```
@@ -365,7 +450,7 @@ Approved → Scheduled → Postiz multi-channel (TikTok/IG/YouTube). Persona bin
 ### SOP UGC (talent ngomong + pegang produk)
 ```
 1. Image: GPT Image 2 Edit — prompt posisi tangan eksplisit (pegang label depan, jari di pinggir)
-2. Video model: Kling O3 ($0.11) — satu-satunya audio + refs
+2. Video model: varian r2v ber-audio — **Happy Horse r2v** (~$0.14, native audio + multi-ref) atau **Seedance r2v**. Keduanya bawa produk + bisa dialog.
 3. Motion: satu tangan pegang produk DIAM, tangan lain gesture. Durasi 5 detik
 4. QC → 🎙 Voice swap ke cloned voice persona (konsistensi suara antar konten)
 5. Multi-shot UGC: Continue (hook → demo → CTA)
