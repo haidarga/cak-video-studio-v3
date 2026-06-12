@@ -517,8 +517,12 @@ function buildFilterGraph(project, canvasDims, musicInputIdx, clonedAudioInputSt
 // ── Export: ffmpeg.wasm primary ─────────────────────────────────────
 export async function renderWithFFmpeg(project, onProgress) {
   if (typeof window === 'undefined') throw new Error('ffmpeg.wasm hanya jalan di browser')
-  if (typeof SharedArrayBuffer === 'undefined') throw new Error('SharedArrayBuffer gak available — COOP/COEP headers belum apply')
-  if (!window.crossOriginIsolated) throw new Error('crossOriginIsolated=false — hard reload (Ctrl+Shift+R)')
+  // NOTE: the old SharedArrayBuffer / crossOriginIsolated guards are GONE.
+  // They were leftovers from the COEP era — after COEP removal they threw
+  // unconditionally, so EVERY mp4 render silently fell back to the canvas
+  // recorder (dropped frames on weak machines = "patah-patah", no xfade
+  // transitions, all the ffmpeg quality work never executing). The hosted
+  // core in /public/ffmpeg is the SINGLE-THREAD build — it needs neither.
 
   const allClips = project.video_clips || []
   const base = baseTrackClips(allClips)
