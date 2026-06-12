@@ -77,6 +77,7 @@ export default async function DashLayout({ children }) {
       <div className="mb-4"><OnboardingChecklist /></div>
       <NavLink href="/generate" label="⚡ Generate" />
       <NavLink href="/god-mode" label="🔥 God Mode" highlight />
+      <NavLink href="/f-creator" label="🏭 F Creator" highlight />
       <NavLink href="/qc" label="🧪 QC" />
       <NavLink href="/editor" label="✂️ Editor" />
       <NavLink href="/scheduled" label="📅 Scheduled" />
