@@ -1121,7 +1121,10 @@ Return JSON only with these fields:
         // YouTube fetches.
         const generationConfig = {
           temperature: 0.4,
-          maxOutputTokens: 1500, // tighter than original 3000 — analysis fits
+          // Was tightened 3000→1500 ("analysis fits") — it didn't: detailed
+          // analyses (style + hooks + shot breakdown in Bahasa) truncated
+          // mid-JSON → "balik bukan JSON valid". 6000 gives real headroom.
+          maxOutputTokens: 6000,
           ...(mediaResolution ? { mediaResolution } : {}),
         }
         const result = await callLLMJSON({
