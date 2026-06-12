@@ -39,8 +39,8 @@ ${String(prompt).slice(0, 1500)}
 EDITOR CAPABILITIES you can use in the plan:
 - Reorder / repeat / drop clips, trim each (trim_start/trim_end in seconds within that clip)
 - Per-clip speed (0.5–2), subtle punch-in zoom (1.0–1.4)
-- Transition INTO each clip (except the first): cut | crossfade | wipe | dissolve | circle | pixelize | zoomin (duration 0.3–0.8s)
-- Text overlays at absolute timeline times (hook text, CTA, captions) — style: tiktok (bold white on black) | clean (no background)
+- Transition INTO each clip (except the first), duration 0.3–0.8s. MENU (pick to match the mood, VARY them — don't use the same one twice in a row): cut | crossfade | blur (soft/dreamy) | lightleak (white flash, upbeat/energetic) | dissolve | zoomin (punchy) | slideleft | slideright | circleopen | pixelize (playful/glitchy) | fadeblack (dramatic pause)
+- Text overlays at absolute timeline times (hook text, CTA, captions) — style MENU: tiktok (bold white on black box) | clean (white, no box, minimal) | yellow (yellow on black, warning/penting vibe) | neon (green glow-ish, techy) | pink (playful/feminine) | bigpop (huge white on red, loud CTA). Pick styles that match the content's tone; hook and CTA may use different styles.
 - auto_subtitle: true → the editor will auto-transcribe ALL dialog and add word-level karaoke subtitles AFTER your plan loads. USE THIS instead of writing caption texts yourself whenever the user wants subtitles/captions of the spoken dialog.
 
 PLANNING RULES:

@@ -346,7 +346,7 @@ export async function stageAssemble(item, videoUrls, cfg, deps, onProgress) {
     `Susun ${videos.length} clip ini JADI SATU video, PERTAHANKAN urutan clip persis seperti diberikan (jangan re-order, jangan drop).`,
     'Trim hanya jika ada dead-air jelas di awal/akhir clip; default pakai full durasi.',
     `JANGAN PERNAH memotong di tengah dialog — posisi dialog tiap clip: ${speechHint}. Trim hanya boleh di LUAR rentang dialog itu.`,
-    cfg.autoEdit.transitions ? 'Kasih transisi crossfade 0.4s antar clip.' : 'Transisi: cut polos antar clip.',
+    cfg.autoEdit.transitions ? 'Kasih transisi BERVARIASI antar clip sesuai mood (crossfade / blur / lightleak / dissolve / zoomin / fadeblack) — jangan pakai jenis yang sama dua kali berturut-turut, durasi 0.3-0.5s.' : 'Transisi: cut polos antar clip.',
     cfg.autoEdit.hook ? `Tambahkan SATU hook text (2-4 kata, bahasa ${cfg.lang}) di 0-2.5 detik pertama, posisi top, style tiktok — angkat dari inti naskah ini: "${item.naskah.slice(0, 200)}"` : 'Jangan tambahkan text overlay apapun.',
     cfg.targetDuration ? `Total durasi final harus sedekat mungkin dengan ${cfg.targetDuration} detik.` : '',
     'Jangan set auto_subtitle (subtitle ditangani sistem terpisah). Jangan tambah text selain yang diminta.',
@@ -370,13 +370,15 @@ export async function stageAssemble(item, videoUrls, cfg, deps, onProgress) {
   const baseClips = project.video_clips
     .filter((c) => (c.track_idx || 0) === 0)
     .sort((a, b) => (a.in_track || 0) - (b.in_track || 0))
-  // FORCE transitions — toggle ON means crossfade happens, PERIOD. The
+  // FORCE transitions — toggle ON means a transition happens, PERIOD. The
   // plan prompt asks Gemini nicely but the model sometimes returns "cut";
-  // deterministic override beats a polite request.
+  // deterministic override beats a polite request. Variety rotation so a
+  // lazy plan still doesn't look like the same fade 5x in a row.
   if (cfg.autoEdit.transitions) {
+    const VARIETY = ['crossfade', 'hblur', 'fadewhite', 'dissolve', 'zoomin']
     baseClips.forEach((c, i) => {
       if (i > 0 && (!c.transition_in || c.transition_in.type === 'cut')) {
-        c.transition_in = { type: 'crossfade', duration: 0.4 }
+        c.transition_in = { type: VARIETY[(i - 1) % VARIETY.length], duration: 0.4 }
       }
     })
   }
