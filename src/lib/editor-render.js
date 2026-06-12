@@ -62,6 +62,13 @@ export async function getFFmpeg(onLog) {
     ffmpegInstance = ff
     return ff
   })()
+  // CRITICAL: clear the cached promise on failure. A flaky network killing
+  // the 32MB core download used to poison the cache with a REJECTED promise
+  // — every later render then failed instantly until a full page reload.
+  ffmpegLoading = ffmpegLoading.catch((e) => {
+    ffmpegLoading = null
+    throw e
+  })
   return ffmpegLoading
 }
 
@@ -1140,8 +1147,13 @@ export async function renderProject(project, onProgress, opts = {}) {
     const blob = await renderWithFFmpeg(project, onProgress)
     return { blob, ext: 'mp4', mime: 'video/mp4' }
   } catch (e) {
-    console.warn('ffmpeg.wasm failed, fallback canvas:', e.message)
-    onProgress?.(`ffmpeg failed (${e.message.slice(0, 80)}) → canvas fallback...`)
+    // ffmpeg.wasm can reject with non-Error values (events, undefined) —
+    // e.message.slice() here used to crash the CATCH itself, so the canvas
+    // fallback never ran and assemble died with "Cannot read properties of
+    // undefined (reading 'slice')".
+    const msg = String(e?.message ?? e ?? 'unknown ffmpeg error')
+    console.warn('ffmpeg.wasm failed, fallback canvas:', msg)
+    onProgress?.(`ffmpeg failed (${msg.slice(0, 80)}) → canvas fallback...`)
     const blob = await renderWithCanvas(project, onProgress)
     const ext = extFromMime(blob.type)
     return { blob, ext, mime: blob.type || `video/${ext}` }
