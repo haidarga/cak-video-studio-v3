@@ -64,11 +64,13 @@ Output JSON ONLY:
   "notes": "1-2 kalimat Bahasa Indonesia: apa yang lu susun + kenapa"
 }`
 
+    // 8192 tokens — 2048 truncated mid-JSON on multi-clip plans (the
+    // "balik bukan JSON valid" error with a cut-off clips array).
     const built = await callLLMJSON({
       workspaceId: wsId,
       contents: [{ role: 'user', parts: [{ text: builder }] }],
-      temperature: 0.6,
-      maxOutputTokens: 2048,
+      temperature: 0.4,
+      maxOutputTokens: 8192,
     })
     const plan = built.parsed
     if (!plan || !Array.isArray(plan.clips) || plan.clips.length === 0) {
