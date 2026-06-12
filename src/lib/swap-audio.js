@@ -10,7 +10,7 @@
 // -c:v copy = video stream untouched (instant, zero quality loss). Only
 // the tiny audio track gets encoded (aac 256k 48kHz, TikTok/IG standard).
 
-import { getFFmpeg, fetchToUint8 } from './editor-render.js'
+import { getFFmpeg, fetchToUint8, purgeFFmpegFS } from './editor-render.js'
 
 // Extract a tiny speech-grade audio track from a video — for transcription.
 // Gemini inline caps at ~18MB and ad videos often exceed it, but speech
@@ -21,18 +21,23 @@ export async function extractAudioForTranscribe(videoUrl, onProgress) {
   const ff = await getFFmpeg((msg) => {
     if (msg.includes('time=')) onProgress?.('Extracting audio...')
   })
-  onProgress?.('Downloading source...')
-  await ff.writeFile('ta-in.mp4', await fetchToUint8(videoUrl))
-  await ff.exec([
-    '-i', 'ta-in.mp4',
-    '-vn', '-ac', '1', '-ar', '16000', '-b:a', '48k',
-    '-y', 'ta-out.mp3',
-  ])
-  const data = await ff.readFile('ta-out.mp3')
-  try { await ff.deleteFile('ta-in.mp4') } catch {}
-  try { await ff.deleteFile('ta-out.mp3') } catch {}
-  if (!data || data.length < 200) throw new Error('audio extract produced empty output')
-  return new Blob([data.buffer], { type: 'audio/mpeg' })
+  await purgeFFmpegFS() // clean slate — shared MEMFS heap (see editor-render)
+  try {
+    onProgress?.('Downloading source...')
+    await ff.writeFile('ta-in.mp4', await fetchToUint8(videoUrl))
+    await ff.exec([
+      '-i', 'ta-in.mp4',
+      '-vn', '-ac', '1', '-ar', '16000', '-b:a', '48k',
+      '-y', 'ta-out.mp3',
+    ])
+    const data = await ff.readFile('ta-out.mp3')
+    if (!data || data.length < 200) throw new Error('audio extract produced empty output')
+    return new Blob([data.buffer], { type: 'audio/mpeg' })
+  } finally {
+    // delete on FAILURE too — crashed extracts used to leave 20MB carcasses
+    try { await ff.deleteFile('ta-in.mp4') } catch {}
+    try { await ff.deleteFile('ta-out.mp3') } catch {}
+  }
 }
 
 export async function swapAudioInVideo(videoUrl, audioUrl, onProgress) {
@@ -40,6 +45,7 @@ export async function swapAudioInVideo(videoUrl, audioUrl, onProgress) {
   const ff = await getFFmpeg((msg) => {
     if (msg.includes('frame=') || msg.includes('time=')) onProgress?.('Muxing cloned voice...')
   })
+  await purgeFFmpegFS() // clean slate — shared MEMFS heap (see editor-render)
   onProgress?.('Downloading video...')
   await ff.writeFile('swap-in.mp4', await fetchToUint8(videoUrl))
   onProgress?.('Downloading cloned voice...')

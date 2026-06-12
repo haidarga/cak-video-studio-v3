@@ -48,7 +48,13 @@ export async function getFFmpeg(onLog) {
     const { FFmpeg } = await import('@ffmpeg/ffmpeg')
     const { toBlobURL } = await import('@ffmpeg/util')
     const ff = new FFmpeg()
-    if (onLog) ff.on('log', ({ message }) => onLog(message))
+    // Always collect a log tail (even with no caller onLog) — exec failures
+    // need the real ffmpeg stderr to be debuggable instead of "FS error".
+    ff.on('log', ({ message }) => {
+      _ffLogTail.push(message)
+      if (_ffLogTail.length > 40) _ffLogTail.shift()
+      onLog?.(message)
+    })
     // Self-hosted in /public/ffmpeg so we don't depend on the unpkg.com CDN.
     // Same-origin = no CORS, no third-party outage risk, much faster than
     // unpkg cold-cache fetches. ffmpeg.wasm still needs the WASM file
@@ -70,6 +76,27 @@ export async function getFFmpeg(onLog) {
     throw e
   })
   return ffmpegLoading
+}
+
+const _ffLogTail = []
+export function lastFFmpegLogs(n = 5) {
+  return _ffLogTail.slice(-n).join(' | ').slice(0, 400)
+}
+
+// Purge every regular file from ffmpeg.wasm's in-memory FS. The instance is
+// a SINGLETON and ops never used to clean up after themselves — each render
+// left all of its input/output MP4s in MEMFS, each crashed audio-extract
+// left a 20MB carcass. One factory run = heap exhaustion = "ErrnoError: FS
+// error" on every op after. Call at the START of every ffmpeg operation.
+export async function purgeFFmpegFS() {
+  const ff = ffmpegInstance
+  if (!ff) return
+  try {
+    const entries = await ff.listDir('/')
+    for (const e of entries) {
+      if (!e.isDir) { try { await ff.deleteFile('/' + e.name) } catch {} }
+    }
+  } catch { /* best-effort */ }
 }
 
 export async function fetchToUint8(url) {
@@ -543,6 +570,9 @@ export async function renderWithFFmpeg(project, onProgress) {
       if (m) onProgress?.(`Encoding frame ${m[1]}...`)
     }
   })
+  // Clean slate — leftovers from earlier ops (incl. crashed ones) eat the
+  // shared MEMFS heap and surface as "ErrnoError: FS error".
+  await purgeFFmpegFS()
 
   // Load all base + overlay videos
   let inputIdx = 0
@@ -641,10 +671,15 @@ export async function renderWithFFmpeg(project, onProgress) {
   )
 
   onProgress?.(`Encoding ${base.length} base + ${overlays.length} overlay clips...`)
-  await ff.exec(args)
+  const rc = await ff.exec(args)
+  if (rc !== 0) {
+    throw new Error(`ffmpeg exit ${rc}: ${lastFFmpegLogs()}`)
+  }
 
   onProgress?.('Reading output...')
   const data = await ff.readFile('output.mp4')
+  // Free MEMFS immediately — inputs + output for one render can be 100MB+.
+  await purgeFFmpegFS()
   return new Blob([data.buffer], { type: 'video/mp4' })
 }
 
