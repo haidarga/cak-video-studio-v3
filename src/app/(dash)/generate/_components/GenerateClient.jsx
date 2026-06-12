@@ -912,9 +912,43 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       // Storyboard i2v unchanged.
       // Refs can be character / product / object — note covers all.
       if (!isGrid && isRefVid && vidRefUrls.length > 0) {
-        finalMotion = `${motion}
+        // Structured per-image roles — upgrade of the old one-paragraph
+        // "Opsi A" note, which proved too weak: users still got (1) the
+        // model ANIMATING ref #1's background/location instead of building
+        // the brief's scene, (2) the product ref dropped entirely, (3)
+        // "no cuts" ignored. Same IMAGE ROLES pattern that fixed storyboard
+        // grid morph, applied to shots/direct r2v: name every image's job
+        // explicitly, then hard DO/DON'T rules, then the brief.
+        const roleLines = []
+        let imgIdx = 1
+        for (const r of filteredSelected) {
+          if (!r.fal_url) continue
+          if (r.kind === 'product') {
+            roleLines.push(`- Image ${imgIdx} = THE PRODUCT (${r.label || 'product'}). It MUST physically appear in the video with accurate shape, colors, ports and label text. If this image shows multiple angles, they are views of ONE single product — NEVER show the multi-angle sheet layout itself in the output.`)
+          } else {
+            roleLines.push(`- Image ${imgIdx} = character IDENTITY only (face, hair, body, skin tone${r.label ? ` — ${r.label}` : ''}). COMPLETELY IGNORE this image's background, room, location, pose, lighting and composition.`)
+          }
+          imgIdx++
+        }
+        for (const r of filteredStyle) {
+          if (!r.fal_url) continue
+          roleLines.push(`- Image ${imgIdx} = art style / visual tone reference only.`)
+          imgIdx++
+        }
+        for (let i = 0; i < continuationRefs.length; i++) {
+          roleLines.push(`- Image ${imgIdx} = final frame of the PREVIOUS segment — the first second of output should continue smoothly from it.`)
+          imgIdx++
+        }
+        finalMotion = `IMAGE ROLES:
+${roleLines.join('\n')}
 
-NOTE: Reference images are IDENTITY anchors only (character look, product/object appearance, art style — apapun yang muncul di refs). Render the SCENE and ACTION exactly as described in the brief above — do NOT replicate the reference pose, location, expression, or background. The brief is authoritative; refs only lock the visual identity of subjects shown in the brief.`
+HARD RULES:
+- Build the scene FRESH from the BRIEF below. DO NOT animate any reference image. DO NOT reuse any reference image's background, room, or location — the setting comes ONLY from the brief.
+- Every character and product listed above MUST appear in the video as described in the brief.${globalConfig.continuousShot ? `
+- SINGLE CONTINUOUS TAKE: one uninterrupted shot, ONE location, NO cuts, NO scene changes, NO camera switches, NO transitions, NO time jumps.` : ''}
+
+BRIEF:
+${motion}`
       }
       if (isGrid && isRefVid && shot.image?.url) {
         let cont = ''
