@@ -3,6 +3,11 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { uploadFile, uploadBlob } from '@/lib/upload-client'
 import { renderProject, totalDuration, clipDuration, activeBaseClipAt, activeOverlaysAt, wrapTextLines } from '@/lib/editor-render'
+// SPIKE: VideoFlow (WebCodecs) alternate render path. Opt-in via
+// localStorage.setItem('vf_render','1') in the browser console. Falls back to
+// ffmpeg automatically for projects using deferred features. Remove once the
+// migration is decided.
+import { renderProjectVF, vfCanRenderProject } from '@/lib/videoflow-render'
 import { FONT_OPTIONS, DEFAULT_FONT, getFontCss } from '@/lib/editor-fonts'
 import { proxify } from '@/lib/editor-proxy'
 import AudioWaveform from './AudioWaveform'
@@ -638,7 +643,17 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
     if (project.video_clips.length === 0) { setErr('Belum ada video clip'); return }
     setExporting(true); setExportProgress('Persiapan...'); setErr('')
     try {
-      const { blob, ext, mime } = await renderProject(project, setExportProgress, { mode })
+      // SPIKE: route to VideoFlow (WebCodecs) when opted in AND the project
+      // has no deferred features; otherwise the proven ffmpeg path.
+      let blob, ext, mime
+      const vfOptIn = typeof window !== 'undefined' && window.localStorage?.getItem('vf_render') === '1'
+      const vfCheck = vfOptIn ? vfCanRenderProject(project) : { ok: false, reasons: [] }
+      if (vfOptIn && vfCheck.ok) {
+        ;({ blob, ext, mime } = await renderProjectVF(project, setExportProgress, { mode }))
+      } else {
+        if (vfOptIn && !vfCheck.ok) setExportProgress(`VideoFlow skip (${vfCheck.reasons.join(', ')}) → ffmpeg...`)
+        ;({ blob, ext, mime } = await renderProject(project, setExportProgress, { mode }))
+      }
       setExportProgress(`Uploading ${(blob.size / 1024 / 1024).toFixed(1)}MB...`)
       const { url: publicUrl } = await uploadBlob(blob, `editor-${Date.now()}.${ext}`, 'editor-export')
       const { error: insErr } = await supabase.from('results').insert({
