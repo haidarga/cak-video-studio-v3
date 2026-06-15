@@ -304,6 +304,12 @@ export function buildImgInput(imgModel, { prompt, refUrls = [], ar = '9:16' }) {
   return { prompt, ...(refs.length ? { image_url: refs[0] } : {}), image_size, quality: 'medium' }
 }
 
+// Happy Horse anti-morph stability clause (Generate/F-Creator copy — kept
+// local to this surface, not imported from god-mode-builders, to keep the two
+// surfaces independent). HH has no negative_prompt field so we steer via the
+// positive prompt: pin identity + style, forbid morphing/drift.
+const HH_STABILITY = ' Keep ONE consistent visual style and identical subject appearance — same face, proportions, outfit and color palette across every frame. Smooth, coherent, physically stable motion. NO morphing, NO warping, NO melting, NO style drift, NO shape-shifting, NO flicker, NO identity change.'
+
 // ── Video input builder, ported from v2's src/lib/api.js ──
 export function buildVidInput(vidModel, { prompt, image_url, reference_urls, duration, aspect_ratio }) {
   const isRef = vidModel.includes('reference-to-video')
@@ -318,7 +324,7 @@ export function buildVidInput(vidModel, { prompt, image_url, reference_urls, dur
       return { prompt, duration: String(Math.max(4, Math.min(15, d))), resolution: '720p', aspect_ratio, generate_audio: true }
     }
     if (vidModel.includes('happy-horse')) {
-      return { prompt, duration: Math.max(3, Math.min(15, d)), aspect_ratio, resolution: '720p' }
+      return { prompt: prompt + HH_STABILITY, duration: Math.max(3, Math.min(15, d)), aspect_ratio, resolution: '720p', enable_safety_checker: false }
     }
     if (vidModel.includes('grok-imagine')) {
       return { prompt, duration: Math.max(5, Math.min(10, d)), resolution: '720p', aspect_ratio: aspect_ratio || 'auto' }
@@ -356,7 +362,7 @@ export function buildVidInput(vidModel, { prompt, image_url, reference_urls, dur
   }
   if (vidModel.includes('happy-horse')) {
     const srcField = isRef ? { image_urls: (reference_urls || []).filter(Boolean).slice(0, 9) } : { image_url }
-    return { prompt, ...srcField, duration: parseInt(duration) || 5, aspect_ratio, resolution: '720p' }
+    return { prompt: prompt + HH_STABILITY, ...srcField, duration: parseInt(duration) || 5, aspect_ratio, resolution: '720p', enable_safety_checker: false }
   }
   if (vidModel.includes('grok-imagine')) {
     // xAI Grok Imagine Video — TWO variants with DIFFERENT input schemas:

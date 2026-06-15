@@ -9,6 +9,12 @@
 
 import { canonicalFalPath, candidateFalPaths } from '@/lib/fal-paths'
 
+// Happy Horse tends to MORPH/drift the subject across frames and wander in
+// style. fal's HH endpoint has NO negative_prompt field, so we steer stability
+// through the POSITIVE prompt: a compact clause appended to every HH gen that
+// pins identity + style. Shared by God Mode + F Creator (both use this builder).
+export const HAPPYHORSE_STABILITY = ' Keep ONE consistent visual style and identical subject appearance — same face, proportions, outfit and color palette across every frame. Smooth, coherent, physically stable motion. NO morphing, NO warping, NO melting, NO style drift, NO shape-shifting, NO flicker, NO identity change.'
+
 // LTX-2.3 anti-artifact negative prompt. Starts from fal's tuned default
 // quality list, then ADDS the temporal + identity failure modes LTX is prone
 // to once things start MOVING: face morphing, character drift between frames,
@@ -126,13 +132,16 @@ export function buildVideoInputForModel(model, { motion_prompt, image_url, image
   }
 
   if (model.includes('happy-horse')) {
+    // enable_safety_checker:false — user-requested bypass (NSFW false-positives
+    // block legit ad content). + anti-morph stability clause on the prompt.
+    const hhPrompt = motion_prompt + HAPPYHORSE_STABILITY
     if (isI2V) {
-      return { prompt: motion_prompt, image_url: image_url || refsArr[0], duration: parseInt(dur), aspect_ratio: ar, resolution: '720p' }
+      return { prompt: hhPrompt, image_url: image_url || refsArr[0], duration: parseInt(dur), aspect_ratio: ar, resolution: '720p', enable_safety_checker: false }
     }
     if (isR2V) {
-      return { prompt: motion_prompt, image_urls: refsArr.slice(0, 9), duration: parseInt(dur), aspect_ratio: ar, resolution: '720p' }
+      return { prompt: hhPrompt, image_urls: refsArr.slice(0, 9), duration: parseInt(dur), aspect_ratio: ar, resolution: '720p', enable_safety_checker: false }
     }
-    return { prompt: motion_prompt, duration: parseInt(dur), aspect_ratio: ar, resolution: '720p' }
+    return { prompt: hhPrompt, duration: parseInt(dur), aspect_ratio: ar, resolution: '720p', enable_safety_checker: false }
   }
 
   if (model.includes('grok-imagine')) {

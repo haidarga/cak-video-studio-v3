@@ -2101,44 +2101,60 @@ export async function POST(req) {
     req,
   }
 
-  // ── LTX FAST-PATH (skip Gemini entirely) ──────────────────────────────
-  // When the user explicitly says "ltx", there's nothing for the agent to
-  // decide — LTX is always a pure text-to-video gen. So we bypass the LLM
-  // round-trip (cost + latency) and submit the raw command straight to fal
-  // LTX via the existing gen_video handler. ONLY triggers on an explicit
-  // "ltx" token in the LATEST user message; every other request falls
-  // through to the normal Gemini flow below, untouched.
-  if (/\bltx\b/i.test(lastUserText)) {
-    // Duration: honor "8 detik" / "10s" if the user said one, else config/default.
-    const durMatch = lastUserText.match(/(\d+)\s*(?:detik|dtk|sec(?:ond)?s?|s)\b/i)
-    const ltxDuration = durMatch ? parseInt(durMatch[1]) : (parseInt(ctx.activeConfig?.duration) || 5)
-    // Clean prompt: strip the "ltx" trigger (+ "pake/pakai" lead-in) and the
-    // duration phrase so they don't pollute the motion prompt. Rest verbatim.
-    let ltxPrompt = lastUserText
-      .replace(/\b(?:pa(?:ke|kai))\s+ltx\b/gi, '')
-      .replace(/\bltx\b/gi, '')
-    if (durMatch) ltxPrompt = ltxPrompt.replace(durMatch[0], '')
-    ltxPrompt = ltxPrompt.replace(/[,\s]{2,}/g, ' ').replace(/^[,\s]+|[,\s]+$/g, '').trim() || lastUserText
-    try {
-      const toolResult = await TOOLS.gen_video.handler({
-        motion_prompt: ltxPrompt,
-        duration: ltxDuration,
-        model: 'fal-ai/ltx-2.3-quality/text-to-video',
-        ar: ctx.activeConfig?.ar,
-      }, ctx)
-      return NextResponse.json({
-        ok: true,
-        text: `🚀 LTX direct — skip Gemini, langsung gen ${ltxDuration}s (audio, safety checker off).`,
-        tool: 'gen_video',
-        tool_result: toolResult,
-      })
-    } catch (e) {
-      return NextResponse.json({
-        ok: true,
-        text: '❌ LTX direct gagal: ' + (e?.message || String(e)),
-        tool: 'gen_video',
-        tool_result: { type: 'error', error: e?.message || String(e) },
-      })
+  // ── DIRECT-TO-FAL FAST-PATH (skip Gemini entirely) ────────────────────
+  // Trigger when the user NAMES a model to go direct with ("ltx", "happy
+  // horse") OR explicitly asks to bypass ("langsung ke fal", "direct fal",
+  // "tanpa gemini"). There's nothing for the agent to decide — submit the raw
+  // command straight to fal via gen_video. Every other request falls through
+  // to the normal Gemini flow below, untouched.
+  {
+    const lt = lastUserText.toLowerCase()
+    const wantsLtx = /\bltx\b/.test(lt)
+    const wantsHH = /happy[\s-]?horse/.test(lt)
+    const wantsDirect = /(langsung|direct|bypass|tanpa gemini|skip gemini)/.test(lt) && /\bfal\b|fal\.?ai/.test(lt)
+    if (wantsLtx || wantsHH || wantsDirect) {
+      const durMatch = lastUserText.match(/(\d+)\s*(?:detik|dtk|sec(?:ond)?s?|s)\b/i)
+      const directDur = durMatch ? parseInt(durMatch[1]) : (parseInt(ctx.activeConfig?.duration) || 5)
+      const hasImg = (ctx.recentAttachments || []).some((a) => a.type === 'image' && a.url)
+      // Pick the model: explicit name wins; else honor the config bar; else HH t2v.
+      let directModel, modelLabel
+      if (wantsLtx) { directModel = 'fal-ai/ltx-2.3-quality/text-to-video'; modelLabel = 'LTX' }
+      else if (wantsHH) {
+        directModel = hasImg ? 'alibaba/happy-horse/image-to-video' : 'alibaba/happy-horse/text-to-video'
+        modelLabel = 'Happy Horse'
+      } else {
+        directModel = ctx.activeConfig?.video_model || 'alibaba/happy-horse/text-to-video'
+        modelLabel = (directModel.split('/')[1] || 'fal')
+      }
+      // Clean the prompt: strip model names + bypass phrases + duration so they
+      // don't pollute the motion prompt. Rest verbatim.
+      let directPrompt = lastUserText
+        .replace(/\b(?:pa(?:ke|kai))\s+(?:ltx|happy[\s-]?horse)\b/gi, '')
+        .replace(/\bltx\b/gi, '').replace(/happy[\s-]?horse/gi, '')
+        .replace(/(langsung|direct|bypass|tanpa gemini|skip gemini)\s*(ke\s*)?(fal\.?ai?)?/gi, '')
+      if (durMatch) directPrompt = directPrompt.replace(durMatch[0], '')
+      directPrompt = directPrompt.replace(/[,\s]{2,}/g, ' ').replace(/^[,\s]+|[,\s]+$/g, '').trim() || lastUserText
+      try {
+        const toolResult = await TOOLS.gen_video.handler({
+          motion_prompt: directPrompt,
+          duration: directDur,
+          model: directModel,
+          ar: ctx.activeConfig?.ar,
+        }, ctx)
+        return NextResponse.json({
+          ok: true,
+          text: `🚀 Direct ${modelLabel} — skip Gemini, langsung gen ${directDur}s (safety checker off).`,
+          tool: 'gen_video',
+          tool_result: toolResult,
+        })
+      } catch (e) {
+        return NextResponse.json({
+          ok: true,
+          text: '❌ Direct gen gagal: ' + (e?.message || String(e)),
+          tool: 'gen_video',
+          tool_result: { type: 'error', error: e?.message || String(e) },
+        })
+      }
     }
   }
 
