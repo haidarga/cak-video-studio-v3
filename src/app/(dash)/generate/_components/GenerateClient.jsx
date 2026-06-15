@@ -1411,6 +1411,10 @@ PRODUCT FIDELITY (critical): the product is a RIGID manufactured object — its 
           </button>
           {cfgOpen && (
             <div className="mt-2.5 grid grid-cols-2 gap-2">
+              <div className="col-span-2">
+                <Sel label="Camera Preset" value={globalConfig.cameraPreset} onChange={(v) => setOverride({ cameraPreset: v })}
+                  groups={groupCameraPresets(userCameraPresets)} />
+              </div>
               <Sel label="Mode" value={globalConfig.mode} onChange={(v) => setOverride({ mode: v })}
                 options={[['shots', '🎬 Per-Shot'], ['storyboard', '🗂 Storyboard'], ['direct', '🎯 Direct Video']]} />
               <Sel label="Aspect Ratio" value={globalConfig.ar} onChange={(v) => setOverride({ ar: v })}
@@ -2692,6 +2696,19 @@ function groupVideoModels(models) {
     ['🎭 Produk/wajah konsisten (multi-ref)', b.r2v],
     ['📝 Dari teks aja (tanpa gambar)', b.t2v],
   ].filter(([, list]) => list.length)
+}
+
+// Group camera presets (built-in + workspace custom) by category for a plain
+// <optgroup> Sel — used in the per-persona config strip (no CRUD, just pick).
+function groupCameraPresets(userPresets = []) {
+  const byCat = {}
+  for (const p of listAllPresets(userPresets)) {
+    const cat = p.category || (p._builtin ? 'cinema' : 'custom')
+    ;(byCat[cat] ||= []).push([p.id, `${p._builtin ? '⚙️ ' : '👤 '}${p.label}`])
+  }
+  return ['phone', 'cinema', 'animation', 'social', 'custom']
+    .filter((c) => byCat[c]?.length)
+    .map((c) => [`${c.toUpperCase()} (${byCat[c].length})`, byCat[c]])
 }
 
 // Compact chip toggle — used for Output Constraints (4 in a row).
