@@ -53,6 +53,36 @@ function pxToEm(px, width) {
   return Math.max(0.5, (px || 48) / (width / 100))
 }
 
+// Glow recipe for subtitles/text. ffmpeg path couldn't draw glow (preview-only);
+// VideoFlow can via textShadow + stroke. blur/width are in em relative to the
+// layer's own font-size, so they scale with the text. Black stroke keeps text
+// legible over busy footage; the colored shadow is the actual "glow".
+const GLOW = {
+  shadowColor: '#4ade80', // neon green glow (matches the 'neon' TEXT_STYLE)
+  shadowBlur: 0.45,       // em — fat, soft halo
+  strokeColor: '#000000',
+  strokeWidth: 0.07,      // em — thin dark outline for separation
+}
+function applyGlow(props, color) {
+  props.textShadow = true
+  // Glow in the text's own colour when it's non-white (cohesive), else neon green.
+  props.textShadowColor = (color && color.toLowerCase() !== '#ffffff') ? color : GLOW.shadowColor
+  props.textShadowBlur = GLOW.shadowBlur
+  props.textShadowOffset = [0, 0] // even halo, not a drop shadow
+  props.textStroke = true
+  props.textStrokeColor = GLOW.strokeColor
+  props.textStrokeWidth = GLOW.strokeWidth
+  return props
+}
+
+// A text clip is a SUBTITLE (auto-subtitle / karaoke) when it carries word
+// timings or the karaoke animation. These get folded into a single
+// CaptionsLayer (one caption visible at a time → no overlap). Everything else
+// (hooks, CTAs, manual overlays) stays an individual text layer.
+function isSubtitleClip(tx) {
+  return tx.animation === 'karaoke' || (Array.isArray(tx.words) && tx.words.length > 0)
+}
+
 // Build a VideoFlow instance from our project model. Pure data → builder; the
 // caller compiles + renders. Dynamic import keeps @videoflow/core out of the
 // server bundle (this only ever runs in the browser for now).
@@ -143,14 +173,50 @@ export async function buildVideoFlow(project) {
     )
   }
 
-  // ── Text overlays ── (karaoke word-fill deferred → plain timed text)
-  for (const tx of (project.text_clips || [])) {
+  // ── Subtitles → ONE CaptionsLayer (fixes the 24-overlapping-clips bug) ──
+  // CaptionsLayer shows the active caption at each frame, so only one phrase is
+  // ever on screen. We sort by time and CLAMP each end to the next start so two
+  // captions can never overlap even if the source timings did. Glowing style.
+  const allText = project.text_clips || []
+  const subs = allText.filter(isSubtitleClip)
+    .map((tx) => ({ caption: (tx.text || '').trim(), startTime: Number(tx.start) || 0, endTime: Number(tx.end) || ((Number(tx.start) || 0) + 1), color: tx.color, size: tx.size }))
+    .filter((c) => c.caption)
+    .sort((a, b) => a.startTime - b.startTime)
+  // No-overlap clamp: each caption ends at most when the next begins.
+  for (let i = 0; i < subs.length - 1; i++) {
+    if (subs[i].endTime > subs[i + 1].startTime) subs[i].endTime = subs[i + 1].startTime
+  }
+  if (subs.length) {
+    const subColor = subs[0].color || '#ffffff'
+    const capProps = {
+      fontSize: pxToEm(subs[0].size || 54, width),
+      color: subColor,
+      fontWeight: 900,
+      textAlign: 'center',
+      position: [0.5, 0.82], // lower-third, centered
+    }
+    applyGlow(capProps, subColor)
+    $.addCaptions(
+      capProps,
+      {
+        startTime: 0,
+        sourceDuration: Math.max(0.5, totalDur),
+        captions: subs.map(({ caption, startTime, endTime }) => ({ caption, startTime, endTime: Math.max(startTime + 0.2, endTime) })),
+        maxLines: 2,
+      },
+      { waitFor: 0, index: 50 },
+    )
+  }
+
+  // ── Non-subtitle text overlays (hooks, CTAs, manual) → individual layers ──
+  for (const tx of allText.filter((t) => !isSubtitleClip(t))) {
     const start = Number(tx.start) || 0
     const end = Number(tx.end) || (start + 1)
+    const color = tx.color || '#ffffff'
     const props = {
       text: tx.text || '',
       fontSize: pxToEm(tx.size, width),
-      color: tx.color || '#ffffff',
+      color,
       fontWeight: tx.weight || 700,
       textAlign: tx.align || 'center',
       position: [(tx.x_pct ?? 50) / 100, (tx.y_pct ?? 88) / 100],
@@ -158,12 +224,15 @@ export async function buildVideoFlow(project) {
     if (tx.bg && tx.bg !== 'transparent') {
       props.backgroundColor = tx.bg
       props.padding = 0.3 // em, relative to the text's own font-size
+    } else {
+      // No box → give it glow so it stays readable + matches the subtitle look.
+      applyGlow(props, color)
     }
     const settings = { startTime: start, sourceDuration: Math.max(0.3, end - start) }
-    if (tx.animation === 'fade' || tx.animation === 'pop' || tx.animation === 'karaoke') {
+    if (tx.animation === 'fade' || tx.animation === 'pop') {
       settings.transitionIn = { transition: 'fade', duration: 0.25 }
     }
-    $.addText(props, settings, { waitFor: 0, index: 50 })
+    $.addText(props, settings, { waitFor: 0, index: 51 })
   }
 
   // ── BGM (first audio_clip only, matching editor-render) ── ducking deferred
@@ -207,8 +276,8 @@ export function vfCanRenderProject(project) {
     if (c.speed_in != null || c.speed_out != null) reasons.push('speed-ramp')
     if (c.use_cloned_voice && (project.audio_clips || [])[0]) reasons.push('bgm-duck')
   }
-  for (const tx of (project.text_clips || [])) {
-    if (tx.animation === 'karaoke' && Array.isArray(tx.words) && tx.words.length) reasons.push('karaoke-word-fill')
-  }
+  // NOTE: karaoke/subtitles are now handled via CaptionsLayer (phase 2) — no
+  // longer a blocker. Only true per-word HIGHLIGHT fill remains unsupported,
+  // and we render those as clean one-at-a-time glowing captions instead.
   return { ok: reasons.length === 0, reasons: [...new Set(reasons)] }
 }
