@@ -1265,7 +1265,7 @@ PRODUCT FIDELITY (critical): the product is a RIGID manufactured object — its 
         continuity_fallback: extractFailed,
         continued_from: prev.id,
       }
-      onPatch({ shots: [...state.shots, newShot] })
+      onPatch((s) => ({ shots: [...s.shots, newShot] }))
       patchShot(idx, { continuing: null })
       console.log('[Continue] new shot appended:', newShot.id)
     } catch (e) {
