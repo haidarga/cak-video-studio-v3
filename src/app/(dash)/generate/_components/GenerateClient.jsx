@@ -1416,6 +1416,10 @@ PRODUCT FIDELITY (critical): the product is a RIGID manufactured object — its 
               <Sel label="Aspect Ratio" value={globalConfig.ar} onChange={(v) => setOverride({ ar: v })}
                 options={[['9:16', '9:16 vertical'], ['16:9', '16:9 horizontal'], ['1:1', '1:1 square']]} />
               <div className="col-span-2">
+                <Sel label="Image Model" value={globalConfig.imgModel} onChange={(v) => setOverride({ imgModel: v })}
+                  options={IMAGE_MODELS.map((m) => [m.v, m.l])} />
+              </div>
+              <div className="col-span-2">
                 <Sel label="Video Model" value={globalConfig.vidModel} onChange={(v) => setOverride({ vidModel: v })}
                   groups={groupVideoModels(VIDEO_MODELS)} />
               </div>
