@@ -147,6 +147,34 @@ export function buildVideoInputForModel(model, { motion_prompt, image_url, image
     return { prompt: motion_prompt, ...(image_url ? { image_url } : {}), duration: parseInt(dur), aspect_ratio: ar }
   }
 
+  // LTX-2.3 (fal-ai/ltx-2.3-quality/*) — high-quality video WITH native audio.
+  // FRAME-based, not duration-based: the schema takes num_frames (must be 8n+1,
+  // default 121 ≈ 5s @24fps) + frames_per_second, NOT a `duration` field.
+  // resolution is a fal ImageSize enum (portrait_16_9 / landscape_16_9 / square_hd).
+  // enable_safety_checker is forced OFF — xAI-style NSFW false-positives block
+  // legit ad content, and the user explicitly wants it disabled (only possible
+  // via API; the playground can't turn it off).
+  if (model.includes('ltx')) {
+    const fps = 24
+    const secs = Math.max(3, Math.min(15, parseInt(dur) || 5))
+    const num_frames = Math.round((secs * fps) / 8) * 8 + 1 // snap to 8n+1
+    const resMap = { '9:16': 'portrait_16_9', '16:9': 'landscape_16_9', '1:1': 'square_hd' }
+    const base = {
+      prompt: motion_prompt,
+      num_frames,
+      frames_per_second: fps,
+      resolution: resMap[ar] || 'portrait_16_9',
+      generate_audio: true,
+      enable_safety_checker: false,
+      video_quality: 'high',
+    }
+    // LTX has i2v/r2v variants too — pass the source image(s) when present so
+    // this builder stays correct if those endpoints get wired later.
+    if (isI2V && (image_url || refsArr[0])) base.image_url = image_url || refsArr[0]
+    if (isR2V && refsArr.length) base.image_urls = refsArr.slice(0, 6)
+    return base
+  }
+
   // Generic fallback — pick shape by variant if detectable, else send both.
   if (isI2V) {
     return { prompt: motion_prompt, image_url: image_url || refsArr[0], duration: parseInt(dur), aspect_ratio: ar }

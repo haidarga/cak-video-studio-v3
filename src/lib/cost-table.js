@@ -28,6 +28,10 @@ export const VIDEO_COSTS_PER_SECOND = {
   'fal-ai/kling-video/v3/standard/text-to-video': 0.13, // $0.084 audio off / $0.126 audio on
   'alibaba/happy-horse/text-to-video': 0.14,           // 720p; 1080p $0.28/s
   'bytedance/seedance-2.0/text-to-video': 0.31,        // 720p $0.3034/s; 1080p $0.682/s
+  // LTX-2.3 — priced per megapixel ($0.0024075/MP of W×H×frames). At 720p ≈
+  // $0.054/s, at 576p ≈ $0.034/s. Estimate is conservative (budget gate uses
+  // default 5s since LTX input has no `duration` field, only num_frames).
+  'fal-ai/ltx-2.3-quality/text-to-video': 0.06,
   // Video EDIT models (per second of OUTPUT; input charged too on some)
   'xai/grok-imagine-video/edit-video': 0.08,           // 720p $0.07 out + $0.01 in
   'xai/grok-imagine-video/extend-video': 0.08,         // same pricing as edit-video

@@ -2008,6 +2008,7 @@ SMART MODEL ROUTER (pick the BEST video model for the task — mention pilihan +
   * Cinematic multi-shot scene from text → 'fal-ai/kling-video/v3/standard/text-to-video' (audio, multi-shot).
   * Native-audio 1080p text video → 'alibaba/happy-horse/text-to-video'.
   * Premium photoreal hero shot from text → 'bytedance/seedance-2.0/text-to-video' (~$0.30/dtk — ONLY when user signals "paling bagus"/"final"/"hero", it's pricey).
+  * High-quality text video WITH native audio (safety checker OFF) → 'fal-ai/ltx-2.3-quality/text-to-video' (LTX-2.3, ~$0.06/dtk, photoreal + audio). Pakai kalau user nyebut "LTX", minta "kualitas tinggi + ada suara", atau konten yang sering kena false-positive safety checker. Text-to-video only (no i2v/r2v wired).
   * Best i2v quality → 'fal-ai/kling-video/v3/pro/image-to-video'.
   * Strong identity fidelity r2v → 'bytedance/seedance-2.0/fast/reference-to-video'.
 - Budget words ("murah", "hemat", "draft", "iterasi") → Grok. Quality words ("paling bagus", "final", "buat posting") → Kling Pro / Seedance 2.
