@@ -280,9 +280,19 @@ export function compileVideoPrompt(spec) {
     ar = '9:16',
     refsCount = 0,
     noText = false,
+    camera = null,
+    userPresets = [],
   } = spec
 
   const lines = []
+  // Camera preset L1 tokens FIRST (highest priority). CRITICAL for Direct Video
+  // mode: there's no image step to carry the visual style, so a 2D / animation /
+  // stylized preset is ONLY honored if its tokens ride in the video prompt —
+  // without this the model defaults to photoreal 3D and ignores the preset.
+  if (camera) {
+    const cam = getCameraPreset(camera, userPresets)
+    if (cam?.tokens?.length) lines.push(`${cam.tokens.join(', ')}.`)
+  }
   if (identity) lines.push(`Subject: ${identity}.`)
   if (wardrobe) lines.push(`Wardrobe: ${wardrobe}.`)
   if (environment) lines.push(`Setting: ${environment}.`)
