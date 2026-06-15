@@ -192,9 +192,9 @@ export function buildVideoInputForModel(model, { motion_prompt, image_url, image
       // LTX is priced PER MEGAPIXEL (W×H×frames), INDEPENDENT of steps/quality.
       // So maxing the quality levers costs $0 extra — only adds gen time. Free
       // quality, so we take it: this is the anti-artifact/morph/drift recipe.
-      num_inference_steps: 30, // schema max — more denoise passes = cleaner detail, less smear
+      num_inference_steps: 30, // schema MAX — most denoise passes = cleanest detail, least smear
       guidance_scale: 1,       // LTX distilled WANTS low CFG; raising it ADDS artifacts, not fewer
-      video_quality: 'high',   // tuned default of the /quality endpoint (bump to 'maximum' for hero shots)
+      video_quality: 'maximum', // top of the enum (low|medium|high|maximum) — fal's "Quality" preset equivalent
       video_write_mode: 'balanced', // not 'small' — small re-compresses harder = mushier output
     }
     // LTX has i2v/r2v variants too — pass the source image(s) when present so
