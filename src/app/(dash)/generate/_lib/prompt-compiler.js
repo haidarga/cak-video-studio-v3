@@ -194,6 +194,7 @@ export function compileImagePrompt(spec) {
     brand = null,
     ar = '9:16',
     skipProduct = false,
+    skipOnscreen = false,
     continuousShot = false,
     refsCount = 0,
     styleRefsCount = 0,
@@ -235,7 +236,11 @@ export function compileImagePrompt(spec) {
     ? `STYLE REFERENCE: the last ${styleN === 1 ? 'image is a style reference' : `${styleN} images are style references`} â€” match their color palette, lighting, rendering style, and overall aesthetic. Do NOT copy characters, faces, or specific objects from them. Use them ONLY as visual mood/style guide.`
     : ''
   const L9_quality = pickQuality(cam, 'image', skipProduct)
-  const L10_negatives = cam.negatives?.length ? `Avoid: ${cam.negatives.join(', ')}.` : ''
+  // Anti-text terms appended when "No text" is on — stops the FIRST FRAME from
+  // carrying gibberish text/signage that image-to-video would then animate.
+  const negTerms = cam.negatives?.length ? cam.negatives.slice() : []
+  if (skipOnscreen) negTerms.push('on-screen text', 'captions', 'subtitles', 'watermark', 'logos', 'letters', 'written words', 'gibberish text', 'signage')
+  const L10_negatives = negTerms.length ? `Avoid: ${negTerms.join(', ')}.` : ''
 
   // L11 â€” trailing imperative for edit endpoints (recency bias).
   const L11_edit_commands = wardrobe
@@ -274,6 +279,7 @@ export function compileVideoPrompt(spec) {
     wardrobe = null,
     ar = '9:16',
     refsCount = 0,
+    noText = false,
   } = spec
 
   const lines = []
@@ -283,6 +289,10 @@ export function compileVideoPrompt(spec) {
   if (action) lines.push(action)
   lines.push(`${ar} composition.`)
   if (refsCount) lines.push('Keep character identity consistent with references.')
+  // Actively forbid hallucinated on-screen text. AI video models love to render
+  // gibberish captions/signage/watermarks; "No text" must FORBID it, not just
+  // omit a text instruction — that's why text kept showing up.
+  if (noText) lines.push('Absolutely no on-screen text, captions, subtitles, watermarks, logos, letters, numbers, or any written words anywhere in the frame.')
   return lines.filter(Boolean).join('\n')
 }
 
