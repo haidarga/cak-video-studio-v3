@@ -286,7 +286,7 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
                   })
                   setGlobalConfig({ ...globalConfig, vidModel: v })
                 }}
-                options={VIDEO_MODELS.map((m) => [m.v, m.l])} />
+                groups={groupVideoModels(VIDEO_MODELS)} />
             </div>
           )}
         </div>
@@ -2573,16 +2573,45 @@ function PresetEditorModal({ preset, onChange, err, busy, workspaceId, onCancel,
   )
 }
 
-function Sel({ label, value, onChange, options }) {
+// Sel — flat list via `options`, OR grouped via `groups` ([label, [[v,l]...]]).
+// Grouped mode renders <optgroup>s so long lists (e.g. 16 video models) read
+// by category instead of one puyeng wall of entries.
+function Sel({ label, value, onChange, options, groups }) {
   return (
     <div>
       <label className="block text-[10px] uppercase text-[var(--muted)] tracking-wider font-semibold mb-1.5">{label}</label>
       <select value={value} onChange={(e) => onChange(e.target.value)}
         className="w-full text-sm px-3 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)]">
-        {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        {groups
+          ? groups.map(([g, list]) => (
+              <optgroup key={g} label={g}>
+                {list.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </optgroup>
+            ))
+          : options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
       </select>
     </div>
   )
+}
+
+// Group video models by INPUT TYPE — the actual question a creator asks
+// ("apa yang gua punya?"): 1 gambar → i2v, produk/wajah harus konsisten →
+// r2v (multi-ref), gak ada gambar → t2v. Derived from VIDEO_MODELS so it
+// stays in sync automatically; leading emoji stripped (the group header
+// already carries it).
+function groupVideoModels(models) {
+  const b = { i2v: [], r2v: [], t2v: [] }
+  for (const m of models) {
+    const entry = [m.v, m.l.replace(/^[^A-Za-z0-9]+/, '')]
+    if (/reference-to-video|ref-to-video/.test(m.v)) b.r2v.push(entry)
+    else if (/text-to-video/.test(m.v)) b.t2v.push(entry)
+    else b.i2v.push(entry)
+  }
+  return [
+    ['🖼️ Dari 1 gambar (image → video)', b.i2v],
+    ['🎭 Produk/wajah konsisten (multi-ref)', b.r2v],
+    ['📝 Dari teks aja (tanpa gambar)', b.t2v],
+  ].filter(([, list]) => list.length)
 }
 
 // Compact chip toggle — used for Output Constraints (4 in a row).
