@@ -18,8 +18,22 @@
 // (<video>/<img>/<audio>) get the raw URL — playback never needed CORS,
 // and canvas capture works because the hosts send ACAO.
 
+// The old r2.dev public host is rate-limited, doesn't reliably send CORS, and
+// serves files as octet-stream (→ browser DOWNLOADS instead of plays). Our free
+// Cloudflare Worker serves the SAME bucket+keys with ACAO:* + correct
+// Content-Type. Rewrite the host on the way out so BOTH already-stored (old DB)
+// URLs and freshly-generated ones route through the Worker — no re-generation,
+// no dependency on the R2_PUBLIC_URL env having propagated yet.
+const OLD_R2_HOST = 'pub-b9676bf1c1f748b4bf99a4bb0f29e3b8.r2.dev'
+const WORKER_HOST = 'cak-media.yellowbrio.workers.dev'
+
+export function mediaUrl(url) {
+  if (!url || typeof url !== 'string') return url
+  return url.replace(OLD_R2_HOST, WORKER_HOST)
+}
+
 export function proxify(url) {
-  return url
+  return mediaUrl(url)
 }
 
 // Explicit proxy-wrapping for the rare host that doesn't send CORS headers.

@@ -14,7 +14,7 @@
 // Two backends: ffmpeg.wasm (MP4, full features) or canvas+MediaRecorder (WebM fallback).
 
 import { getFontCss } from './editor-fonts.js'
-import { proxify, proxyUrl } from './editor-proxy.js'
+import { proxify, proxyUrl, mediaUrl } from './editor-proxy.js'
 
 let ffmpegInstance = null
 let ffmpegLoading = null
@@ -100,6 +100,10 @@ export async function purgeFFmpegFS() {
 }
 
 export async function fetchToUint8(url) {
+  // Route old r2.dev URLs through the Worker (CORS + correct type). Without
+  // this the direct fetch CORS-fails and falls back to the Vercel proxy →
+  // egress → the exact thing that paused the account.
+  url = mediaUrl(url)
   // Direct fetch first — fal.media + R2 send CORS headers, so this works
   // and the bytes DON'T flow through Vercel (origin transfer = $$).
   // /api/proxy is the fallback for the rare host without CORS.
