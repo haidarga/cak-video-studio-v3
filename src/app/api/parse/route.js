@@ -5,7 +5,7 @@ import { callGeminiJSON } from '@/lib/gemini-server'
 import { getActiveWorkspace } from '@/lib/workspace'
 
 export async function POST(req) {
-  const { naskah, lang = 'Indonesian', mode = 'shots', ar = '9:16', refLabels = [], brand = null, constraints = {}, shotCount = null } = await req.json()
+  const { naskah, lang = 'Indonesian', mode = 'shots', ar = '9:16', refLabels = [], brand = null, constraints = {}, shotCount = null, continuation = null } = await req.json()
   if (!naskah?.trim()) return NextResponse.json({ ok: false, error: 'naskah kosong' }, { status: 400 })
 
   const supabase = await createClient()
@@ -38,6 +38,14 @@ export async function POST(req) {
   const shotTypes = constraints.skipProduct
     ? 'Close Up|Medium Shot|Wide Shot'
     : 'Close Up|Medium Shot|Wide Shot|Product Shot'
+
+  // Continuation mode — the caller ("Continue shot/storyboard") passes the FULL
+  // naskah + a summary of beats already produced + the model's max clip length.
+  // The LLM returns ONLY the next segment, capped to the model duration, so a
+  // long script unrolls into a continuous chain of shots.
+  const continuationBlock = continuation
+    ? `\n\nCONTINUATION MODE — the Script below is the FULL story. These beats have ALREADY been produced as earlier shots:\n${continuation.coveredSummary || '(nothing yet — this is the opening)'}\n\nProduce ONLY the NEXT segment that picks up immediately AFTER the covered beats and moves the story FORWARD. Do NOT repeat covered beats. Do NOT restart from the beginning. ${isStory ? 'Output a storyboard for just this next segment (fewer than 9 panels is fine if little story remains).' : `Cap EACH shot's duration to <= ${continuation.maxDuration || 10}s.`} If the story is already fully covered, produce one short natural closing beat instead of inventing new plot.`
+    : ''
 
   // Visual abstraction layer — parser now extracts VISUAL TOKENS not screenplay
   // prose. Storyboard schema gains:
@@ -108,6 +116,7 @@ SPOKEN LANGUAGE: ${lang} — ALL dialog written in fluent native ${lang}.${refHi
 
 UNIVERSAL RULES:
 ${universalRules}
+${continuationBlock}
 
 TASK: Convert this script into ${
     isStory

@@ -1206,21 +1206,52 @@ PRODUCT FIDELITY (critical): the product is a RIGID manufactured object — its 
           : (isPrevStoryboard && prev.image?.url && prev.image.url !== frameUrl)
             ? [prev.image.url, frameUrl]              // success storyboard: grid + last frame
             : [frameUrl]                              // success direct: last frame
+      // AUTO-CONTINUE: pull the NEXT segment from the ORIGINAL naskah so the
+      // continuation shot is pre-filled (story flows forward) instead of empty.
+      // Capped to the chosen model's max clip length. Falls back to the manual
+      // hint if there's no naskah or the parse fails.
+      let contSeg = null
+      const fullNaskah = (state.naskah || '').trim()
+      const maxDur = getVideoMaxDuration(globalConfig.vidModel)
+      if (fullNaskah) {
+        try {
+          patchShot(idx, { continuing: 'Nyusun lanjutan dari naskah...' })
+          const covered = state.shots.map((s, i) => {
+            const beats = s.raw.video_motion || (s.raw.panels || []).map((p) => p.visual).join(' / ') || ''
+            return `Shot ${i + 1} (${s.raw.shot_label || s.raw.concept || ''}): ${String(beats).slice(0, 280)}`
+          }).join('\n')
+          const r = await fetch('/api/parse', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              naskah: fullNaskah, lang: globalConfig.lang, mode: globalConfig.mode, ar: globalConfig.ar,
+              refLabels: selectedRefs.map((rf) => rf.label).filter(Boolean),
+              brand: activeBrand ? { notes: activeBrand.notes, config: activeBrand.config } : null,
+              constraints: { continuousShot: !!globalConfig.continuousShot, skipDialog: !!globalConfig.skipDialog, skipOnscreen: !!globalConfig.skipOnscreen, skipProduct: !!globalConfig.skipProduct },
+              continuation: { coveredSummary: covered, maxDuration: maxDur },
+            }),
+          })
+          const j = await r.json()
+          if (j.ok) contSeg = j.parsed
+        } catch { /* fall back to the manual hint below */ }
+      }
+      const directSeg = contSeg?.shots?.[0] || null
       const newShot = {
         id: `${persona.id}-cont-${Date.now()}`,
         raw: isPrevStoryboard
           ? {
               ...baseRaw,
-              panels: [],
-              concept: '',
-              video_motion: motionHint,
-              duration: 10,
+              panels: contSeg?.panels || [],
+              concept: toStr(contSeg?.concept) || '',
+              environment: toStr(contSeg?.environment) || baseRaw.environment,
+              wardrobe: toStr(contSeg?.wardrobe) || baseRaw.wardrobe,
+              video_motion: toStr(contSeg?.video_motion) || motionHint,
+              duration: Math.min(15, maxDur),
             }
           : {
               ...baseRaw,
-              video_motion: motionHint,
-              dialogue: '',
-              duration: prev.raw.duration || 5,
+              video_motion: toStr(directSeg?.video_motion) || motionHint,
+              dialogue: toStr(directSeg?.dialogue) || '',
+              duration: Math.min(maxDur, parseInt(directSeg?.duration) || prev.raw.duration || 5),
             },
         label: `${prev.label} — Continuation`,
         image: { status: 'idle' },
