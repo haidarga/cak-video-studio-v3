@@ -57,6 +57,17 @@ export default {
 
     const headers = new Headers(cors)
     object.writeHttpMetadata(headers) // content-type, etc. from the stored object
+    // Force a sane Content-Type from the extension. Objects uploaded to R2 without
+    // a contentType come back as application/octet-stream → the browser DOWNLOADS
+    // them instead of playing inline. Override so videos preview in a new tab.
+    const ext = (key.split('.').pop() || '').toLowerCase()
+    const TYPES = {
+      mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', m4v: 'video/x-m4v',
+      mp3: 'audio/mpeg', wav: 'audio/wav', m4a: 'audio/mp4', ogg: 'audio/ogg',
+      png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif',
+    }
+    if (TYPES[ext]) headers.set('Content-Type', TYPES[ext])
+    headers.set('Content-Disposition', 'inline') // play in-tab, never force download
     headers.set('ETag', object.httpEtag)
     headers.set('Accept-Ranges', 'bytes')
     headers.set('Cache-Control', 'public, max-age=31536000, immutable')
