@@ -258,12 +258,19 @@ export async function buildVideoFlow(project) {
 export async function renderProjectVF(project, onProgress, _opts = {}) {
   onProgress?.('Building VideoFlow project...')
   const $ = await buildVideoFlow(project)
+  const json = await $.compile()
   onProgress?.('Rendering (WebCodecs)...')
-  // renderVideo auto-detects browser → @videoflow/renderer-browser → Blob.
-  const blob = await $.renderVideo({
-    worker: true,
+  // Import the browser renderer with a STATIC specifier so webpack/Next bundles
+  // it into a chunk. VideoFlow's own $.renderVideo() auto-detect resolves the
+  // renderer via a COMPUTED dynamic import the bundler can't analyze → it 404s
+  // at runtime ("Browser renderer not available. Install @videoflow/renderer-browser").
+  // Calling the renderer directly sidesteps that entirely.
+  const { default: BrowserRenderer } = await import('@videoflow/renderer-browser')
+  const out = await BrowserRenderer.render(json, {
+    worker: false, // main-thread encode — avoids a 2nd worker-bundle resolution failure
     onProgress: (p) => onProgress?.(`Rendering ${Math.round((p || 0) * 100)}% (WebCodecs)`),
   })
+  const blob = out instanceof Blob ? out : new Blob([out], { type: 'video/mp4' })
   return { blob, ext: 'mp4', mime: 'video/mp4' }
 }
 
