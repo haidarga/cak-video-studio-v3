@@ -91,6 +91,9 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
   })
   // Workspace custom camera presets (user-defined). Built-ins are imported.
   const [userCameraPresets, setUserCameraPresets] = useState([])
+  // "Variant generation": ON = each persona gets its own config override strip;
+  // OFF (default) = one global config for everyone.
+  const [perPersonaMode, setPerPersonaMode] = useState(false)
   useEffect(() => {
     if (!workspaceId) return
     fetch('/api/workspace/camera-presets').then((r) => r.json()).then((j) => {
@@ -311,6 +314,8 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
           {globalConfig.autoVoiceSwap && (
             <span className="text-[9px] text-[var(--muted2)] self-center">~$0.30/video dialog · pakai voice persona</span>
           )}
+          <ChipToggle label="⚙️ Setting per-persona" on={perPersonaMode}
+            onClick={() => setPerPersonaMode((v) => !v)} />
           <button onClick={() => setShowAdvanced((s) => !s)} type="button"
             className="ml-auto text-[10px] text-[var(--muted)] hover:text-[var(--accent)] underline">
             {showAdvanced ? '▲ Hide advanced' : '▼ Advanced'}
@@ -459,6 +464,7 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
           state={stateByPersona[persona.id] || { naskah: '', refIds: new Set(), showWorkspaceRefs: false, parsed: null, busy: false, shots: [] }}
           onPatch={(patch) => patchPersona(persona.id, patch)}
           globalConfig={globalConfig}
+          perPersonaMode={perPersonaMode}
           userCameraPresets={userCameraPresets}
           styleRefs={workspaceRefs.filter((r) => r.kind === 'style' && (globalConfig.styleRefIds || new Set()).has(r.id))}
           activeBrand={activeBrand}
@@ -523,8 +529,23 @@ function friendlyFalError(raw) {
   return s
 }
 
-function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs = [], state, onPatch, globalConfig, userCameraPresets = [], activeBrand, activePreset = null, workspaceId, userId, onErr, supabase }) {
+function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs = [], state, onPatch, globalConfig: rawGlobalConfig, perPersonaMode = false, userCameraPresets = [], activeBrand, activePreset = null, workspaceId, userId, onErr, supabase }) {
   const personaOwnRefs = (persona.persona_refs || []).map((pr) => pr.refs).filter(Boolean)
+  const [cfgOpen, setCfgOpen] = useState(false)
+
+  // Per-persona config ("variant generation"). When perPersonaMode is ON and
+  // this persona has an override, the EFFECTIVE config = global defaults merged
+  // with the override. We SHADOW the `globalConfig` name so every existing
+  // globalConfig.* read below transparently uses the effective config — no need
+  // to thread overrides through every gen call site.
+  const cfgOverride = perPersonaMode ? (state.configOverride || null) : null
+  const globalConfig = useMemo(
+    () => (cfgOverride ? { ...rawGlobalConfig, ...cfgOverride } : rawGlobalConfig),
+    [rawGlobalConfig, cfgOverride],
+  )
+  function setOverride(patch) {
+    onPatch((s) => ({ configOverride: { ...(s.configOverride || {}), ...patch } }))
+  }
 
   // Default: only this persona's own refs are SELECTED. Workspace pool stays
   // hidden until user toggles "+ Show workspace refs".
@@ -1373,6 +1394,45 @@ PRODUCT FIDELITY (critical): the product is a RIGID manufactured object — its 
           <div className="text-xs text-[var(--muted)]">@{persona.username || '—'} · {personaOwnRefs.length} ref{personaOwnRefs.length !== 1 ? 's' : ''}</div>
         </div>
       </header>
+
+      {/* Per-persona config strip — only in variant mode. Inherits the global
+          config until the user overrides a field here (badge flips to CUSTOM). */}
+      {perPersonaMode && (
+        <div className="mb-4 rounded-lg border border-[var(--border)] bg-[var(--surface2)]/40 p-2.5">
+          <button type="button" onClick={() => setCfgOpen((o) => !o)} className="w-full flex items-center gap-2 text-[11px]">
+            <span className="font-semibold text-[var(--muted)]">⚙️ Config</span>
+            {state.configOverride
+              ? <span className="px-1.5 py-0.5 rounded-full bg-[var(--accent)]/20 text-[var(--accent)] text-[9px] font-bold tracking-wide">CUSTOM</span>
+              : <span className="text-[var(--muted2)] text-[9px]">ikut global</span>}
+            <span className="text-[var(--muted2)] truncate">
+              {globalConfig.mode === 'storyboard' ? 'Storyboard' : globalConfig.mode === 'direct' ? 'Direct' : 'Per-Shot'} · {globalConfig.vidModel.split('/').pop()?.replace(/-/g, ' ')} · {globalConfig.ar}
+            </span>
+            <span className="ml-auto text-[var(--muted)]">{cfgOpen ? '▲' : '▼'}</span>
+          </button>
+          {cfgOpen && (
+            <div className="mt-2.5 grid grid-cols-2 gap-2">
+              <Sel label="Mode" value={globalConfig.mode} onChange={(v) => setOverride({ mode: v })}
+                options={[['shots', '🎬 Per-Shot'], ['storyboard', '🗂 Storyboard'], ['direct', '🎯 Direct Video']]} />
+              <Sel label="Aspect Ratio" value={globalConfig.ar} onChange={(v) => setOverride({ ar: v })}
+                options={[['9:16', '9:16 vertical'], ['16:9', '16:9 horizontal'], ['1:1', '1:1 square']]} />
+              <div className="col-span-2">
+                <Sel label="Video Model" value={globalConfig.vidModel} onChange={(v) => setOverride({ vidModel: v })}
+                  groups={groupVideoModels(VIDEO_MODELS)} />
+              </div>
+              <div className="col-span-2 flex flex-wrap items-center gap-1.5">
+                <ChipToggle label="🎬 No cuts" on={!!globalConfig.continuousShot} onClick={() => setOverride({ continuousShot: !globalConfig.continuousShot })} />
+                <ChipToggle label="🔇 No dialog" on={!!globalConfig.skipDialog} onClick={() => setOverride({ skipDialog: !globalConfig.skipDialog })} />
+                <ChipToggle label="📝 No text" on={!!globalConfig.skipOnscreen} onClick={() => setOverride({ skipOnscreen: !globalConfig.skipOnscreen })} />
+                <ChipToggle label="📦 No product" on={!!globalConfig.skipProduct} onClick={() => setOverride({ skipProduct: !globalConfig.skipProduct })} />
+                {state.configOverride && (
+                  <button type="button" onClick={() => onPatch({ configOverride: null })}
+                    className="ml-auto text-[10px] text-[var(--muted)] hover:text-[var(--accent)] underline">Reset ke global</button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="space-y-3">
         <div>
