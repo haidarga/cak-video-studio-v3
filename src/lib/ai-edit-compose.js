@@ -128,6 +128,10 @@ export function compilePlanToProject(plan, videos, { ar = '9:16', maxTrimPct = n
       notes: String(plan.notes || '').slice(0, 300),
       auto_subtitle: !!plan.auto_subtitle,
       karaoke: plan.karaoke !== false,
+      // Subtitle look the USER asked for ("glowing", "neon", "tiktok", …).
+      // Flows into autoSubtitle so the captions actually obey the prompt
+      // instead of always coming out tiktok. Maps to EFFECT_PRESETS keys.
+      subtitle_style: typeof plan.subtitle_style === 'string' ? plan.subtitle_style : 'tiktok',
     },
   }
 }

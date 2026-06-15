@@ -412,12 +412,16 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
   // clips: pass explicit clip array (with FINAL in_track positions) when the
   // caller just re-laid-out the timeline in the same tick — the baseClips
   // memo is still stale at that point. skipHistory: caller already snapshot.
-  async function autoSubtitle({ karaoke = false, clips = null, skipHistory = false } = {}) {
+  async function autoSubtitle({ karaoke = false, clips = null, skipHistory = false, style = 'tiktok' } = {}) {
     const targets = clips || baseClips
     if (targets.length === 0) { setErr('Tambah base clip dulu'); return }
     setTranscribing(true); setErr('')
     if (!skipHistory) pushHistory(project)
     let allNewClips = []
+    // Subtitle look from the prompt (EFFECT_PRESETS key). Glow presets (neon/
+    // highlight) drop the black box so the halo is actually visible.
+    const subFx = EFFECT_PRESETS[style] || EFFECT_PRESETS.tiktok
+    const subGlow = !!subFx?.glow?.enabled
     try {
       // Iterate ALL base clips — transcribe per clip + offset segments by clip's in_track
       for (let i = 0; i < targets.length; i++) {
@@ -454,7 +458,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
             id: uid(), kind: 'text', text: s.text.toUpperCase(),
             start, end, track_idx,
             x_pct: 50, y_pct: 75, size: 56, scale: 1, max_width_pct: 90, color: '#ffffff', weight: 900, font: DEFAULT_FONT,
-            bg: 'rgba(0,0,0,0.85)', align: 'center', effects: EFFECT_PRESETS.tiktok,
+            bg: subGlow ? 'transparent' : 'rgba(0,0,0,0.85)', align: 'center', effects: subFx,
             animation: karaoke ? 'karaoke' : 'fade',
             // Karaoke: per-word data for highlight
             words: karaoke && s.words ? s.words.map((w) => ({ ...w, start: offset + w.start, end: offset + w.end })) : null,
@@ -574,7 +578,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
         .update({ config: { ...data.config, _ai: { ...ai, auto_subtitle: false } } })
         .eq('id', data.id)
         .then(() => {})
-      if (base.length > 0) autoSubtitle({ karaoke: ai.karaoke !== false, clips: base, skipHistory: true })
+      if (base.length > 0) autoSubtitle({ karaoke: ai.karaoke !== false, clips: base, skipHistory: true, style: ai.subtitle_style })
     }
   }
   function newProject() {

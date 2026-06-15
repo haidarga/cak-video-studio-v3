@@ -42,6 +42,7 @@ EDITOR CAPABILITIES you can use in the plan:
 - Transition INTO each clip (except the first), duration 0.3–0.8s. MENU (pick to match the mood, VARY them — don't use the same one twice in a row): cut | crossfade | blur (soft/dreamy) | lightleak (white flash, upbeat/energetic) | dissolve | zoomin (punchy) | slideleft | slideright | circleopen | pixelize (playful/glitchy) | fadeblack (dramatic pause)
 - Text overlays at absolute timeline times (hook text, CTA, captions) — style MENU: tiktok (bold white on black box) | clean (white, no box, minimal) | yellow (yellow on black, warning/penting vibe) | neon (green glow-ish, techy) | pink (playful/feminine) | bigpop (huge white on red, loud CTA). Pick styles that match the content's tone; hook and CTA may use different styles.
 - auto_subtitle: true → the editor will auto-transcribe ALL dialog and add word-level karaoke subtitles AFTER your plan loads. USE THIS instead of writing caption texts yourself whenever the user wants subtitles/captions of the spoken dialog.
+- subtitle_style → the LOOK of those auto-subtitles. OBEY the user's words literally. MENU: tiktok (white, black box — default) | clean (white, no box) | neon (cyan GLOW, no box) | highlight (yellow GLOW) | pop3d (3D drop) | drop (soft shadow). If the user says "glow"/"glowing"/"nyala"/"neon" → use "neon" (or "highlight" if they say yellow/kuning). If they name a colour or vibe, pick the closest. Default "tiktok" only when they don't specify.
 
 PLANNING RULES:
 - Timeline times are GLOBAL (after reordering + trims + speed). Compute them carefully.
@@ -61,6 +62,7 @@ Output JSON ONLY:
   ],
   "auto_subtitle": true,
   "karaoke": true,
+  "subtitle_style": "tiktok",
   "notes": "1-2 kalimat Bahasa Indonesia: apa yang lu susun + kenapa"
 }`
 
