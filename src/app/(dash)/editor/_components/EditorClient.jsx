@@ -647,15 +647,24 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
     if (project.video_clips.length === 0) { setErr('Belum ada video clip'); return }
     setExporting(true); setExportProgress('Persiapan...'); setErr('')
     try {
-      // SPIKE: route to VideoFlow (WebCodecs) when opted in AND the project
-      // has no deferred features; otherwise the proven ffmpeg path.
+      // VideoFlow (WebCodecs) is now the DEFAULT export path. Falls back to
+      // ffmpeg automatically when: the project uses a deferred feature
+      // (speed-ramp / bgm-duck), VideoFlow throws, OR the user forces ffmpeg
+      // via localStorage.setItem('vf_render','0').
       let blob, ext, mime
-      const vfOptIn = typeof window !== 'undefined' && window.localStorage?.getItem('vf_render') === '1'
-      const vfCheck = vfOptIn ? vfCanRenderProject(project) : { ok: false, reasons: [] }
-      if (vfOptIn && vfCheck.ok) {
-        ;({ blob, ext, mime } = await renderProjectVF(project, setExportProgress, { mode }))
+      const forceFfmpeg = typeof window !== 'undefined' && window.localStorage?.getItem('vf_render') === '0'
+      const vfCheck = vfCanRenderProject(project)
+      const useVF = !forceFfmpeg && vfCheck.ok
+      if (useVF) {
+        try {
+          ;({ blob, ext, mime } = await renderProjectVF(project, setExportProgress, { mode }))
+        } catch (vfErr) {
+          console.warn('[export] VideoFlow failed, falling back to ffmpeg:', vfErr)
+          setExportProgress(`VideoFlow error → fallback ffmpeg (${String(vfErr?.message || vfErr).slice(0, 60)})...`)
+          ;({ blob, ext, mime } = await renderProject(project, setExportProgress, { mode }))
+        }
       } else {
-        if (vfOptIn && !vfCheck.ok) setExportProgress(`VideoFlow skip (${vfCheck.reasons.join(', ')}) → ffmpeg...`)
+        if (!vfCheck.ok) setExportProgress(`ffmpeg (VideoFlow skip: ${vfCheck.reasons.join(', ')})...`)
         ;({ blob, ext, mime } = await renderProject(project, setExportProgress, { mode }))
       }
       setExportProgress(`Uploading ${(blob.size / 1024 / 1024).toFixed(1)}MB...`)
