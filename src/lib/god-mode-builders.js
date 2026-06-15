@@ -9,6 +9,13 @@
 
 import { canonicalFalPath, candidateFalPaths } from '@/lib/fal-paths'
 
+// LTX-2.3 anti-artifact negative prompt. Starts from fal's tuned default
+// quality list, then ADDS the temporal + identity failure modes LTX is prone
+// to once things start MOVING: face morphing, character drift between frames,
+// flicker, melting, limb/face duplication, smearing. Baked in as the default
+// so every LTX gen ships clean without the caller thinking about it.
+const LTX_NEGATIVE_PROMPT = 'color distortion, overexposure, static, blurry details, subtitles, style, artwork, painting, frame, still, dim overall tone, worst quality, low quality, JPEG compression artifacts, ugly, mutilated, extra fingers, poorly drawn hands, poorly drawn face, deformed, disfigured, malformed limbs, fused fingers, motionless frame, cluttered background, three legs, crowded background, walking backwards, morphing, warping, melting, shape-shifting, face distortion, changing face, identity change, inconsistent character, character drift, flickering, flicker, temporal instability, jitter, ghosting, duplicated limbs, duplicated face, extra heads, drifting features, wobbling, frame blending artifacts, glitch, smearing, stretched anatomy, unstable proportions'
+
 // ── Product fidelity directive ───────────────────────────────────────
 // Injects the active product's textual knowledge (description, dimensions,
 // features, label text, etc) into a prompt as a STRONG fidelity directive.
@@ -161,12 +168,25 @@ export function buildVideoInputForModel(model, { motion_prompt, image_url, image
     const resMap = { '9:16': 'portrait_16_9', '16:9': 'landscape_16_9', '1:1': 'square_hd' }
     const base = {
       prompt: motion_prompt,
+      negative_prompt: LTX_NEGATIVE_PROMPT,
       num_frames,
       frames_per_second: fps,
       resolution: resMap[ar] || 'portrait_16_9',
       generate_audio: true,
-      enable_safety_checker: false,
-      video_quality: 'high',
+      // Prompt expansion ON — fal rewrites/enriches the prompt server-side for
+      // sharper scene coherence (matters more since God Mode's LTX fast-path
+      // skips Gemini, so this is the only prompt-cleanup step).
+      enable_prompt_expansion: true,
+      enable_safety_checker: false, // user-requested OFF (NSFW false-positives)
+      // ── Quality recipe (mirrors the 3rd-party "Balanced 30+4 / HQ sampler"
+      //    preset the user referenced) ──
+      // LTX is priced PER MEGAPIXEL (W×H×frames), INDEPENDENT of steps/quality.
+      // So maxing the quality levers costs $0 extra — only adds gen time. Free
+      // quality, so we take it: this is the anti-artifact/morph/drift recipe.
+      num_inference_steps: 30, // schema max — more denoise passes = cleaner detail, less smear
+      guidance_scale: 1,       // LTX distilled WANTS low CFG; raising it ADDS artifacts, not fewer
+      video_quality: 'high',   // tuned default of the /quality endpoint (bump to 'maximum' for hero shots)
+      video_write_mode: 'balanced', // not 'small' — small re-compresses harder = mushier output
     }
     // LTX has i2v/r2v variants too — pass the source image(s) when present so
     // this builder stays correct if those endpoints get wired later.
