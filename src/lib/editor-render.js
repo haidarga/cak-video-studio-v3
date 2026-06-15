@@ -429,7 +429,7 @@ function buildFilterGraph(project, canvasDims, musicInputIdx, clonedAudioInputSt
       alphaExpr = `:alpha='if(between(t,${start},${end}), min(1, min((t-${start})/${animDur}, (${end}-t)/${animDur})), 0)'`
     }
     const out = `[ot${i}]`
-    lines.push(`${currentLabel}drawtext=text='${txt}':fontcolor=0x${color}:fontsize=${fontSize}:x=${xExpr}:y=${y}-text_h/2${boxColor}${alphaExpr}:enable='between(t,${start},${end})'${out}`)
+    lines.push(`${currentLabel}drawtext=fontfile=caption.ttf:text='${txt}':fontcolor=0x${color}:fontsize=${fontSize}:x=${xExpr}:y=${y}-text_h/2${boxColor}${alphaExpr}:enable='between(t,${start},${end})'${out}`)
     currentLabel = out
   })
 
@@ -573,6 +573,17 @@ export async function renderWithFFmpeg(project, onProgress) {
   // Clean slate — leftovers from earlier ops (incl. crashed ones) eat the
   // shared MEMFS heap and surface as "ErrnoError: FS error".
   await purgeFFmpegFS()
+
+  // Load a font for drawtext. ffmpeg.wasm has NO fontconfig, so the drawtext
+  // filter needs an explicit fontfile= pointing to a TTF in MEMFS. Without it,
+  // every text overlay errored ("No font filename provided") and the whole
+  // render fell back to canvas — silently losing xfade transitions.
+  try {
+    const fontBytes = await fetchToUint8('/fonts/caption.ttf')
+    await ff.writeFile('caption.ttf', fontBytes)
+  } catch (e) {
+    console.warn('drawtext font load failed (text overlays may fail):', e)
+  }
 
   // Load all base + overlay videos
   let inputIdx = 0

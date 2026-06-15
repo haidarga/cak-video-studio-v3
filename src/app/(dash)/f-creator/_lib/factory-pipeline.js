@@ -440,9 +440,26 @@ export async function stageAssemble(item, videoUrls, cfg, deps, onProgress) {
     project.text_clips = [...(project.text_clips || []), ...subs]
   }
 
-  onProgress?.('Render final (ffmpeg)...')
-  const { renderProject } = await import('@/lib/editor-render')
-  const { blob, ext } = await renderProject(project, (s) => onProgress?.(`Render: ${s}`), { mode: 'mp4' })
+  // Render — VideoFlow (WebCodecs) is now PRIMARY: it draws text/subtitles with
+  // real web fonts + glow, so no more ffmpeg "No font filename provided" →
+  // canvas-fallback (which dropped xfade transitions). ffmpeg stays as fallback
+  // for projects VideoFlow can't do yet (speed-ramp / bgm-duck) or if it throws.
+  const { renderProjectVF, vfCanRenderProject } = await import('@/lib/videoflow-render')
+  let blob, ext
+  const vfCheck = vfCanRenderProject(project)
+  if (vfCheck.ok) {
+    try {
+      onProgress?.('Render final (VideoFlow)...')
+      ;({ blob, ext } = await renderProjectVF(project, (s) => onProgress?.(`Render: ${s}`)))
+    } catch (vfErr) {
+      console.warn('[f-creator] VideoFlow render failed, fallback ffmpeg:', vfErr)
+    }
+  }
+  if (!blob) {
+    onProgress?.(`Render final (ffmpeg${vfCheck.ok ? ' fallback' : `: ${vfCheck.reasons.join(',')}`})...`)
+    const { renderProject } = await import('@/lib/editor-render')
+    ;({ blob, ext } = await renderProject(project, (s) => onProgress?.(`Render: ${s}`), { mode: 'mp4' }))
+  }
   onProgress?.(`Upload ${(blob.size / 1024 / 1024).toFixed(1)}MB...`)
   const { url } = await uploadBlob(blob, `fcreator-${Date.now()}.${ext || 'mp4'}`, 'f-creator')
   return { url, assembled: true }
