@@ -20,6 +20,8 @@
     "@remotion/transitions": "^4.0.462",
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.46.0",
+    "@videoflow/core": "^1.2.1",
+    "@videoflow/renderer-browser": "^1.2.1",
     "next": "14.2.18",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
