@@ -79,6 +79,10 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
     skipDialog: false,
     skipOnscreen: false,
     skipProduct: false,
+    // Post-gen: auto-swap each generated video's audio to the active persona's
+    // cloned voice (ElevenLabs S2S). ON by default; only fires for shots that
+    // actually have dialog + when the persona has a voice_id.
+    autoVoiceSwap: true,
     wardrobeOverride: '',
     // Per-Shot mode: optional user-set shot count. null = LLM decides based on
     // naskah length (1+ shots, 3-10s each). Set explicit number to force exactly
@@ -302,6 +306,11 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
             onClick={() => setGlobalConfig({ ...globalConfig, skipOnscreen: !globalConfig.skipOnscreen })} />
           <ChipToggle label="🚫 No product" on={!!globalConfig.skipProduct}
             onClick={() => setGlobalConfig({ ...globalConfig, skipProduct: !globalConfig.skipProduct })} />
+          <ChipToggle label="🎙 Auto voice swap" on={!!globalConfig.autoVoiceSwap}
+            onClick={() => setGlobalConfig({ ...globalConfig, autoVoiceSwap: !globalConfig.autoVoiceSwap })} />
+          {globalConfig.autoVoiceSwap && (
+            <span className="text-[9px] text-[var(--muted2)] self-center">~$0.30/video dialog · pakai voice persona</span>
+          )}
           <button onClick={() => setShowAdvanced((s) => !s)} type="button"
             className="ml-auto text-[10px] text-[var(--muted)] hover:text-[var(--accent)] underline">
             {showAdvanced ? '▲ Hide advanced' : '▼ Advanced'}
@@ -1022,7 +1031,12 @@ PRODUCT FIDELITY (critical): the product is a RIGID manufactured object — its 
       // for the persona's voice via ElevenLabs Speech-to-Speech. Lip-sync preserved
       // because S2S converts the same audio (same phonemes/timing, new timbre).
       // Best-effort; failures don't break the video gen.
-      if (persona.voice_id) {
+      // Gated: only when the toggle is ON, the persona has a voice, AND this
+      // shot actually has dialog (no point S2S-ing a silent b-roll clip).
+      const hasDialog = Array.isArray(shot.raw?.panels)
+        ? shot.raw.panels.some((p) => p.dialog?.trim())
+        : !!shot.raw?.dialogue?.trim()
+      if (persona.voice_id && globalConfig.autoVoiceSwap && hasDialog) {
         patchShot(idx, { video: { status: '🎙 voice clone...', url: videoUrl, result_id: row.id } })
         try {
           const r = await fetch('/api/voice/convert', {
