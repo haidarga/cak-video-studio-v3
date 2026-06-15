@@ -447,25 +447,39 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
         const data = await res.json()
         if (!data.ok) throw new Error(`Clip ${i + 1}: ${data.error}`)
         if (!data.segments?.length) continue
-        const offset = clip.in_track || 0
-        const clipsForThis = data.segments.map((s) => {
-          const start = offset + s.start
-          const end = offset + s.end
-          // Track-assign against ALL accumulated clips so subsequent clips
-          // land beside, not on top of, earlier auto-sub batches.
-          const track_idx = pickTrackIdx(allNewClips, start, end, _bounds.text.s, _bounds.text.e)
-          const c = {
-            id: uid(), kind: 'text', text: s.text.toUpperCase(),
-            start, end, track_idx,
-            x_pct: 50, y_pct: 75, size: 56, scale: 1, max_width_pct: 90, color: '#ffffff', weight: 900, font: DEFAULT_FONT,
-            bg: subGlow ? 'transparent' : 'rgba(0,0,0,0.85)', align: 'center', effects: subFx,
-            animation: karaoke ? 'karaoke' : 'fade',
-            // Karaoke: per-word data for highlight
-            words: karaoke && s.words ? s.words.map((w) => ({ ...w, start: offset + w.start, end: offset + w.end })) : null,
-          }
-          allNewClips.push(c) // push as we go so next clip sees this one for collision check
-          return c
-        })
+        // OFFSET FIX: transcription is timed against the FULL source clip, but
+        // the clip on the timeline is TRIMMED (src_in/src_out) + may be sped up.
+        // Map source-time → timeline-time properly, and DROP speech outside the
+        // visible trim window (that's what made subtitles spill past the video).
+        //   timeline = in_track + (sourceTime − src_in) / speed
+        const inTrack = clip.in_track || 0
+        const srcIn = Number(clip.src_in) || 0
+        const srcOut = clip.src_out != null ? Number(clip.src_out) : Infinity
+        const spd = Number(clip.speed) || 1
+        const toTL = (t) => inTrack + (Math.max(srcIn, Math.min(srcOut, t)) - srcIn) / spd
+        const clipsForThis = data.segments
+          // keep only segments that actually overlap the trimmed window
+          .filter((s) => s.end > srcIn && s.start < srcOut)
+          .map((s) => {
+            const start = toTL(s.start)
+            const end = Math.max(start + 0.2, toTL(s.end))
+            // Track-assign against ALL accumulated clips so subsequent clips
+            // land beside, not on top of, earlier auto-sub batches.
+            const track_idx = pickTrackIdx(allNewClips, start, end, _bounds.text.s, _bounds.text.e)
+            const c = {
+              id: uid(), kind: 'text', text: s.text.toUpperCase(),
+              start, end, track_idx,
+              x_pct: 50, y_pct: 75, size: 56, scale: 1, max_width_pct: 90, color: '#ffffff', weight: 900, font: DEFAULT_FONT,
+              bg: subGlow ? 'transparent' : 'rgba(0,0,0,0.85)', align: 'center', effects: subFx,
+              animation: karaoke ? 'karaoke' : 'fade',
+              // Karaoke: per-word data, mapped + clamped to the trim window too.
+              words: karaoke && s.words
+                ? s.words.filter((w) => w.end > srcIn && w.start < srcOut).map((w) => ({ ...w, start: toTL(w.start), end: Math.max(toTL(w.start) + 0.05, toTL(w.end)) }))
+                : null,
+            }
+            allNewClips.push(c) // push as we go so next clip sees this one for collision check
+            return c
+          })
       }
       patch((p) => ({ ...p, text_clips: [...p.text_clips, ...allNewClips] }))
       setTranscribeProgress(`✓ Generated ${allNewClips.length} subtitle clips dari ${targets.length} base clip${targets.length > 1 ? 's' : ''}${karaoke ? ' (karaoke)' : ''}`)
