@@ -194,7 +194,7 @@ export default function PipelineTab() {
         const motion = dlg
           ? `${p.visual}. ${motionHint} The subject speaks directly to camera in fluent native ${lang}: "${dlg}"`
           : `${p.visual}. ${motionHint}`
-        const vidRes = await withRetry(() => falRun(config.vidModel, buildVidInput(config.vidModel, { prompt: motion, image_url: imgUrl, duration: 5, aspect_ratio: config.ar, resolution: res }), pushLog), 2, 3000)
+        const vidRes = await withRetry(() => falRun(config.vidModel, buildVidInput(config.vidModel, { prompt: motion, image_url: imgUrl, reference_urls: refUrls, duration: 5, aspect_ratio: config.ar, resolution: res }), pushLog), 2, 3000)
         const vidUrl = vidRes.video?.url || vidRes.video
         if (!vidUrl) throw new Error(`scene ${p.n}: video gagal`)
         clips.push({ url: vidUrl, trim: Math.max(1, Math.min(5, +p.seconds || 2)) })

@@ -35,7 +35,13 @@ export async function POST(req) {
   const { searchParams } = new URL(req.url)
   const secret = searchParams.get('secret') || ''
   const expected = process.env.FAL_WEBHOOK_SECRET || ''
-  if (expected && secret !== expected) {
+  // Fail-CLOSED: this URL is public. Without the secret configured, anyone could
+  // forge job completions (fake result URLs, billed to the workspace). Refuse.
+  if (!expected) {
+    console.error('[fal/webhook] FAL_WEBHOOK_SECRET not set — refusing all webhooks (fail-closed)')
+    return NextResponse.json({ ok: false, error: 'webhook not configured' }, { status: 503 })
+  }
+  if (secret !== expected) {
     return NextResponse.json({ ok: false, error: 'invalid secret' }, { status: 401 })
   }
 

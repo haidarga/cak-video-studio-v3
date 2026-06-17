@@ -64,7 +64,7 @@ export async function GET(req) {
 
   if (!statusUrl || !responseUrl) {
     const { data: jobRow } = await supabase
-      .from('gen_jobs').select('meta').eq('request_id', requestId).maybeSingle()
+      .from('gen_jobs').select('meta').eq('request_id', requestId).eq('workspace_id', wsId).maybeSingle()
     if (jobRow?.meta?.status_url) statusUrl = statusUrl || jobRow.meta.status_url
     if (jobRow?.meta?.response_url) responseUrl = responseUrl || jobRow.meta.response_url
   }
@@ -100,6 +100,12 @@ export async function GET(req) {
       meta: { source: 'god-mode', motion, model: matchedModel || model, request_id: requestId },
       created_by: user.id,
     }).select('id').single()
+    // Mark the gen_jobs row done so a late fal webhook sees status='done' and
+    // skips its duplicate usage-log + results write (webhook is idempotent on
+    // status). No-op if no gen_jobs row exists for this request.
+    await supabase.from('gen_jobs')
+      .update({ status: 'done', payload_url: videoUrl, updated_at: new Date().toISOString() })
+      .eq('request_id', requestId).eq('workspace_id', wsId)
     return NextResponse.json({
       ok: true, status: 'done',
       url: videoUrl, model: matchedModel || model, ar, duration, result_id: row?.id, motion,

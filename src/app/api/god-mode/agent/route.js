@@ -18,6 +18,7 @@ import { CINEMATIC_PRESETS, CINEMATIC_CATEGORIES, getPresetById } from '@/lib/ci
 import { IMAGE_MODELS, VIDEO_MODELS } from '@/lib/fal-client'
 import { canonicalFalPath, candidateFalPaths } from '@/lib/fal-paths'
 import { assertBudget, estimateFalCost } from '@/lib/budget-gate'
+import { isPublicHttpUrl } from '@/lib/ssrf-guard'
 import {
   buildVideoInputForModel,
   buildImageInputForModel,
@@ -2063,8 +2064,16 @@ export async function POST(req) {
     return NextResponse.json({ ok: false, error: 'missing workspaceId or messages' }, { status: 400 })
   }
 
-  const { data: ws } = await supabase.from('workspaces').select('id').eq('id', workspaceId).maybeSingle()
-  if (!ws) return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 403 })
+  // Verify the caller is a MEMBER of this workspace — not just that it exists.
+  // Without this, any authenticated user can pass another workspace's id and
+  // spend its fal_key / budget and write results into it (cross-tenant abuse).
+  const { data: membership } = await supabase
+    .from('workspace_members')
+    .select('workspace_id')
+    .eq('workspace_id', workspaceId)
+    .eq('user_id', user.id)
+    .maybeSingle()
+  if (!membership) return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 403 })
 
   // Most-recent user message attachments — used by tools that operate on
   // uploaded content (analyze_reference_video, predict_virality, gen_image).
@@ -2173,6 +2182,7 @@ export async function POST(req) {
     for (const a of atts) {
       if (a.type === 'image' && imgCount < 3) {
         try {
+          if (!isPublicHttpUrl(a.url)) throw new Error('blocked non-public attachment url') // SSRF guard
           const imgRes = await fetch(a.url)
           if (imgRes.ok) {
             const buf = Buffer.from(await imgRes.arrayBuffer())

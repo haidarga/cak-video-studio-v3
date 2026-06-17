@@ -24,6 +24,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { getActiveWorkspace } from '@/lib/workspace'
+import { assertPublicHttpUrl } from '@/lib/ssrf-guard'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60 // ffmpeg cut is fast; 60s covers most batches
@@ -38,6 +39,7 @@ export async function POST(req) {
   try {
     const { video_url, clips, result_id } = await req.json()
     if (!video_url) throw new Error('video_url required')
+    assertPublicHttpUrl(video_url, 'video_url') // block SSRF — no fetching internal/metadata hosts
     if (!Array.isArray(clips) || clips.length === 0) throw new Error('clips array required (min 1)')
     if (clips.length > 20) throw new Error('max 20 clips per request')
 

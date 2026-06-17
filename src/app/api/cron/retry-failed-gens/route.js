@@ -82,12 +82,15 @@ export async function GET(req) {
   // Auth: Vercel cron sends Authorization: Bearer <CRON_SECRET>
   // OR caller passes ?secret=... for manual trigger.
   const cronSecret = process.env.CRON_SECRET
+  // Fail-CLOSED: without CRON_SECRET, anyone could trigger a mass fal retry
+  // storm across every workspace (drains fal budgets). Refuse when unconfigured.
+  if (!cronSecret) {
+    return NextResponse.json({ ok: false, error: 'CRON_SECRET not configured' }, { status: 503 })
+  }
   const url = new URL(req.url)
   const authHeader = req.headers.get('authorization') || ''
   const querySecret = url.searchParams.get('secret') || ''
-  const headerMatch = cronSecret && authHeader === `Bearer ${cronSecret}`
-  const querySecretMatch = cronSecret && querySecret === cronSecret
-  if (cronSecret && !headerMatch && !querySecretMatch) {
+  if (authHeader !== `Bearer ${cronSecret}` && querySecret !== cronSecret) {
     return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
   }
 
@@ -141,6 +144,13 @@ export async function GET(req) {
           retry_source: 'cron',
         },
       })
+      // Mark the parent so the NEXT cron tick (which may fire before this retry
+      // resolves) doesn't re-submit the SAME failed job in parallel — the #1
+      // cause of duplicate fal charges. status='retrying' drops it from the
+      // status='error' scan above. (gen_jobs.status is plain text, no enum.)
+      await admin.from('gen_jobs')
+        .update({ status: 'retrying', updated_at: new Date().toISOString() })
+        .eq('request_id', job.request_id)
       stats.retried++
     } catch (e) {
       stats.fal_failed++

@@ -10,12 +10,13 @@ export default function ChainTab() {
   const S = useStudio()
   const [vidModel, setVidModel] = useState(S.defaultVidModel)
   const [ar, setAr] = useState('9:16')
+  const [useRefs, setUseRefs] = useState(true)
   const [clips, setClips] = useState([])
   const clipsRef = useRef(clips)
   clipsRef.current = clips
 
-  const refresh = () => setClips((c) => [...c])
-  const patch = (id, p) => { const c = clipsRef.current.find((x) => x.id === id); if (c) Object.assign(c, p); refresh() }
+  // immutable update — never mutate clip objects in place (mutation breaks React re-render + lets stale state leak into gen)
+  const patch = (id, p) => setClips((prev) => prev.map((c) => (c.id === id ? { ...c, ...p } : c)))
 
   const addClip = () => setClips((c) => [...c, {
     id: 'cc_' + ++clipSeq, num: c.length + 1, isFirst: c.length === 0,
@@ -24,35 +25,52 @@ export default function ChainTab() {
   }])
 
   async function runClip(clip) {
-    patch(clip.id, { status: 'running', log: ['running...'] })
-    const pushLog = (m) => { clip.log = [...clip.log, m]; refresh() }
+    let logs = ['running...']
+    const log = (m) => { logs = [...logs, m]; patch(clip.id, { log: logs }) }
+    patch(clip.id, { status: 'running', log: logs })
     try {
+      // resolve position by id, NOT by clip.num — display number diverges from array index after any reorder/delete
+      const idx = clipsRef.current.findIndex((x) => x.id === clip.id)
       let startImageUrl
-      if (clip.isFirst) {
+      if (idx <= 0) {
         if (clip.startFile) startImageUrl = await falUpload(clip.startFile)
         else if (clip.startUrl.trim()) startImageUrl = clip.startUrl.trim()
         else throw new Error('Upload start image buat clip 1')
       } else {
-        const prev = clipsRef.current[clip.num - 2]
-        if (!prev?.lastFrameUrl && !prev?.videoUrl) throw new Error('Generate clip ' + (clip.num - 1) + ' dulu')
-        startImageUrl = prev.lastFrameUrl || prev.startUrl
-        pushLog('⛓ Pakai last frame clip ' + (clip.num - 1))
+        const prev = clipsRef.current[idx - 1]
+        if (!prev?.lastFrameUrl && !prev?.videoUrl) throw new Error('Generate clip ' + idx + ' dulu')
+        startImageUrl = prev.lastFrameUrl || prev.startUrl || prev.videoUrl
+        log('⛓ Pakai last frame clip ' + idx)
       }
-      const continuity = clip.num > 1 ? ' Continue seamlessly from previous clip. Maintain exact character, environment, lighting.' : ''
+      // identity lock: carry character/product reference images on EVERY clip so face & product don't drift/morph across the chain
+      let refUrls = []
+      if (useRefs && S.refImages.length) {
+        await S.ensureRefsUploaded()
+        refUrls = S.refImages.map((r) => r.falUrl).filter(Boolean)
+        if (refUrls.length) log(`🔒 ${refUrls.length} reference dikunci ke clip ini`)
+        else log('⚠️ Reference belum ke-upload — identity bisa drift')
+      }
+      const continuity = idx > 0 ? ' Continue seamlessly from the previous clip. Keep the exact same character identity, face, wardrobe, product appearance, environment and lighting.' : ''
+      const prompt = (clip.prompt || 'Natural motion, cinematic') + continuity
       const isRef2v = vidModel.includes('reference-to-video')
-      const input = buildVidInput(vidModel, { prompt: (clip.prompt || 'Natural motion, cinematic') + continuity, ...(isRef2v ? { reference_urls: [startImageUrl] } : { image_url: startImageUrl }), duration: clip.dur, aspect_ratio: ar })
-      pushLog('🎬 Generating...')
-      const result = await withRetry(() => falRun(vidModel, input, pushLog), 2, 3000)
+      const input = isRef2v
+        // ref2v: start frame + character refs all go in as reference elements
+        ? buildVidInput(vidModel, { prompt, reference_urls: [startImageUrl, ...refUrls].filter(Boolean), duration: clip.dur, aspect_ratio: ar })
+        // i2v: last frame as start image + character refs as identity anchors (Kling → reference_image_urls)
+        : buildVidInput(vidModel, { prompt, image_url: startImageUrl, reference_urls: refUrls, duration: clip.dur, aspect_ratio: ar })
+      log('🎬 Generating...')
+      const result = await withRetry(() => falRun(vidModel, input, log), 2, 3000)
       const videoUrl = result.video?.url || result.video
-      clip.videoUrl = videoUrl
-      pushLog('📸 Extracting last frame...')
-      try { clip.lastFrameUrl = await extractLastFrameFromVideo(videoUrl); pushLog('✅ Last frame ready → next clip') }
-      catch { clip.lastFrameUrl = startImageUrl; pushLog('⚠️ Frame extract failed, pakai start image') }
-      patch(clip.id, { status: 'done' })
-      S.addResult({ url: videoUrl, type: 'video', label: `Chain Clip ${clip.num}`, ar })
-      S.toast(`Clip ${clip.num} done ✓`)
+      if (!videoUrl) throw new Error('no video returned')
+      let lastFrameUrl
+      log('📸 Extracting last frame...')
+      try { lastFrameUrl = await extractLastFrameFromVideo(videoUrl); log('✅ Last frame ready → next clip') }
+      catch { lastFrameUrl = startImageUrl; log('⚠️ Frame extract failed, pakai start image') }
+      patch(clip.id, { status: 'done', videoUrl, lastFrameUrl })
+      S.addResult({ url: videoUrl, type: 'video', label: `Chain Clip ${idx + 1}`, ar })
+      S.toast(`Clip ${idx + 1} done ✓`)
     } catch (e) {
-      patch(clip.id, { status: 'error', log: [...clip.log, '❌ ' + e.message] })
+      patch(clip.id, { status: 'error', log: [...logs, '❌ ' + e.message] })
       S.toast('Failed: ' + e.message, 'error')
     }
   }
@@ -75,6 +93,15 @@ export default function ChainTab() {
                 <label>Aspect Ratio</label>
                 <div className="pill-group">
                   {['9:16', '16:9', '1:1'].map((a) => <div key={a} className={'pill' + (ar === a ? ' active' : '')} onClick={() => setAr(a)}>{a}</div>)}
+                </div>
+              </div>
+              <div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={useRefs} onChange={(e) => setUseRefs(e.target.checked)} style={{ width: 'auto', margin: 0 }} />
+                  <span>🔒 Kunci identitas pakai reference {S.refImages.length ? `(${S.refImages.length} ref)` : '(belum ada ref)'}</span>
+                </label>
+                <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
+                  Reference karakter/produk dikirim ke tiap clip biar wajah & produk gak drift/morph antar shot. Upload ref-nya di tab Ref Manager.
                 </div>
               </div>
             </div>

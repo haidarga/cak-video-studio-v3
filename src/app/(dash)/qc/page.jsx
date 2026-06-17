@@ -36,7 +36,7 @@ export default async function QCPage() {
   // every result. Default surface = recent QC work only; older results are
   // browsable via /results.
   const resultsQuery = supabase.from('results')
-    .select('id, type, url, label, ar, qc_status, group_label, created_at, persona_id, personas(id, name, username, avatar_url, postiz_channel_id)')
+    .select('id, type, url, label, ar, qc_status, qc_notes, group_label, created_at, persona_id, personas(id, name, username, avatar_url, postiz_channel_id)')
     .eq('workspace_id', ws.id).not('qc_status', 'is', null)
   const personasQuery = supabase.from('personas')
     .select('id, name, username, avatar_url, postiz_channel_id, voice_id, voice_name')

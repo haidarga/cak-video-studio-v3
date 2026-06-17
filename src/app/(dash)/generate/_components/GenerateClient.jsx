@@ -15,6 +15,7 @@ import { STYLE_PRESETS } from '../_lib/style-presets'
 import { compileImagePrompt, compileVideoPrompt } from '../_lib/prompt-compiler'
 import { CAMERA_PRESETS, listAllPresets, DEFAULT_CAMERA, getCameraPreset } from '@/lib/camera-presets'
 import { buildIdentitySentence, productNotesShort } from '@/lib/identity'
+import { applySeed, randomSeed, modelAcceptsSeed } from '@/lib/model-seed'
 import { uploadFile } from '@/lib/upload-client'
 import { LazyVideo } from '@/lib/use-lazy-video'
 
@@ -83,6 +84,11 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
     // cloned voice (ElevenLabs S2S). ON by default; only fires for shots that
     // actually have dialog + when the persona has a voice_id.
     autoVoiceSwap: true,
+    // Seed lock — when ON, supported models (Nano-Banana / Seedance / Happy
+    // Horse) reuse `seed` so re-gens stay consistent instead of drifting to a
+    // new result each time. OFF (default) = fresh seed each gen (diverse).
+    seedLock: false,
+    seed: 0,
     wardrobeOverride: '',
     // Per-Shot mode: optional user-set shot count. null = LLM decides based on
     // naskah length (1+ shots, 3-10s each). Set explicit number to force exactly
@@ -311,6 +317,15 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
             onClick={() => setGlobalConfig({ ...globalConfig, skipProduct: !globalConfig.skipProduct })} />
           <ChipToggle label="🎙 Auto voice swap" on={!!globalConfig.autoVoiceSwap}
             onClick={() => setGlobalConfig({ ...globalConfig, autoVoiceSwap: !globalConfig.autoVoiceSwap })} />
+          <ChipToggle label="🔒 Seed konsisten" on={!!globalConfig.seedLock}
+            onClick={() => setGlobalConfig({ ...globalConfig, seedLock: !globalConfig.seedLock, seed: globalConfig.seed || randomSeed() })} />
+          {globalConfig.seedLock && (
+            <span className="text-[9px] text-[var(--muted2)] self-center">
+              seed {globalConfig.seed} ·{' '}
+              <button type="button" className="underline" onClick={() => setGlobalConfig({ ...globalConfig, seed: randomSeed() })}>🎲 acak</button>
+              {' '}· konsisten utk Nano-Banana / Seedance / Happy Horse (Kling/Grok/GPT abaikan seed)
+            </span>
+          )}
           {globalConfig.autoVoiceSwap && (
             <span className="text-[9px] text-[var(--muted2)] self-center">~$0.30/video dialog · pakai voice persona</span>
           )}
@@ -754,6 +769,31 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       // those throws "trim is not a function". String() forces a primitive first.
       const wardrobe = String(shot.raw.wardrobe || '').trim() || null
 
+      // IMAGE ROLES — bind each reference image to an explicit job. Multi-ref
+      // image models (Nano-Banana / GPT-Image / Seedream) get a FLAT array of
+      // image_urls with no idea which is the product vs the character — so they
+      // blend or REDESIGN the product (extra holes, doubled plugs, wrong label).
+      // Naming each image's role (same pattern that fixed the video path) makes
+      // the product image authoritative — a text description alone never locks a
+      // specific product. Order matches refUrls = [selectedRefs..., styleUrls...].
+      const imgRoleLines = []
+      let rIdx = 1
+      for (const r of selectedRefs) {
+        if (!r.fal_url) continue
+        if (r.kind === 'product') {
+          // When product is skipped, don't instruct the model to feature it.
+          if (!globalConfig.skipProduct) {
+            imgRoleLines.push(`- Image ${rIdx} = THE PRODUCT (${r.label || 'product'}): reproduce its EXACT shape, proportions, button/port/plug layout, materials, colors and ALL label text (correctly spelled). Do NOT redesign, distort, recolor, melt, or invent details such as extra holes, ports or plugs. If it shows multiple angles, they are ONE single product — never render the multi-angle sheet itself.`)
+          }
+        } else {
+          imgRoleLines.push(`- Image ${rIdx} = character IDENTITY only (face, hair, body, skin tone${r.label ? ` — ${r.label}` : ''}). Ignore its background, location, pose and lighting.`)
+        }
+        rIdx++
+      }
+      const imageRoles = imgRoleLines.length
+        ? `IMAGE ROLES (each reference image has a specific job — follow exactly):\n${imgRoleLines.join('\n')}\n\n`
+        : ''
+
       // IMAGE path — full 11-layer compile (camera, identity, wardrobe, env,
       // action, brand, AR, continuity, quality, negatives, L11 edit imperative).
       // refsCount = character/product refs only; styleRefsCount keeps the
@@ -776,7 +816,11 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
         userPresets: userCameraPresets,
       })
 
-      const imgInput = buildImgInput(globalConfig.imgModel, { prompt: fullPrompt, refUrls, ar: globalConfig.ar })
+      // Seed: when "Seed konsisten" is ON, reuse the locked seed so supported
+      // models (Nano-Banana / Seedance / Happy Horse) re-gen consistently
+      // instead of drifting to a new result every time. OFF = fresh each gen.
+      const seed = globalConfig.seedLock ? globalConfig.seed : randomSeed()
+      const imgInput = applySeed(globalConfig.imgModel, buildImgInput(globalConfig.imgModel, { prompt: imageRoles + fullPrompt, refUrls, ar: globalConfig.ar }), seed)
       const imgResult = await falRun(globalConfig.imgModel, imgInput, { onProgress: (p) => patchShot(idx, { image: { status: p } }), workspaceId })
       const imageUrl = imgResult.images?.[0]?.url
       if (!imageUrl) throw new Error('no image URL returned')
@@ -784,7 +828,7 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       // multiple re-gens and pick the best one. shot.image.url stays as the
       // active mirror so downstream code (Send to QC, Gen Video) keeps working.
       patchShot(idx, (prev) => {
-        const variants = [...(prev.image_variants || []), { url: imageUrl, at: Date.now() }]
+        const variants = [...(prev.image_variants || []), { url: imageUrl, at: Date.now(), seed: modelAcceptsSeed(globalConfig.imgModel) ? seed : null }]
         return {
           image: { status: 'done', url: imageUrl },
           image_variants: variants,
@@ -1018,13 +1062,14 @@ ${motion}`
 
 PRODUCT FIDELITY (critical): the product is a RIGID manufactured object — its shape, proportions, port/button layout, colors and label text must stay IDENTICAL to the first frame in EVERY frame. No warping, no morphing, no melting, no re-imagined details, no gibberish text on the label. Keep the product itself mostly static; movement comes from the camera and the person, never from the product deforming.`
       }
-      const vidInput = buildVidInput(vidModel, {
+      const vidSeed = globalConfig.seedLock ? globalConfig.seed : randomSeed()
+      const vidInput = applySeed(vidModel, buildVidInput(vidModel, {
         prompt: finalMotion,
         image_url: isDirect ? undefined : shot.image?.url,
         reference_urls: vidRefUrls,
         duration: shot.raw.duration || 5,
         aspect_ratio: globalConfig.ar,
-      })
+      }), vidSeed)
       const vidResult = await falRun(vidModel, vidInput, { onProgress: (p) => patchShot(idx, { video: { status: p } }), workspaceId, duration: shot.raw.duration || 5 })
       const videoUrl = vidResult.video?.url || vidResult.video
       if (!videoUrl) throw new Error('no video URL returned')

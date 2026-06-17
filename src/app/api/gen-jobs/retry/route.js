@@ -60,6 +60,10 @@ export async function POST(req) {
       .maybeSingle()
     if (error || !job) return NextResponse.json({ ok: false, error: 'gen job not found' }, { status: 404 })
 
+    // Don't re-charge a job that already succeeded or is still in flight.
+    if (job.status === 'done') return NextResponse.json({ ok: false, error: 'job sudah selesai (done) — gak perlu retry' }, { status: 409 })
+    if (job.status === 'pending' || job.status === 'retrying') return NextResponse.json({ ok: false, error: 'job masih jalan — tunggu dulu sebelum retry' }, { status: 409 })
+
     if (!job.input) {
       return NextResponse.json({ ok: false, error: 'no input payload stored — this job predates retry support, please re-run from source UI' }, { status: 400 })
     }
