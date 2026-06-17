@@ -2011,6 +2011,7 @@ SMART MODEL ROUTER (pick the BEST video model for the task — mention pilihan +
   * Native-audio 1080p text video → 'alibaba/happy-horse/text-to-video'.
   * Premium photoreal hero shot from text → 'bytedance/seedance-2.0/text-to-video' (~$0.30/dtk — ONLY when user signals "paling bagus"/"final"/"hero", it's pricey).
   * High-quality text video WITH native audio (safety checker OFF) → 'fal-ai/ltx-2.3-quality/text-to-video' (LTX-2.3, ~$0.06/dtk, photoreal + audio). Pakai kalau user nyebut "LTX", minta "kualitas tinggi + ada suara", atau konten yang sering kena false-positive safety checker. Text-to-video only (no i2v/r2v wired).
+  * Smooth-motion video, safety checker OFF, i2v + t2v → 'fal-ai/wan/v2.7/image-to-video' (kalau ada gambar) atau 'fal-ai/wan/v2.7/text-to-video' (~$0.10/dtk @720p). Wan 2.7: motion halus, scene fidelity tinggi, safety checker bisa dimatiin (API). Pakai kalau user nyebut "Wan", atau konten yang kena false-positive safety checker tapi butuh dari gambar (i2v).
   * Best i2v quality → 'fal-ai/kling-video/v3/pro/image-to-video'.
   * Strong identity fidelity r2v → 'bytedance/seedance-2.0/fast/reference-to-video'.
 - Budget words ("murah", "hemat", "draft", "iterasi") → Grok. Quality words ("paling bagus", "final", "buat posting") → Kling Pro / Seedance 2.
@@ -2121,14 +2122,19 @@ export async function POST(req) {
     const lt = lastUserText.toLowerCase()
     const wantsLtx = /\bltx\b/.test(lt)
     const wantsHH = /happy[\s-]?horse/.test(lt)
+    const wantsWan = /\bwan\b/.test(lt)
     const wantsDirect = /(langsung|direct|bypass|tanpa gemini|skip gemini)/.test(lt) && /\bfal\b|fal\.?ai/.test(lt)
-    if (wantsLtx || wantsHH || wantsDirect) {
+    if (wantsLtx || wantsHH || wantsWan || wantsDirect) {
       const durMatch = lastUserText.match(/(\d+)\s*(?:detik|dtk|sec(?:ond)?s?|s)\b/i)
       const directDur = durMatch ? parseInt(durMatch[1]) : (parseInt(ctx.activeConfig?.duration) || 5)
       const hasImg = (ctx.recentAttachments || []).some((a) => a.type === 'image' && a.url)
       // Pick the model: explicit name wins; else honor the config bar; else HH t2v.
       let directModel, modelLabel
       if (wantsLtx) { directModel = 'fal-ai/ltx-2.3-quality/text-to-video'; modelLabel = 'LTX' }
+      else if (wantsWan) {
+        directModel = hasImg ? 'fal-ai/wan/v2.7/image-to-video' : 'fal-ai/wan/v2.7/text-to-video'
+        modelLabel = 'Wan 2.7'
+      }
       else if (wantsHH) {
         directModel = hasImg ? 'alibaba/happy-horse/image-to-video' : 'alibaba/happy-horse/text-to-video'
         modelLabel = 'Happy Horse'
@@ -2139,8 +2145,8 @@ export async function POST(req) {
       // Clean the prompt: strip model names + bypass phrases + duration so they
       // don't pollute the motion prompt. Rest verbatim.
       let directPrompt = lastUserText
-        .replace(/\b(?:pa(?:ke|kai))\s+(?:ltx|happy[\s-]?horse)\b/gi, '')
-        .replace(/\bltx\b/gi, '').replace(/happy[\s-]?horse/gi, '')
+        .replace(/\b(?:pa(?:ke|kai))\s+(?:ltx|happy[\s-]?horse|wan)\b/gi, '')
+        .replace(/\bltx\b/gi, '').replace(/happy[\s-]?horse/gi, '').replace(/\bwan(?:\s*2\.?7)?\b/gi, '')
         .replace(/(langsung|direct|bypass|tanpa gemini|skip gemini)\s*(ke\s*)?(fal\.?ai?)?/gi, '')
       if (durMatch) directPrompt = directPrompt.replace(durMatch[0], '')
       directPrompt = directPrompt.replace(/[,\s]{2,}/g, ' ').replace(/^[,\s]+|[,\s]+$/g, '').trim() || lastUserText

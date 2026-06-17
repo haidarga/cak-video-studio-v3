@@ -22,6 +22,11 @@ export const HAPPYHORSE_STABILITY = ' Keep ONE consistent visual style and ident
 // so every LTX gen ships clean without the caller thinking about it.
 const LTX_NEGATIVE_PROMPT = 'color distortion, overexposure, static, blurry details, subtitles, style, artwork, painting, frame, still, dim overall tone, worst quality, low quality, JPEG compression artifacts, ugly, mutilated, extra fingers, poorly drawn hands, poorly drawn face, deformed, disfigured, malformed limbs, fused fingers, motionless frame, cluttered background, three legs, crowded background, walking backwards, morphing, warping, melting, shape-shifting, face distortion, changing face, identity change, inconsistent character, character drift, flickering, flicker, temporal instability, jitter, ghosting, duplicated limbs, duplicated face, extra heads, drifting features, wobbling, frame blending artifacts, glitch, smearing, stretched anatomy, unstable proportions'
 
+// Wan 2.7 negative prompt — fal's playground default + temporal/identity
+// anti-drift terms (Wan can morph faces/limbs on longer motion like any
+// video model).
+const WAN_NEGATIVE_PROMPT = 'low resolution, errors, worst quality, low quality, incomplete, extra fingers, bad proportions, blurry, distorted, morphing, warping, melting, face distortion, identity change, character drift, flickering, jitter, duplicated limbs, deformed, malformed limbs'
+
 // ── Product fidelity directive ───────────────────────────────────────
 // Injects the active product's textual knowledge (description, dimensions,
 // features, label text, etc) into a prompt as a STRONG fidelity directive.
@@ -204,6 +209,26 @@ export function buildVideoInputForModel(model, { motion_prompt, image_url, image
     // this builder stays correct if those endpoints get wired later.
     if (isI2V && (image_url || refsArr[0])) base.image_url = image_url || refsArr[0]
     if (isR2V && refsArr.length) base.image_urls = refsArr.slice(0, 6)
+    return base
+  }
+
+  // Wan 2.7 (fal-ai/wan/v2.7/*) — smooth-motion video. Has a REAL
+  // enable_safety_checker (API-only, can't disable on the playground), so we
+  // force it OFF per the user. Priced per second ($0.10/s @720p, $0.15/s
+  // @1080p) → default 720p to keep batch cost sane; pass resolution:'1080p'
+  // for hero shots. i2v derives AR from the source image; t2v takes aspect_ratio.
+  if (model.includes('wan')) {
+    const base = {
+      prompt: motion_prompt,
+      negative_prompt: WAN_NEGATIVE_PROMPT,
+      resolution: resolution || '720p',
+      duration: Math.max(3, Math.min(10, parseInt(dur) || 5)),
+      enable_prompt_expansion: true,
+      enable_safety_checker: false, // user-requested OFF (only possible via API)
+      ...(Number.isFinite(seed) ? { seed } : {}),
+    }
+    if (isI2V && (image_url || refsArr[0])) base.image_url = image_url || refsArr[0]
+    else base.aspect_ratio = ar
     return base
   }
 

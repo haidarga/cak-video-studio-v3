@@ -32,6 +32,9 @@ export const VIDEO_COSTS_PER_SECOND = {
   // $0.054/s, at 576p ≈ $0.034/s. Estimate is conservative (budget gate uses
   // default 5s since LTX input has no `duration` field, only num_frames).
   'fal-ai/ltx-2.3-quality/text-to-video': 0.06,
+  // Wan 2.7 — $0.10/s @720p, $0.15/s @1080p (we default 720p in God Mode).
+  'fal-ai/wan/v2.7/image-to-video': 0.10,
+  'fal-ai/wan/v2.7/text-to-video': 0.10,
   // Video EDIT models (per second of OUTPUT; input charged too on some)
   'xai/grok-imagine-video/edit-video': 0.08,           // 720p $0.07 out + $0.01 in
   'xai/grok-imagine-video/extend-video': 0.08,         // same pricing as edit-video
