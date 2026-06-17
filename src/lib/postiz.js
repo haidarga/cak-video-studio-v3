@@ -169,8 +169,17 @@ async function uploadToPostiz(creds, { buffer, name, contentType }) {
   for (const path of paths) {
     try {
       const form = new FormData()
-      const blob = new Blob([buffer], { type: contentType })
-      form.append('file', blob, name)
+      // Use File (not bare Blob) so the multipart part carries BOTH the
+      // filename AND the content-type explicitly. With a plain Blob + filename
+      // arg, some Node/undici versions drop the part's Content-Type → Postiz's
+      // multer sees application/octet-stream → "Unsupported file type" even for
+      // a valid mp4. File makes both unambiguous.
+      const FileCtor = globalThis.File
+      if (FileCtor) {
+        form.append('file', new FileCtor([buffer], name, { type: contentType }))
+      } else {
+        form.append('file', new Blob([buffer], { type: contentType }), name)
+      }
       const res = await fetch(`${url}${path}`, {
         method: 'POST',
         headers: { 'Authorization': key }, // no Content-Type — let fetch set multipart boundary
