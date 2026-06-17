@@ -1630,6 +1630,7 @@ PRODUCT FIDELITY (critical): the product is a RIGID manufactured object — its 
             {state.shots.map((shot, i) => (
               shot.raw.panels
                 ? <StoryboardEditor key={shot.id} shot={shot} idx={i} ar={globalConfig.ar}
+                    maxDuration={getVideoMaxDuration(globalConfig.vidModel)}
                     availableRefs={[...selectedRefs, ...styleRefs]}
                     onToggleRef={(refId) => patchShot(i, (prev) => {
                       const cur = new Set(prev.disabledRefIds || [])
@@ -2009,7 +2010,7 @@ function MediaGallery({ shot, onPickImage, onPickVideo, onSetMediaView }) {
   )
 }
 
-function StoryboardEditor({ shot, idx, ar, availableRefs = [], onToggleRef, onResetRefs, onChangeRaw, onSetMediaView, onChangePanel, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onContinue, onLinkNext, onDelete }) {
+function StoryboardEditor({ shot, idx, ar, maxDuration = 15, availableRefs = [], onToggleRef, onResetRefs, onChangeRaw, onSetMediaView, onChangePanel, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onContinue, onLinkNext, onDelete }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(shot.label || '')
   const [showPanels, setShowPanels] = useState(true)
@@ -2102,12 +2103,30 @@ function StoryboardEditor({ shot, idx, ar, availableRefs = [], onToggleRef, onRe
               OK
             </label>
           </div>
-          {shot.image?.url && (
-            <button onClick={onGenVideo} disabled={vidStatus === 'generating' || imgStatus === 'generating'}
-              className="w-full mt-1 text-xs px-2 py-1.5 rounded bg-[var(--accent)] text-white font-semibold disabled:opacity-50">
-              {shot.video?.url ? '🔁 Re-gen Video' : `🎬 Gen Video (${totalSec || 15}s)`}
-            </button>
-          )}
+          {shot.image?.url && (() => {
+            // Label honesty: 1 gen = ONE clip capped at the model's max length,
+            // NOT the storyboard's planned total. When the plan exceeds the cap
+            // we say "seg 1 · max Ns" + a hint to chain via Continue, so users
+            // don't expect a 30s file from one click. See continueStoryboard.
+            const needsSegments = (totalSec || 0) > maxDuration
+            return (
+              <>
+                <button onClick={onGenVideo} disabled={vidStatus === 'generating' || imgStatus === 'generating'}
+                  className="w-full mt-1 text-xs px-2 py-1.5 rounded bg-[var(--accent)] text-white font-semibold disabled:opacity-50">
+                  {shot.video?.url
+                    ? '🔁 Re-gen Video'
+                    : needsSegments
+                      ? `🎬 Gen Video (seg 1 · max ${maxDuration}s)`
+                      : `🎬 Gen Video (${totalSec || 15}s)`}
+                </button>
+                {needsSegments && !shot.video?.url && (
+                  <div className="text-[9px] text-[var(--muted2)] mt-0.5 leading-snug">
+                    Plan {totalSec}s — 1 klik = segmen 1 (max {maxDuration}s). Pakai <b>Continue</b> buat segmen berikutnya, lalu stitch jadi {totalSec}s.
+                  </div>
+                )}
+              </>
+            )
+          })()}
 
           {/* Per-shot ref picker — chip row. Same as ShotEditor. */}
           {availableRefs.length > 0 && (
