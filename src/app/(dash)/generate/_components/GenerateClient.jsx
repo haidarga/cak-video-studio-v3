@@ -16,6 +16,7 @@ import { compileImagePrompt, compileVideoPrompt } from '../_lib/prompt-compiler'
 import { CAMERA_PRESETS, listAllPresets, DEFAULT_CAMERA, getCameraPreset } from '@/lib/camera-presets'
 import { buildIdentitySentence, productNotesShort } from '@/lib/identity'
 import { applySeed, randomSeed, modelAcceptsSeed } from '@/lib/model-seed'
+import { useUiMode } from '@/lib/ui-mode'
 import { uploadFile } from '@/lib/upload-client'
 import { LazyVideo } from '@/lib/use-lazy-video'
 
@@ -70,6 +71,7 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId])
 
+  const [uiMode] = useUiMode()
   const [globalConfig, setGlobalConfig] = useState({
     mode: 'shots', ar: '9:16', lang: 'Indonesian',
     imgModel: IMAGE_MODELS[0].v, vidModel: VIDEO_MODELS[0].v,
@@ -214,8 +216,14 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
             }).catch(() => {})
           }} />
 
-        {/* Compact summary bar — shows current mode/AR/lang/models in 1 line.
-            Click to expand the dropdowns when user wants to change. */}
+        {uiMode === 'simple' && (
+          <p className="text-[11px] text-[var(--muted)] leading-relaxed">
+            ✨ Mode <span className="font-semibold text-[var(--text)]">Simple</span> — pakai setelan otomatis terbaik (model, ratio, seed). Mau atur sendiri? Ganti ke <span className="font-semibold text-[var(--accent)]">⚙️ Pro</span> di sidebar kiri.
+          </p>
+        )}
+
+        {/* Config summary + model/AR/lang controls — Pro only; Simple uses smart defaults. */}
+        {uiMode === 'pro' && (
         <div>
           <button onClick={() => setShowConfigDetails((s) => !s)} type="button"
             className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] hover:border-[var(--muted)] text-xs">
@@ -303,8 +311,10 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
             </div>
           )}
         </div>
+        )}
 
-        {/* Output Constraints — compact chip strip. 4 toggles in 1 row. */}
+        {/* Output Constraints — Pro only; Simple uses smart defaults. */}
+        {uiMode === 'pro' && (
         <div className="flex items-center gap-1.5 flex-wrap">
           <span className="text-[10px] text-[var(--muted)] uppercase font-semibold mr-1">Constraints:</span>
           <ChipToggle label="🎬 No cuts" on={!!globalConfig.continuousShot}
@@ -336,10 +346,11 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
             {showAdvanced ? '▲ Hide advanced' : '▼ Advanced'}
           </button>
         </div>
+        )}
 
         {/* Advanced section — collapsed by default. Style preset / style refs /
             wardrobe / continuous-shot hint live here. */}
-        {showAdvanced && (
+        {uiMode === 'pro' && showAdvanced && (
           <div className="space-y-3 pt-2 border-t border-[var(--border)]">
             {/* Legacy Style preset — kept for back-compat, but Camera Preset
                 supersedes. Hidden behind Advanced because most users won't need it. */}

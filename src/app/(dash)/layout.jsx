@@ -8,6 +8,7 @@ import CostWidget from './_components/CostWidget'
 import OnboardingChecklist from './_components/OnboardingChecklist'
 import MobileNav from './_components/MobileNav'
 import ThemeToggle from './_components/ThemeToggle'
+import ModeToggle from './_components/ModeToggle'
 import GlobalSearch from './_components/GlobalSearch'
 import HelpModal from './_components/HelpModal'
 import NavLink from './_components/NavLink'
@@ -96,6 +97,10 @@ export default async function DashLayout({ children }) {
       <NavLink href="/results" label="📁 Results (browse all)" />
       <div className="mt-auto pt-4 border-t border-[var(--border)] text-xs text-[var(--muted)]">
         <NavLink href="/settings" label="⚙️ Settings & Keys" />
+        <div className="mb-2 mt-2 flex flex-col gap-1.5">
+          <span className="text-[9px] uppercase text-[var(--muted2)] font-bold tracking-[0.18em] px-1">Tampilan</span>
+          <ModeToggle />
+        </div>
         <div className="mb-2 mt-2"><ThemeToggle /></div>
         <div className="mb-2 truncate">{user.email}</div>
         <SignOutButton />
