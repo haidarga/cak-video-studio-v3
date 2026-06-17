@@ -278,6 +278,19 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
   const totalDur = useMemo(() => totalDuration(project.video_clips), [project.video_clips])
   const baseClips = useMemo(() => project.video_clips.filter((c) => (c.track_idx || 0) === 0).sort((a, b) => (a.in_track || 0) - (b.in_track || 0)), [project.video_clips])
   const overlayList = useMemo(() => project.video_clips.filter((c) => (c.track_idx || 0) > 0), [project.video_clips])
+  // Precompute wrapped text lines ONCE per text-clip change instead of running
+  // canvas measureText for every clip on every render. During playback the
+  // preview re-renders ~10Hz, so the old inline computeTextLines() call did
+  // hundreds of synchronous measureText ops/sec — the main playhead-lag cause.
+  const wrappedLinesMap = useMemo(() => {
+    const m = new Map()
+    for (const c of (project.text_clips || [])) {
+      if (c.words && c.words.length) continue // karaoke clips render per-word, no wrap
+      m.set(c.id, computeTextLines(c, project.ar))
+    }
+    return m
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.text_clips, project.ar, fontsReady])
   const baseInfo = useMemo(() => activeBaseClipAt(currentTime, project.video_clips), [currentTime, project.video_clips])
   const activeOverlaysList = useMemo(() => activeOverlaysAt(currentTime, project.video_clips), [currentTime, project.video_clips])
 
@@ -1253,7 +1266,7 @@ export default function EditorClient({ workspaceId, userId, results: initialResu
                   // re-wrap based on its own pane width. This is the only
                   // way to guarantee preview line breaks == export line breaks
                   // across different absolute pixel widths.
-                  const wrappedLines = isKaraoke ? null : computeTextLines(c, project.ar)
+                  const wrappedLines = isKaraoke ? null : (wrappedLinesMap.get(c.id) ?? computeTextLines(c, project.ar))
                   return (
                     <div key={c.id} onClick={(e) => { e.stopPropagation(); setSelected({ kind: 'text', id: c.id }) }}
                       style={{

@@ -62,8 +62,11 @@ export function compilePlanToProject(plan, videos, { ar = '9:16', maxTrimPct = n
     const v = videos[Math.max(0, Math.min(videos.length - 1, parseInt(c.video_index) || 0))]
     const dur = Math.max(0.5, v.duration || 10)
     let sIn = Math.max(0, Math.min(parseFloat(c.trim_start) || 0, dur - 0.3))
-    const sOutRaw = c.trim_end == null ? dur : parseFloat(c.trim_end)
-    let sOut = Math.max(sIn + 0.3, Math.min(Number.isFinite(sOutRaw) ? sOutRaw : dur, dur))
+    // Guard against the LLM emitting trim_end as 0, "null", NaN, or a value
+    // <= trim_start — any of which would collapse the clip to a 0.3s flash
+    // frame. Fall back to the full clip duration in those cases.
+    const sOutRaw = (c.trim_end == null || c.trim_end === 'null') ? dur : parseFloat(c.trim_end)
+    let sOut = (Number.isFinite(sOutRaw) && sOutRaw > sIn + 0.3) ? Math.min(sOutRaw, dur) : dur
     // Over-trim guard (opt-in): the LLM sometimes hacks 40%+ off a clip and
     // the result reads as broken jump cuts. F Creator caps trims at 25% per
     // end; QC AI Edit stays uncapped (compilations legitimately trim hard).

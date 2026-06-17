@@ -1,8 +1,12 @@
-import { createContext, useContext, useState, useEffect, useCallback } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react'
 import { setApiKeys, falUpload } from './lib/api'
 
 const StudioCtx = createContext(null)
 export const useStudio = () => useContext(StudioCtx)
+// Toasts live in their OWN context so the 3.2s auto-dismiss tick re-renders
+// only <ToastHost>, not every tab that consumes useStudio().
+const ToastCtx = createContext([])
+export const useToasts = () => useContext(ToastCtx)
 
 const ls = (k, d) => localStorage.getItem(k) || d
 const uid = (p) => `${p}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
@@ -205,7 +209,10 @@ export function StudioProvider({ children }) {
 
   const keyStatus = falKey && geminiKey ? 'ok' : falKey ? 'partial' : 'none'
 
-  const value = {
+  // Memoized so the context identity only changes on REAL state changes — not
+  // on every unrelated re-render. `toasts` is intentionally NOT in here; it
+  // lives in ToastCtx so dismiss ticks don't re-render every tab.
+  const value = useMemo(() => ({
     falKey, geminiKey, defaultVidModel, defaultImgModel, defaultAR, keyStatus, saveSettings,
     config, setConfig,
     refImages, addRefFromFile, updateRefLabel, updateRefKnowledge, removeRef, ensureRefsUploaded,
@@ -214,7 +221,21 @@ export function StudioProvider({ children }) {
     results, addResult, clearResults, renameResult, moveResultToGroup, setResultQC, resultGroup, setResultGroup,
     activeTab, setActiveTab, postProSource, setPostProSource, sendToPostPro,
     combineSources, setCombineSources, sendToCombine,
-    toasts, toast,
-  }
-  return <StudioCtx.Provider value={value}>{children}</StudioCtx.Provider>
+    toast,
+  }), [
+    falKey, geminiKey, defaultVidModel, defaultImgModel, defaultAR, keyStatus, saveSettings,
+    config, setConfig,
+    refImages, addRefFromFile, updateRefLabel, updateRefKnowledge, removeRef, ensureRefsUploaded,
+    templates, activeTemplateId, getActiveTemplate, saveTemplate, useTemplateById, clearActiveTemplate, deleteTemplate, renameTemplate,
+    brands, activeBrandId, getActiveBrand, createBrand, updateActiveBrand, applyBrand, deleteBrand, saveBrandNotes, clearBrand,
+    results, addResult, clearResults, renameResult, moveResultToGroup, setResultQC, resultGroup, setResultGroup,
+    activeTab, setActiveTab, postProSource, setPostProSource, sendToPostPro,
+    combineSources, setCombineSources, sendToCombine,
+    toast,
+  ])
+  return (
+    <StudioCtx.Provider value={value}>
+      <ToastCtx.Provider value={toasts}>{children}</ToastCtx.Provider>
+    </StudioCtx.Provider>
+  )
 }

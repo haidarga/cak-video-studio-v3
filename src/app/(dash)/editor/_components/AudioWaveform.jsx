@@ -12,13 +12,14 @@ export default function AudioWaveform({ url, width, height, color = '#fbbf24' })
   useEffect(() => {
     if (!url) return
     let aborted = false
+    let audioCtx = null
     setError(false); setPeaks(null)
     ;(async () => {
       try {
         const res = await fetch(proxify(url), { cache: 'force-cache' })
         const buf = await res.arrayBuffer()
-        const ctx = new (window.AudioContext || window.webkitAudioContext)()
-        const audio = await ctx.decodeAudioData(buf)
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)()
+        const audio = await audioCtx.decodeAudioData(buf)
         if (aborted) return
         // Sample to N peaks
         const samples = 200
@@ -37,9 +38,14 @@ export default function AudioWaveform({ url, width, height, color = '#fbbf24' })
       } catch (e) {
         console.warn('Waveform decode failed:', e.message)
         if (!aborted) setError(true)
+      } finally {
+        // Decode is one-shot — release the OS audio handle immediately.
+        // Browsers cap concurrent AudioContexts (~6 on mobile); leaking one
+        // per audio clip eventually garbles playback / throws on new contexts.
+        if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null }
       }
     })()
-    return () => { aborted = true }
+    return () => { aborted = true; if (audioCtx) audioCtx.close().catch(() => {}) }
   }, [url])
 
   useEffect(() => {

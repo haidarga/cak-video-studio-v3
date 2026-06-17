@@ -1,7 +1,7 @@
-import { useStudio } from '../store'
+import { useToasts } from '../store'
 
 export default function ToastHost() {
-  const { toasts } = useStudio()
+  const toasts = useToasts()
   return (
     <div style={{ position: 'fixed', bottom: 20, right: 20, zIndex: 999, display: 'flex', flexDirection: 'column', gap: 8 }}>
       {toasts.map((t) => (

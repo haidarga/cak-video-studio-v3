@@ -176,6 +176,15 @@ export default function FCreatorClient({ workspaceId, userId, activeBrand, perso
     if (!queue.length) { setErr('Isi minimal 1 naskah'); return }
     setErr(''); setRunning(true); stopRef.current = false
     try { wakeLockRef.current = await navigator.wakeLock?.request('screen') } catch {}
+    // The browser auto-releases the wakeLock whenever the tab goes hidden.
+    // Without reacquiring on return, a long run stalls when the user alt-tabs
+    // and the machine sleeps mid-gen. Reacquire while the run is still active.
+    const reacquireWakeLock = async () => {
+      if (document.visibilityState === 'visible' && !stopRef.current) {
+        try { wakeLockRef.current = await navigator.wakeLock?.request('screen') } catch {}
+      }
+    }
+    document.addEventListener('visibilitychange', reacquireWakeLock)
 
     const cfg = {
       persona, refs: cfgRefs, brand: activeBrand,
@@ -218,6 +227,7 @@ export default function FCreatorClient({ workspaceId, userId, activeBrand, perso
 
     const allDone = itemsRef.current.filter((it) => it.naskah.trim()).every((it) => it.stage === 'done')
     await persist(stopRef.current ? 'paused' : (allDone ? 'done' : 'running'))
+    document.removeEventListener('visibilitychange', reacquireWakeLock)
     try { wakeLockRef.current?.release?.() } catch {}
     setRunning(false)
   }
