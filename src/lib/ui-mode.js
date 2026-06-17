@@ -8,12 +8,12 @@ const KEY = 'cak_ui_mode'
 const EVT = 'cak-ui-mode-change'
 
 export function getUiMode() {
-  if (typeof window === 'undefined') return 'simple'
-  return localStorage.getItem(KEY) === 'pro' ? 'pro' : 'simple'
+  if (typeof window === 'undefined') return 'pro'
+  return localStorage.getItem(KEY) === 'simple' ? 'simple' : 'pro'
 }
 
 export function useUiMode() {
-  const [mode, setMode] = useState('simple')
+  const [mode, setMode] = useState('pro')
   useEffect(() => {
     setMode(getUiMode())
     const onChange = () => setMode(getUiMode())

@@ -13,6 +13,7 @@ import { VIDEO_MODELS, IMAGE_MODELS } from '@/lib/fal-client'
 import { imageCost, videoCost, fmtCost } from '@/lib/cost-table'
 import { listAllPresets, DEFAULT_CAMERA } from '@/lib/camera-presets'
 import { runNaskahPipeline, effectiveVidModel } from '../_lib/factory-pipeline'
+import { useUiMode } from '@/lib/ui-mode'
 
 const MODES = [
   { v: 'shots', l: '🎬 Per-Shot (image → video)' },
@@ -26,6 +27,7 @@ function uid() { return Math.random().toString(36).slice(2, 10) }
 
 export default function FCreatorClient({ workspaceId, userId, activeBrand, personas, workspaceRefs }) {
   const supabase = createClient()
+  const [uiMode] = useUiMode()
 
   // ── config ──
   const [personaId, setPersonaId] = useState(personas[0]?.id || null)
@@ -265,6 +267,7 @@ export default function FCreatorClient({ workspaceId, userId, activeBrand, perso
             {personas.map((p) => <option key={p.id} value={p.id}>{p.name}{p.voice_id ? ' 🎙' : ''}</option>)}
           </select>
         </label>
+        {uiMode === 'pro' && (<>
         <label className="block col-span-2">
           <span className="text-[10px] uppercase font-bold text-[var(--muted)]">Mode</span>
           <select value={mode} onChange={(e) => setMode(e.target.value)} disabled={running}
@@ -364,6 +367,7 @@ export default function FCreatorClient({ workspaceId, userId, activeBrand, perso
             {voiceSwap && persona?.voice_id ? '●' : '○'} 🎙 Voice swap
           </button>
         </div>
+        </>)}
 
         {/* refs picker — thumbnail cards so 20 refs named "UGREEN Charger
             GaN..." are tellable apart at a glance */}
