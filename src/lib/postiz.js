@@ -117,13 +117,49 @@ export async function fetchPostizChannels(creds) {
 }
 
 // ── Media upload relay ──────────────────────────────────────────────
+const MIME_TO_EXT = { 'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/webm': 'webm', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' }
+const EXT_TO_MIME = { mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif' }
+
+// Sniff real mime from magic bytes — the only source of truth when the HTTP
+// content-type lies (R2 serves octet-stream when ContentType wasn't set on
+// upload, which is the common "udah mp4 tapi Postiz 400" cause).
+function sniffMime(buf) {
+  if (!buf || buf.length < 12) return null
+  if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return 'image/jpeg'
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return 'image/png'
+  if (buf[0] === 0x1A && buf[1] === 0x45 && buf[2] === 0xDF && buf[3] === 0xA3) return 'video/webm'
+  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return 'image/gif'
+  if (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 && buf[8] === 0x57 && buf[9] === 0x45) return 'image/webp'
+  // mp4 / mov family: 'ftyp' box at offset 4, brand at 8-12
+  if (buf[4] === 0x66 && buf[5] === 0x74 && buf[6] === 0x79 && buf[7] === 0x70) {
+    return buf.slice(8, 10).toString('ascii').startsWith('qt') ? 'video/quicktime' : 'video/mp4'
+  }
+  return null
+}
+
 async function downloadMedia(url) {
   const res = await fetch(url, { cache: 'no-store' })
   if (!res.ok) throw new Error(`Gagal download media (${res.status}) dari ${url.slice(0, 80)}`)
   const buffer = Buffer.from(await res.arrayBuffer())
-  const contentType = res.headers.get('content-type') || 'application/octet-stream'
+
+  let contentType = (res.headers.get('content-type') || '').toLowerCase().split(';')[0].trim()
   const lastSeg = url.split('/').pop()?.split('?')[0] || 'media'
-  return { buffer, contentType, name: lastSeg }
+  const dot = lastSeg.lastIndexOf('.')
+  const baseName = dot > 0 ? lastSeg.slice(0, dot) : lastSeg
+  const ext = dot > 0 ? lastSeg.slice(dot + 1).toLowerCase() : ''
+
+  // Postiz /upload validates by mime + extension and 400s on a generic/wrong
+  // content-type even when the bytes ARE valid. Recover a real mime: sniff the
+  // magic bytes first (most reliable), then the URL extension, then keep what
+  // the server said.
+  const generic = !contentType || contentType === 'application/octet-stream' || contentType === 'binary/octet-stream'
+  if (generic) contentType = sniffMime(buffer) || EXT_TO_MIME[ext] || 'video/mp4'
+
+  // Guarantee the filename carries the extension that matches the mime — Postiz
+  // also infers type from the filename, so a UUID with no extension 400s.
+  const wantExt = MIME_TO_EXT[contentType] || ext || 'mp4'
+  const name = `${baseName || 'media'}.${wantExt}`
+  return { buffer, contentType, name }
 }
 
 async function uploadToPostiz(creds, { buffer, name, contentType }) {
