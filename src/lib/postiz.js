@@ -137,10 +137,32 @@ function sniffMime(buf) {
   return null
 }
 
+// fal (and some encoders) emit ISO-BMFF files branded as QuickTime — the
+// ftyp major brand is 'qt  ' even though the file is named .mp4 and is a
+// perfectly mp4-demuxable h264/aac container (browsers play it fine). Postiz
+// inspects file CONTENT (magic bytes), and its video allowlist is MP4-only, so
+// a 'qt  ' brand reads as video/quicktime → "Unsupported file type". The bytes
+// are already mp4-compatible; only the brand tag lies. Rewrite it in place to
+// 'mp42'/'isom' so content sniffers recognize it as mp4. No re-encode.
+function coerceMp4Brand(buf) {
+  if (!buf || buf.length < 16 || buf.toString('ascii', 4, 8) !== 'ftyp') return { buf, changed: false }
+  const major = buf.toString('ascii', 8, 12)
+  // Already a real mp4 brand → leave untouched.
+  if (/^(isom|mp41|mp42|mp4v|avc1|iso2|iso4|iso5|iso6|dash|m4v)/i.test(major)) return { buf, changed: false }
+  const out = Buffer.from(buf) // copy — never mutate the source buffer
+  out.write('mp42', 8, 'ascii') // major brand
+  const boxSize = Math.min(out.readUInt32BE(0), out.length)
+  for (let off = 16; off + 4 <= boxSize; off += 4) {
+    if (out.toString('ascii', off, off + 4) === 'qt  ') out.write('isom', off, 'ascii')
+  }
+  return { buf: out, changed: true }
+}
+
 async function downloadMedia(url) {
   const res = await fetch(url, { cache: 'no-store' })
   if (!res.ok) throw new Error(`Gagal download media (${res.status}) dari ${url.slice(0, 80)}`)
-  const buffer = Buffer.from(await res.arrayBuffer())
+  const raw = Buffer.from(await res.arrayBuffer())
+  const { buf: buffer, changed: brandFixed } = coerceMp4Brand(raw)
 
   let contentType = (res.headers.get('content-type') || '').toLowerCase().split(';')[0].trim()
   const lastSeg = url.split('/').pop()?.split('?')[0] || 'media'
@@ -154,6 +176,9 @@ async function downloadMedia(url) {
   // the server said.
   const generic = !contentType || contentType === 'application/octet-stream' || contentType === 'binary/octet-stream'
   if (generic) contentType = sniffMime(buffer) || EXT_TO_MIME[ext] || 'video/mp4'
+  // We just rewrote a QuickTime-branded container to a real mp4 brand — force
+  // the mime so we don't ship a stale 'video/quicktime' label the server sent.
+  if (brandFixed) contentType = 'video/mp4'
 
   // Guarantee the filename carries the extension that matches the mime — Postiz
   // also infers type from the filename, so a UUID with no extension 400s.
