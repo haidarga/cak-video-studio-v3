@@ -19,6 +19,7 @@ import Link from 'next/link'
 import { IMAGE_MODELS, VIDEO_MODELS } from '@/lib/fal-client'
 import { uploadFile } from '@/lib/upload-client'
 import { createClient } from '@/lib/supabase/client'
+import { useUiMode } from '@/lib/ui-mode'
 
 const WELCOME_MESSAGE = {
   role: 'assistant',
@@ -27,6 +28,7 @@ const WELCOME_MESSAGE = {
 
 export default function GodModeClient({ workspaceId, userId, activeBrand, personas = [], refs = [] }) {
   const productRefs = refs.filter((r) => r.kind === 'product')
+  const [uiMode] = useUiMode()
   const [conversationId, setConversationId] = useState(null)
   const [messages, setMessages] = useState([WELCOME_MESSAGE])
   const [input, setInput] = useState('')
@@ -498,10 +500,9 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
         ))}
       </div>
 
-      {/* Gen config bar — collapsible. Lets user pick image/video model,
-          aspect ratio, duration, audio toggle. Agent uses these defaults
-          when calling gen tools; user can still override per-message via
-          chat ("pake Kling Pro, 1:1, 10 detik"). */}
+      {/* Gen config bar — Pro only; in Simple mode users just tell the agent
+          in chat ("pake Kling Pro, 1:1, 10 detik"). */}
+      {uiMode === 'pro' && (
       <div className="mb-3 bg-[var(--surface)] border border-[var(--border)] rounded-lg overflow-hidden">
         <button
           onClick={() => setShowConfig((s) => !s)}
@@ -568,6 +569,7 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
           </div>
         )}
       </div>
+      )}
 
       {/* Active context pills — locked persona / product / preset that get
           baked into every subsequent gen request. User dismisses via ✕. */}
