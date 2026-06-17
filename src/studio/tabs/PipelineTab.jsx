@@ -7,6 +7,7 @@ import TemplateSummary from '../components/TemplateSummary'
 import RefManager from '../components/RefManager'
 import StyleRefPicker from '../components/StyleRefPicker'
 import { apiUrl } from '../lib/backend'
+import { applySeed, randomSeed } from '@/lib/model-seed'
 
 const AR_OPTS = ['9:16', '16:9', '1:1']
 const RES_OPTS = ['720p', '1080p']
@@ -92,9 +93,26 @@ export default function PipelineTab() {
       // optional style reference image — appended last, used for look/mood only
       const styleNote = config.styleRefUrl ? ' STYLE REFERENCE: the final reference image is a style guide — match its overall aesthetic, lighting, mood and color grade, NOT its content or subjects.' : ''
       const refUrlsAll = config.styleRefUrl ? [...refUrls, config.styleRefUrl] : refUrls
-      const fullPrompt = `${shot.image_prompt}. ${styleSuffix}. ${config.ar} composition. CONTINUITY: maintain exact visual style and character appearance from references.${productImageDirective(productKnowledge || brand?.notes)}${styleNote}`
+      // IMAGE ROLES — bind each reference image to a job so multi-ref models
+      // don't blend characters or REDESIGN the product (invented holes/plugs).
+      // Studio refs carry no explicit kind, so a ref with product `knowledge`
+      // is treated as the product. Order matches refUrlsAll = [sel..., styleRef].
+      const roleLines = []
+      let rIdx = 1
+      for (const r of sel) {
+        if (!r.falUrl) continue
+        if ((r.knowledge || '').trim()) {
+          roleLines.push(`- Image ${rIdx} = THE PRODUCT (${r.label || 'product'}): reproduce its EXACT shape, proportions, port/button/plug layout, colors and ALL label text (correctly spelled). Do NOT redesign, distort, recolor or invent extra holes, ports or plugs. Multiple angles = ONE single product.`)
+        } else {
+          roleLines.push(`- Image ${rIdx} = character IDENTITY only (face, hair, body${r.label ? ` — ${r.label}` : ''}). Ignore its background, location and pose.`)
+        }
+        rIdx++
+      }
+      const imageRoles = roleLines.length ? `IMAGE ROLES (each reference image has a specific job — follow exactly):\n${roleLines.join('\n')}\n\n` : ''
+      const fullPrompt = imageRoles + `${shot.image_prompt}. ${styleSuffix}. ${config.ar} composition. CONTINUITY: maintain exact visual style and character appearance from references.${productImageDirective(productKnowledge || brand?.notes)}${styleNote}`
       patchShot(shot.id, { statusLabel: 'generating image...' })
-      const runImg = () => falRun(model, buildImgInput(model, { prompt: fullPrompt, refUrls: refUrlsAll, ar: config.ar }), pushLog)
+      const seed = config.seedLock ? config.seed : randomSeed()
+      const runImg = () => falRun(model, applySeed(model, buildImgInput(model, { prompt: fullPrompt, refUrls: refUrlsAll, ar: config.ar }), seed), pushLog)
       const result = await withRetry(runImg, 2, 2500)
       const imageUrl = result.images?.[0]?.url
       if (!imageUrl) throw new Error('no image returned')
@@ -149,6 +167,7 @@ export default function PipelineTab() {
         }
         input = buildVidInput(config.vidModel, { prompt: motionPrompt, image_url: startImageUrl, reference_urls: refUrls, duration: shot.duration, aspect_ratio: config.ar, resolution: res })
       }
+      input = applySeed(config.vidModel, input, config.seedLock ? config.seed : randomSeed())
       const result = await withRetry(() => falRun(config.vidModel, input, pushLog), 2, 3000)
       const videoUrl = result.video?.url || result.video
       if (!videoUrl) throw new Error('no video returned — fal: ' + JSON.stringify(result).slice(0, 240))

@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react'
 import { useStudio } from '../store'
 import { falRun, falUpload, buildVidInput, downloadFile, withRetry } from '../lib/api'
+import { applySeed, randomSeed } from '@/lib/model-seed'
 import { extractLastFrameFromVideo } from '../lib/video'
 import { VIDEO_MODELS } from '../lib/constants'
 
@@ -53,11 +54,12 @@ export default function ChainTab() {
       const continuity = idx > 0 ? ' Continue seamlessly from the previous clip. Keep the exact same character identity, face, wardrobe, product appearance, environment and lighting.' : ''
       const prompt = (clip.prompt || 'Natural motion, cinematic') + continuity
       const isRef2v = vidModel.includes('reference-to-video')
-      const input = isRef2v
+      const seed = S.config.seedLock ? S.config.seed : randomSeed()
+      const input = applySeed(vidModel, isRef2v
         // ref2v: start frame + character refs all go in as reference elements
         ? buildVidInput(vidModel, { prompt, reference_urls: [startImageUrl, ...refUrls].filter(Boolean), duration: clip.dur, aspect_ratio: ar })
         // i2v: last frame as start image + character refs as identity anchors (Kling → reference_image_urls)
-        : buildVidInput(vidModel, { prompt, image_url: startImageUrl, reference_urls: refUrls, duration: clip.dur, aspect_ratio: ar })
+        : buildVidInput(vidModel, { prompt, image_url: startImageUrl, reference_urls: refUrls, duration: clip.dur, aspect_ratio: ar }), seed)
       log('🎬 Generating...')
       const result = await withRetry(() => falRun(vidModel, input, log), 2, 3000)
       const videoUrl = result.video?.url || result.video
@@ -102,6 +104,15 @@ export default function ChainTab() {
                 </label>
                 <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
                   Reference karakter/produk dikirim ke tiap clip biar wajah & produk gak drift/morph antar shot. Upload ref-nya di tab Ref Manager.
+                </div>
+              </div>
+              <div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={!!S.config.seedLock} onChange={(e) => S.setConfig({ seedLock: e.target.checked, seed: S.config.seed || randomSeed() })} style={{ width: 'auto', margin: 0 }} />
+                  <span>🎲 Seed konsisten {S.config.seedLock ? `(seed ${S.config.seed})` : ''}</span>
+                </label>
+                <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
+                  ON = re-gen konsisten buat Seedance / Happy Horse (Kling/Grok abaikan seed). Berlaku juga di Pipeline &amp; Bulk.
                 </div>
               </div>
             </div>

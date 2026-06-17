@@ -30,6 +30,9 @@ export function StudioProvider({ children }) {
     styleRefUrl: ls('cak_styleref', ''),  // optional style reference image (look/mood/color to imitate)
     imgModel: ls('cak_imgmodel', DEF_IMG), vidModel: ls('cak_vidmodel', DEF_VID),
     lang: ls('cak_lang', 'Indonesian'),
+    // Seed lock — ON reuses `seed` so supported models (Nano-Banana / Seedance
+    // / Happy Horse) re-gen consistently instead of drifting every time.
+    seedLock: false, seed: 0,
   }))
   const setConfig = useCallback((patch) => setConfigState((c) => ({ ...c, ...patch })), [])
 
