@@ -89,7 +89,7 @@ export function buildProductFidelityDirective(activeProduct) {
 // previous bug was routing on `if (image_url)` which broke any ref-to-
 // video model after we started auto-promoting chat attachments as
 // image_url.
-export function buildVideoInputForModel(model, { motion_prompt, image_url, image_urls, duration, aspect_ratio, resolution }) {
+export function buildVideoInputForModel(model, { motion_prompt, image_url, image_urls, duration, aspect_ratio, resolution, seed }) {
   const dur = String(Math.max(3, Math.min(15, parseInt(duration) || 5)))
   const ar = aspect_ratio || '9:16'
 
@@ -196,6 +196,9 @@ export function buildVideoInputForModel(model, { motion_prompt, image_url, image
       guidance_scale: 1,       // LTX distilled WANTS low CFG; raising it ADDS artifacts, not fewer
       video_quality: 'maximum', // top of the enum (low|medium|high|maximum) — fal's "Quality" preset equivalent
       video_write_mode: 'balanced', // not 'small' — small re-compresses harder = mushier output
+      // Seed — when locked, the same prompt re-gens the SAME clip (consistency /
+      // reproducibility). LTX supports it natively; omitted when not provided.
+      ...(Number.isFinite(seed) ? { seed } : {}),
     }
     // LTX has i2v/r2v variants too — pass the source image(s) when present so
     // this builder stays correct if those endpoints get wired later.

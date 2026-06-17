@@ -403,6 +403,7 @@ const TOOLS = {
         duration: dur,
         aspect_ratio: finalAr,
         resolution: cfg.resolution,
+        seed: cfg.seedLock && Number.isFinite(cfg.seed) ? cfg.seed : undefined,
       })
 
       try {

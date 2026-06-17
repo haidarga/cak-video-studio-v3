@@ -20,6 +20,7 @@ import { IMAGE_MODELS, VIDEO_MODELS } from '@/lib/fal-client'
 import { uploadFile } from '@/lib/upload-client'
 import { createClient } from '@/lib/supabase/client'
 import { useUiMode } from '@/lib/ui-mode'
+import { randomSeed } from '@/lib/model-seed'
 
 const WELCOME_MESSAGE = {
   role: 'assistant',
@@ -59,6 +60,10 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
     duration: 5,
     audio: true,
     resolution: '720p',
+    // Seed lock — ON reuses `seed` so LTX (and other seed-capable models)
+    // re-gen the SAME clip from the same prompt. OFF = fresh each time.
+    seedLock: false,
+    seed: 0,
   })
   const [showConfig, setShowConfig] = useState(false)
   const scrollRef = useRef(null)
@@ -562,6 +567,20 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
                 onChange={(v) => setGenConfig({ ...genConfig, resolution: v })}
                 options={[['720p', '720p (cheap, fast)'], ['1080p', '1080p (mahal, sharp)']]}
               />
+              <div className="md:col-span-2 flex items-center gap-2 flex-wrap">
+                <button type="button"
+                  onClick={() => setGenConfig({ ...genConfig, seedLock: !genConfig.seedLock, seed: genConfig.seed || randomSeed() })}
+                  className={`text-xs px-3 py-1.5 rounded-full border ${genConfig.seedLock ? 'bg-[var(--accent)]/25 border-[var(--accent)] font-bold' : 'bg-[var(--surface2)] border-[var(--border)] text-[var(--muted)]'}`}>
+                  {genConfig.seedLock ? '🔒' : '🎲'} Seed konsisten
+                </button>
+                {genConfig.seedLock && (
+                  <span className="text-[10px] text-[var(--muted)]">
+                    seed {genConfig.seed} ·{' '}
+                    <button type="button" className="underline" onClick={() => setGenConfig({ ...genConfig, seed: randomSeed() })}>acak</button>
+                    {' '}· bikin LTX / Seedance re-gen sama persis
+                  </span>
+                )}
+              </div>
             </div>
             <div className="text-[10px] text-[var(--muted2)]">
               Atau override per-prompt via chat: "pake Kling Pro, 1:1, 10 detik, no audio"
