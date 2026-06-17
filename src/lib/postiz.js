@@ -181,7 +181,8 @@ async function uploadToPostiz(creds, { buffer, name, contentType }) {
       try { json = text ? JSON.parse(text) : null } catch {}
       if (!res.ok) {
         const msg = json?.message || json?.error || text.slice(0, 240) || `HTTP ${res.status}`
-        const err = new Error(`Postiz upload ${res.status} @ ${path}: ${msg}`)
+        const sent = `sent: ${contentType}, "${name}", ${(buffer.length / 1048576).toFixed(1)}MB`
+        const err = new Error(`Postiz upload ${res.status} @ ${path}: ${msg} (${sent})`)
         err.status = res.status
         if (res.status !== 404) throw err
         lastErr = err
@@ -252,6 +253,14 @@ export async function createPostizPost({ creds, channelId, content, mediaUrl, sc
   let imageField = []
   if (mediaUrl) {
     const media = await downloadMedia(mediaUrl)
+    // Postiz (and every social target) only ingests a small set of types.
+    // WebM is the common offender — our "Draft (fast)" canvas export emits
+    // WebM, which TikTok/IG/YT reject. Fail with an actionable message BEFORE
+    // burning the upload round-trip on a "Unsupported file type" 400.
+    const SUPPORTED = new Set(['video/mp4', 'video/quicktime', 'image/jpeg', 'image/png', 'image/gif', 'image/webp'])
+    if (!SUPPORTED.has(media.contentType)) {
+      throw new Error(`File type "${media.contentType}" gak didukung Postiz/sosmed. Kemungkinan ini WebM dari export "Draft (fast)" — export ulang pakai MP4 (tombol "Export → QC (MP4)") lalu post lagi.`)
+    }
     const uploaded = await uploadToPostiz(creds, media)
     imageField = [{
       id: String(uploaded.id),
