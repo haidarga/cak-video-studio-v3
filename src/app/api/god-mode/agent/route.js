@@ -18,6 +18,7 @@ import { CINEMATIC_PRESETS, CINEMATIC_CATEGORIES, getPresetById } from '@/lib/ci
 import { IMAGE_MODELS, VIDEO_MODELS } from '@/lib/fal-client'
 import { canonicalFalPath, candidateFalPaths } from '@/lib/fal-paths'
 import { assertBudget, estimateFalCost } from '@/lib/budget-gate'
+import { cleanProductBg } from '@/lib/bg-removal'
 import { isPublicHttpUrl } from '@/lib/ssrf-guard'
 import {
   buildVideoInputForModel,
@@ -126,7 +127,15 @@ const TOOLS = {
           .from('persona_refs').select('refs(fal_url)').eq('persona_id', ctx.activePersona.id)
         for (const r of pRefs || []) if (r.refs?.fal_url) refUrls.push(r.refs.fal_url)
       }
-      if (ctx.activeProduct?.fal_url) refUrls.push(ctx.activeProduct.fal_url)
+      // Product ref → strip its background first (L4 attention boost) so the
+      // product holds its shape/label far better. Fail-safe + cached; disable
+      // with activeConfig.cleanProductBg === false.
+      if (ctx.activeProduct?.fal_url) {
+        const pUrl = ctx.activeConfig?.cleanProductBg === false
+          ? ctx.activeProduct.fal_url
+          : await cleanProductBg(ctx.activeProduct.fal_url, falKey, falCall)
+        refUrls.push(pUrl)
+      }
       // Dedupe keeping FIRST occurrence (continuity ref can also arrive as a
       // chat attachment) — preserves priority order, and duplicate ref URLs
       // waste model attention / 422 on some endpoints.
@@ -388,7 +397,15 @@ const TOOLS = {
           .from('persona_refs').select('refs(fal_url)').eq('persona_id', ctx.activePersona.id)
         for (const r of pRefs || []) if (r.refs?.fal_url) refUrls.push(r.refs.fal_url)
       }
-      if (ctx.activeProduct?.fal_url) refUrls.push(ctx.activeProduct.fal_url)
+      // Product ref → strip its background first (L4 attention boost) so the
+      // product holds its shape/label far better. Fail-safe + cached; disable
+      // with activeConfig.cleanProductBg === false.
+      if (ctx.activeProduct?.fal_url) {
+        const pUrl = ctx.activeConfig?.cleanProductBg === false
+          ? ctx.activeProduct.fal_url
+          : await cleanProductBg(ctx.activeProduct.fal_url, falKey, falCall)
+        refUrls.push(pUrl)
+      }
       // Dedupe keeping FIRST occurrence — continuity ref can also arrive as
       // a chat attachment; duplicates waste model attention / 422 sometimes.
       refUrls = [...new Set(refUrls)]
