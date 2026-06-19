@@ -20,6 +20,7 @@ import { canonicalFalPath, candidateFalPaths } from '@/lib/fal-paths'
 import { assertBudget, estimateFalCost } from '@/lib/budget-gate'
 import { cleanProductBg } from '@/lib/bg-removal'
 import { phoneSkinClause, enrichLighting, motionRealismFor, inferCategoryFromText } from '@/lib/realism'
+import { buildVoiceDirection } from '@/lib/voice-direction'
 import { isPublicHttpUrl } from '@/lib/ssrf-guard'
 import {
   buildVideoInputForModel,
@@ -392,6 +393,10 @@ const TOOLS = {
       // motion + grounding + breathing; cinema→smooth controlled; animation→none.
       const vmMotionLine = motionRealismFor(finalMotion, inferCategoryFromText(finalMotion))
       if (vmMotionLine) finalMotion += `\n${vmMotionLine}`
+      // Spoken accent/dialect (native-audio models) — only when the user set a
+      // dialect in config (avoids tagging silent b-roll with a "speaks…" line).
+      const vmVoice = buildVoiceDirection({ lang: ctx.activeConfig?.lang || 'Indonesian', dialect: ctx.activeConfig?.dialect, hasDialog: !!ctx.activeConfig?.dialect, audioOn })
+      if (vmVoice) finalMotion += `\n${vmVoice}`
 
       // Build refs from active context. PRIORITY ORDER:
       //   0. Continuity refs from continue_shot (previous shot's frame + its

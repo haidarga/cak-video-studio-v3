@@ -281,6 +281,10 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
                 options={[['9:16', '9:16 vertical'], ['16:9', '16:9 horizontal'], ['1:1', '1:1 square']]} />
               <Sel label="Bahasa Dialog" value={globalConfig.lang} onChange={(v) => setGlobalConfig({ ...globalConfig, lang: v })}
                 options={[['Indonesian', 'Indonesian'], ['English', 'English'], ['Javanese', 'Javanese'], ['Sundanese', 'Sundanese'], ['Balinese', 'Balinese']]} />
+              {/* Spoken accent/dialect for native-audio video models (Seedance 2 / Kling T2V / LTX).
+                  Injected into the video prompt + relaxed pace. Default Netral = no accent line. */}
+              <Sel label="Aksen / Dialek (audio)" value={globalConfig.dialect || 'Netral'} onChange={(v) => setGlobalConfig({ ...globalConfig, dialect: v })}
+                options={[['Netral', 'Netral'], ['Jawa medok', 'Jawa medok'], ['Sunda', 'Sunda'], ['Medan / Batak', 'Medan / Batak'], ['Batak Toba', 'Batak Toba'], ['Minang', 'Minang'], ['Betawi', 'Betawi'], ['Bali', 'Bali'], ['Bugis-Makassar', 'Bugis-Makassar']]} />
               <Sel label="Image Model" value={globalConfig.imgModel} onChange={(v) => setGlobalConfig({ ...globalConfig, imgModel: v })}
                 options={IMAGE_MODELS.map((m) => [m.v, m.l])} />
               <Sel label="Video Model" value={globalConfig.vidModel}
@@ -983,6 +987,10 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
         continuousShot: !!globalConfig.continuousShot,
         refsCount: refUrls.length,
         sceneType: shot.raw.scene_type || null, // parser-tagged → reliable motion realism
+        lang: globalConfig.lang,
+        dialect: globalConfig.dialect || null,   // regional accent for native-audio models
+        hasDialog: !globalConfig.skipDialog && !!dialogs,
+        audioOn: globalConfig.audio !== false,
         userPresets: userCameraPresets,
       })
       // Storyboard + reference-to-video: prepend the approved 3x3 grid as the

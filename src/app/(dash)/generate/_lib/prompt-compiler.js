@@ -21,6 +21,7 @@
 import { getCameraPreset } from '@/lib/camera-presets'
 // Realism helpers are shared with God Mode — single source in src/lib/realism.js.
 import { phoneSkinClause, enrichLighting, inferSceneType, motionRealismFor } from '@/lib/realism'
+import { buildVoiceDirection } from '@/lib/voice-direction'
 export { enrichLighting, inferSceneType, motionRealismFor }
 
 // Contradiction rules â€” pattern that matches "loser" tokens + conditions
@@ -330,6 +331,10 @@ export function compileVideoPrompt(spec) {
     noText = false,
     camera = null,
     sceneType = null, // parser-tagged scene type (reliable) → skips brittle regex
+    lang = 'Indonesian',
+    dialect = null,   // regional accent (Medanese, Jawa, Sunda…) for native-audio models
+    hasDialog = false,
+    audioOn = true,
     userPresets = [],
   } = spec
 
@@ -352,6 +357,10 @@ export function compileVideoPrompt(spec) {
   // negatives. Adds secondary motion + grounding + breathing + easing.
   const motionLine = motionRealismFor(action, cam?.category || 'phone', sceneType)
   if (motionLine) lines.push(motionLine)
+  // Spoken-audio direction: language + regional accent/dialect + relaxed pace,
+  // for native-audio models. Only when there's dialog and audio is on.
+  const voiceLine = buildVoiceDirection({ lang, dialect, hasDialog, audioOn })
+  if (voiceLine) lines.push(voiceLine)
   lines.push(`${ar} composition.`)
   if (refsCount) lines.push('Keep character identity consistent with references.')
   // Actively forbid hallucinated on-screen text. AI video models love to render

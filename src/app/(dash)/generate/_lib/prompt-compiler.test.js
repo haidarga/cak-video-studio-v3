@@ -130,6 +130,16 @@ describe('compileVideoPrompt', () => {
     const out = compileVideoPrompt({ action: 'a quiet moment', ar: '9:16', sceneType: 'beauty_application' })
     expect(out).toMatch(/hands in motion with natural blur/i)
   })
+
+  it('injects spoken accent + relaxed pace when there is dialog (native-audio)', () => {
+    const out = compileVideoPrompt({ action: 'she speaks', ar: '9:16', lang: 'Indonesian', dialect: 'Jawa medok', hasDialog: true, audioOn: true })
+    expect(out).toMatch(/Jawa medok accent/i)
+    expect(out).toMatch(/UNHURRIED pace/i)
+  })
+  it('no voice line when there is no dialog', () => {
+    const out = compileVideoPrompt({ action: 'b-roll pan', ar: '9:16', dialect: 'Jawa medok', hasDialog: false })
+    expect(out).not.toMatch(/Spoken audio/i)
+  })
 })
 
 describe('motionRealismFor (camera-aware)', () => {
