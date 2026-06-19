@@ -479,6 +479,21 @@ export function getVideoMaxDuration(vidModel) {
   return 10
 }
 
+// Storyboard grids + direct mode REQUIRE a ref-to-video model (the 3x3 grid
+// must be a sequence map, not a frame to animate). When the user picked a
+// NON-ref model (e.g. "Grok Imagine"), we must switch — but to the SAME
+// FAMILY's ref variant, not silently to Seedance. Respects the user's pick.
+export function toRefToVideoModel(vidModel) {
+  const m = (vidModel || '').toLowerCase()
+  if (m.includes('reference-to-video') || m.includes('ref-to-video')) return vidModel // already ref
+  if (m.includes('grok')) return 'xai/grok-imagine-video/reference-to-video'
+  if (m.includes('kling')) return 'fal-ai/kling-video/v2.5-turbo/pro/ref-to-video'
+  if (m.includes('happy-horse')) return 'alibaba/happy-horse/reference-to-video'
+  if (m.includes('seedance-2')) return 'bytedance/seedance-2.0/fast/reference-to-video'
+  if (m.includes('seedance')) return 'fal-ai/bytedance/seedance/v1/lite/reference-to-video'
+  return 'bytedance/seedance-2.0/fast/reference-to-video' // safe default for unknown families
+}
+
 export const VIDEO_MODELS = [
   { v: 'xai/grok-imagine-video/image-to-video', l: 'Grok Imagine — ~$0.07/dtk 720p (audio) 💰' },
   { v: 'xai/grok-imagine-video/reference-to-video', l: '🎭 Grok Imagine Ref-to-Video — ~$0.07/dtk (multi-ref, NO grid morph) 💰' },

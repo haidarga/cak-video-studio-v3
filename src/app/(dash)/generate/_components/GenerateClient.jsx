@@ -5,7 +5,7 @@ import {
   falRun, buildImgInput, buildVidInput,
   buildStoryboardGridPrompt,
   VIDEO_MODELS, IMAGE_MODELS,
-  getVideoMaxDuration,
+  getVideoMaxDuration, toRefToVideoModel,
 } from '@/lib/fal-client'
 import { imageCost, videoCost, fmtCost } from '@/lib/cost-table'
 // Generate-ONLY libs — live under generate/_lib so god-mode work can never
@@ -891,10 +891,12 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
     // instead of letting fal.ai 422 us or producing glitched output.
     let vidModel = globalConfig.vidModel
     const isRefModel = vidModel.includes('ref-to-video') || vidModel.includes('reference-to-video')
-    if (isDirect && !isRefModel) {
-      vidModel = 'xai/grok-imagine-video/reference-to-video'
-    } else if (isGridShot && !isRefModel) {
-      vidModel = 'bytedance/seedance-2.0/fast/reference-to-video'
+    // Storyboard grid + direct mode need a ref-to-video model. If the user
+    // picked a non-ref model, switch to the SAME FAMILY's ref variant (Grok→
+    // Grok ref, Seedance→Seedance ref) instead of silently forcing Seedance —
+    // respects the model the user actually chose.
+    if ((isDirect || isGridShot) && !isRefModel) {
+      vidModel = toRefToVideoModel(vidModel)
     }
     patchShot(idx, { video: { status: 'generating' } })
     try {
