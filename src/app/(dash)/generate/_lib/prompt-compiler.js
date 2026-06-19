@@ -19,6 +19,9 @@
 //      preset-appropriate one-liner.
 
 import { getCameraPreset } from '@/lib/camera-presets'
+// Realism helpers are shared with God Mode — single source in src/lib/realism.js.
+import { phoneSkinClause, enrichLighting, inferSceneType, motionRealismFor } from '@/lib/realism'
+export { enrichLighting, inferSceneType, motionRealismFor }
 
 // Contradiction rules â€” pattern that matches "loser" tokens + conditions
 // under which they should be dropped. The sanitizer runs over each prompt
@@ -122,19 +125,9 @@ export function sanitize(text, ctx) {
   return out
 }
 
-// Context-aware skin add-on from the scene's environment/time-of-day. Harsh
-// outdoor sun / morning skin surface real texture the model otherwise hides.
-function skinContext(environment) {
-  const env = String(environment || '').toLowerCase()
-  if (/outdoor|sunny|beach|pantai|pool|kolam|taman/.test(env)) return ' Sunburn flush across nose and cheeks, sun-kissed glow, freckles surfacing in direct light.'
-  if (/morning|pagi|sunrise|bangun tidur/.test(env)) return ' Slight puffiness under eyes, natural just-woke morning skin.'
-  return ''
-}
-
-// Style-aware quality line. Replaces the old IMG_QUALITY blob. For phone
-// presets it now names CONCRETE skin imperfection — "natural skin" alone is a
-// weak keyword (AI defaults to retouched/waxy skin); pores + asymmetry +
-// oiliness force real-human texture, the #1 anti-uncanny lever for UGC.
+// Style-aware quality line. Skin/lighting/motion realism now live in the shared
+// src/lib/realism.js (single source, also used by God Mode). pickQuality stays
+// here because it also handles cinema product-label + the Generate categories.
 function pickQuality(cam, media, skipProduct, environment = '') {
   if (cam.category === 'animation') {
     return media === 'video'
@@ -142,71 +135,14 @@ function pickQuality(cam, media, skipProduct, environment = '') {
       : 'Clean stylised render, consistent character design.'
   }
   if (cam.category === 'phone') {
-    const skin = 'Visible skin pores especially on nose and cheeks, mild facial asymmetry, natural skin oiliness on T-zone, faint under-eye shadow, no beauty filter, no skin smoothing.'
-    const ctx = skinContext(environment)
     return media === 'video'
-      ? `Natural handheld motion, real-person realism. ${skin}${ctx} No over-processing.`
-      : `Real-person realism. ${skin}${ctx} No over-processing.`
+      ? `Natural handheld motion, real-person realism. ${phoneSkinClause(environment)} No over-processing.`
+      : `Real-person realism. ${phoneSkinClause(environment)} No over-processing.`
   }
-  // cinema + custom
   const product = skipProduct ? '' : ' Product label sharp and legible.'
   return media === 'video'
     ? `Steady framing, consistent identity.${product}`
     : `Anatomically correct, well-composed.${product}`
-}
-
-// ── Lighting enrichment (L4b) ────────────────────────────────────────
-// "morning natural light" reads to the model as flat ambient → bland, no
-// depth. Harsh DIRECTIONAL light (single window / sun) is the #1 realism lever:
-// hard shadow gives free facial structure, specular highlight reads as "real
-// photo". Inject a directional light line ONLY when the naskah didn't already
-// name a light source, and never for animation.
-const LIGHTING_KEYWORDS = ['sunlight', 'sun ', 'window light', 'harsh light', 'directional', 'golden hour', 'overcast', 'candlelight', 'neon', 'backlight', 'rim light', 'sinar matahari', 'cahaya jendela', 'window']
-export function enrichLighting(environment, cam) {
-  if (!cam || cam.category === 'animation') return ''
-  const env = String(environment || '').toLowerCase()
-  if (!env) return ''
-  if (LIGHTING_KEYWORDS.some((k) => env.includes(k))) return '' // already specified — respect it
-  if (/outdoor|taman|pantai|pool|kolam|beach|jalan(an)?/.test(env)) return 'Bright outdoor natural light, strong directional sunlight, hard shadow from overhead sun defining facial structure.'
-  if (/pagi|morning|sunrise/.test(env)) return 'Soft morning window light from one side, gentle directional shadow, warm natural skin tones.'
-  if (/sore|afternoon|evening|senja|petang|dusk/.test(env)) return 'Warm late-afternoon directional light, golden long shadows, warm amber skin tone.'
-  return 'Strong natural light from a nearby window casting a directional shadow on the face, single-source lighting creating natural depth — not flat ambient light.'
-}
-
-// ── Motion realism baseline (video) ──────────────────────────────────
-// A persistent realism layer that AI motion needs but the naskah author rarely
-// writes: motion blur (hides skin/hand artifacts), SECONDARY MOTION (hair +
-// clothing follow-through), GROUNDING/weight, BREATHING/micro-movement, EASING,
-// and camera↔subject reaction — the biomechanics that separate "captured" from
-// "rendered". CRITICALLY this is CAMERA-AWARE: handheld blur belongs to PHONE
-// presets only. Injecting it into cinema/studio (whose negatives literally say
-// "motion blur"/"handheld") is a self-contradiction — cinema gets a smooth,
-// controlled line instead, and animation gets nothing (clean frames).
-const PHONE_MOTION_BY_SCENE = {
-  beauty_application: 'Hands in motion with natural blur during application, genuine contact with the skin (not floating), hair responding to head movement.',
-  talking_head: 'Slight natural motion blur as the subject speaks and gestures; hair and shoulders with natural secondary motion; subtle breathing and occasional blink; natural easing in and out of every move, nothing robotic.',
-  product_reveal: 'Brief motion blur as the product enters frame, settling into clear focus; natural arm arc with visible weight; the product stays RIGID — only the hand moves it, the product itself never deforms.',
-  walking_transition: 'Natural stride with arm swing and grounded foot contact, secondary motion in hair and clothing, camera following naturally with organic deceleration.',
-  broll: 'Handheld camera movement with natural acceleration and deceleration, motion blur in the direction of the pan, subtle camera breathing.',
-  default: 'Slight natural motion blur from handheld movement; secondary motion in hair and clothing; subtle breathing and weight shift; natural easing, nothing stops abruptly.',
-}
-const CINEMA_MOTION = 'Smooth controlled camera movement (gimbal/dolly), steady framing, subtle secondary motion in hair and clothing, natural easing — no handheld shake.'
-
-export function inferSceneType(action) {
-  const a = String(action || '').toLowerCase()
-  if (/apply|makeup|skincare|blend|lipstick|foundation|oles|usap wajah/.test(a)) return 'beauty_application'
-  if (/walk|enters frame|transition|berjalan|jalan|masuk frame/.test(a)) return 'walking_transition'
-  if (/\bpan\b|b-?roll|establishing|environment shot/.test(a)) return 'broll'
-  if (/product|reveal|angkat|tunjuk|hold up|demonstrate|showcase/.test(a)) return 'product_reveal'
-  if (/speak|talk|dialogue|bicara|ngomong|smile|senyum|\bnod\b|look at camera/.test(a)) return 'talking_head'
-  return 'default'
-}
-
-// Camera-aware motion line. category: 'phone' (default/UGC) | 'cinema' | 'animation'.
-export function motionRealismFor(action, category = 'phone') {
-  if (category === 'animation') return '' // clean animated frames — no blur/shake
-  if (category === 'cinema') return CINEMA_MOTION
-  return PHONE_MOTION_BY_SCENE[inferSceneType(action)] || PHONE_MOTION_BY_SCENE.default
 }
 
 // Layer order constant â€” referenced by tests/logs.

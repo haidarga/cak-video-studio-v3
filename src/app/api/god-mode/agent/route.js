@@ -19,6 +19,7 @@ import { IMAGE_MODELS, VIDEO_MODELS } from '@/lib/fal-client'
 import { canonicalFalPath, candidateFalPaths } from '@/lib/fal-paths'
 import { assertBudget, estimateFalCost } from '@/lib/budget-gate'
 import { cleanProductBg } from '@/lib/bg-removal'
+import { phoneSkinClause, enrichLighting, motionRealismFor, inferCategoryFromText } from '@/lib/realism'
 import { isPublicHttpUrl } from '@/lib/ssrf-guard'
 import {
   buildVideoInputForModel,
@@ -188,6 +189,17 @@ const TOOLS = {
       // consistent. Critical for branded campaigns (UGREEN, ACEKID, etc).
       const productDirective = buildProductFidelityDirective(ctx.activeProduct)
       if (productDirective) finalPrompt += productDirective
+
+      // ── Realism injection (shared with Generate via src/lib/realism.js) ──
+      // God Mode has no camera-preset system, so infer the look from the prompt
+      // text. For photoreal/UGC ('phone') add concrete skin imperfection +
+      // directional lighting (kills waxy skin + flat ambient). Skipped for
+      // animation/cinema asks so we never fight an explicit stylized request.
+      if (inferCategoryFromText(finalPrompt) === 'phone') {
+        finalPrompt += `\n\nReal-person realism. ${phoneSkinClause('')} No over-processing.`
+        const lightLine = enrichLighting(finalPrompt, 'phone')
+        if (lightLine) finalPrompt += `\n${lightLine}`
+      }
 
       // ── PER-IMAGE mode ──────────────────────────────────────────────
       // "dari 5 gambar, masing-masing buatin character sheet" = FIVE gens,
@@ -374,6 +386,12 @@ const TOOLS = {
       // best chance of identical product across all frames.
       const vidProductDirective = buildProductFidelityDirective(ctx.activeProduct)
       if (vidProductDirective) finalMotion += vidProductDirective
+
+      // Motion realism baseline (shared with Generate) — camera-aware via the
+      // look inferred from the motion text: phone→handheld blur + secondary
+      // motion + grounding + breathing; cinema→smooth controlled; animation→none.
+      const vmMotionLine = motionRealismFor(finalMotion, inferCategoryFromText(finalMotion))
+      if (vmMotionLine) finalMotion += `\n${vmMotionLine}`
 
       // Build refs from active context. PRIORITY ORDER:
       //   0. Continuity refs from continue_shot (previous shot's frame + its
