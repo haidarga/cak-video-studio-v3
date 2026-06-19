@@ -98,8 +98,8 @@ const TOOLS = {
 
   // ─ Generation tools ──────────────────────────────────────────────
   gen_image: {
-    description: 'Generate ONE image (NOT video) from a text prompt. Trigger phrases: "bikin foto/gambar", "buat image", "generate foto", "render gambar", "kasih foto", "potret", "hasilin gambar", "bikin poster", "edit gambar diatas". Use this when user explicitly wants an IMAGE not video. **CRITICAL**: if user uploaded image(s) to chat AND asks to edit/use them ("dari gambar diatas", "dari gambar yang gua upload"), those attachments AUTO-include as source refs — DO NOT tell user to pin anything. Pass visual prompt. Optional: model, ar override. **per_image** (boolean): set TRUE when the user uploaded MULTIPLE images and wants ONE output PER image ("masing-masing", "per gambar", "untuk setiap gambar", "dari 5 gambar masing-masing buatin", "satu-satu"). Then it loops: one gen per uploaded image (each using ONLY that image as source), returns a gallery of N. Leave FALSE/omit to combine all uploads into one image. Refs auto-stack: chat attachments + pinned persona refs + pinned product.',
-    handler: async ({ prompt, ar, model: modelOverride, extra_ref_urls, per_image }, ctx) => {
+    description: 'Generate ONE image (NOT video) from a text prompt. Trigger phrases: "bikin foto/gambar", "buat image", "generate foto", "render gambar", "kasih foto", "potret", "hasilin gambar", "bikin poster", "edit gambar diatas". Use this when user explicitly wants an IMAGE not video. **CRITICAL**: if user uploaded image(s) to chat AND asks to edit/use them ("dari gambar diatas", "dari gambar yang gua upload"), those attachments AUTO-include as source refs — DO NOT tell user to pin anything. Pass visual prompt. Optional: model, ar override. **per_image** (boolean): set TRUE when the user uploaded MULTIPLE images and wants ONE output PER image ("masing-masing", "per gambar", "untuk setiap gambar", "dari 5 gambar masing-masing buatin", "satu-satu"). Then it loops: one gen per uploaded image (each using ONLY that image as source), returns a gallery of N. Leave FALSE/omit to combine all uploads into one image. **per_image_labels** (string array, image order): when the user assigns a NAME to each image ("Gambar 1. Alora, Gambar 2. Alya, Gambar 3. Arya, …"), pass the names here IN IMAGE ORDER (["Alora","Alya","Arya",…]) — each sheet gets ITS OWN name. When you use per_image_labels, keep the `prompt` NAME-NEUTRAL (say "the person in the reference image", do NOT bake a single name into it) so the per-image name isn't fought by a baked-in one. Refs auto-stack: chat attachments + pinned persona refs + pinned product.',
+    handler: async ({ prompt, ar, model: modelOverride, extra_ref_urls, per_image, per_image_labels }, ctx) => {
       const falKey = await getFalKey(ctx.supabase, ctx.workspaceId)
       if (!falKey) return { type: 'error', error: 'no fal.ai key configured' }
 
@@ -195,31 +195,41 @@ const TOOLS = {
         const gate = await assertBudget(ctx.supabase, ctx.workspaceId, { projectedUsd: projected })
         if (!gate.ok) return { type: 'error', error: gate.reason, gate }
 
+        // Per-image NAMES (image-order). When the user maps names to images
+        // ("Gambar 1. Alora, 2. Alya, ..."), each sheet must show ITS OWN name
+        // — not the same name on all 5. We inject the label per iteration as a
+        // hard override so it wins even if the base prompt mentions a name.
+        const labels = Array.isArray(per_image_labels) ? per_image_labels.map((x) => String(x || '').trim()) : []
         const out = []
         const CONC = 5
         for (let s = 0; s < uploadedImgs.length; s += CONC) {
           const batch = uploadedImgs.slice(s, s + CONC)
           const res = await Promise.all(batch.map(async (srcUrl, bi) => {
             const idx = s + bi
+            const label = labels[idx] || ''
+            // Hard name override for this specific sheet.
+            const iterPrompt = label
+              ? `${finalPrompt}\n\nThe character's name printed on THIS character sheet MUST be EXACTLY "${label}" — render that exact text as the name label, and use no other name anywhere on the sheet.`
+              : finalPrompt
             try {
               let d
               try {
-                d = await falCall(perModel, buildImageInputForModel(perModel, { prompt: finalPrompt, refs: [srcUrl], ar: finalAr, quality: cfg.resolution }), falKey)
+                d = await falCall(perModel, buildImageInputForModel(perModel, { prompt: iterPrompt, refs: [srcUrl], ar: finalAr, quality: cfg.resolution }), falKey)
               } catch (err) {
                 if (/failed to download|file_download_error|inaccessible/i.test(String(err?.message || ''))) {
                   const mref = await mirrorToFalStorage(srcUrl, falKey)
-                  d = await falCall(perModel, buildImageInputForModel(perModel, { prompt: finalPrompt, refs: [mref], ar: finalAr, quality: cfg.resolution }), falKey)
+                  d = await falCall(perModel, buildImageInputForModel(perModel, { prompt: iterPrompt, refs: [mref], ar: finalAr, quality: cfg.resolution }), falKey)
                 } else throw err
               }
               const u = d?.images?.[0]?.url || d?.image?.url || d?.url
               if (!u) return { error: 'no image url', index: idx }
               const { data: row } = await ctx.supabase.from('results').insert({
                 workspace_id: ctx.workspaceId, persona_id: ctx.activePersona?.id || null,
-                type: 'image', url: u, label: `Character sheet ${idx + 1}`, ar: finalAr,
-                meta: { source: 'god-mode', batch: 'per-image', source_image: srcUrl, prompt: finalPrompt, model: perModel },
+                type: 'image', url: u, label: label ? `${label} — character sheet` : `Character sheet ${idx + 1}`, ar: finalAr,
+                meta: { source: 'god-mode', batch: 'per-image', source_image: srcUrl, name: label || null, prompt: iterPrompt, model: perModel },
                 created_by: ctx.userId,
               }).select('id').single()
-              return { url: u, index: idx, result_id: row?.id }
+              return { url: u, index: idx, name: label || null, result_id: row?.id }
             } catch (e) { return { error: e.message, index: idx } }
           }))
           out.push(...res)
@@ -2046,7 +2056,7 @@ Rules:
   * "20 ad concepts + scored + ranked + combined into production package" → viral_ad_campaign (one shot, returns all of it).
   * "brand from scratch + naskah + listing photos" → brand_builder.
   * "20 product variants in different scenes" → mass_image_variants.
-  * "dari N gambar yang gua upload, masing-masing buatin character sheet / foto / variant" → gen_image with per_image=true (ONE output PER uploaded image, returns N). Do NOT combine them into one image. Watch for "masing-masing", "per gambar", "satu-satu", "untuk setiap gambar", "dari N gambar ... masing-masing".
+  * "dari N gambar yang gua upload, masing-masing buatin character sheet / foto / variant" → gen_image with per_image=true (ONE output PER uploaded image, returns N). Do NOT combine them into one image. Watch for "masing-masing", "per gambar", "satu-satu", "untuk setiap gambar", "dari N gambar ... masing-masing". If the user names each image ("Gambar 1. Alora, Gambar 2. Alya, …"), ALSO pass per_image_labels=["Alora","Alya",…] in image order AND keep `prompt` name-neutral (refer to "the person in the reference image", never bake one name into the prompt) — otherwise every sheet ends up with the same name.
   * "analyze video + remake with my character + product" → analyze_reference_video first, then gen_video with refs.
   If you see a tool that fits, USE IT. Don't tell user "gua belum bisa". Don't claim limits the tools don't have.
 - IMPORTANT: viral_ad_campaign does NOT need real-time market data. It synthesizes from established viral ad frameworks (hook types, retention mechanics, conversion triggers). Use it whenever user asks for ad concepts + scoring + final package, even if they mention "viral ads from last X days".
