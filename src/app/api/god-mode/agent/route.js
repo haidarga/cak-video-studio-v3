@@ -1288,8 +1288,15 @@ Be specific to Indonesian / SEA market. Make brand names that sound natural in I
         })
       }
 
-      // Build refs (product + persona if pinned)
+      // Build refs. Priority: images the user UPLOADED to chat (the most
+      // direct "bikin variant/character-sheet dari gambar ini" source) first,
+      // then pinned product, then persona refs. Previously this ignored
+      // uploaded attachments entirely — so a request over 5 uploaded images
+      // got refUrls=[] → fal /edit 422 "At least one image URL is required".
       const refUrls = []
+      for (const a of (ctx.recentAttachments || [])) {
+        if (a?.type === 'image' && a?.url) refUrls.push(a.url)
+      }
       if (use_product && ctx.activeProduct?.fal_url) refUrls.push(ctx.activeProduct.fal_url)
       if (use_personas && ctx.activePersona?.id) {
         const { data: pRefs } = await ctx.supabase
@@ -1297,8 +1304,12 @@ Be specific to Indonesian / SEA market. Make brand names that sound natural in I
         for (const r of pRefs || []) if (r.refs?.fal_url) refUrls.push(r.refs.fal_url)
       }
 
-      const model = 'fal-ai/nano-banana/edit'
       const cfg = ctx.activeConfig || {}
+      // Honor the user's configured image model; default nano-banana edit.
+      // An /edit model REQUIRES source images — if we have none, drop to the
+      // base text-to-image variant so the gen still runs instead of 422-ing.
+      let model = cfg.image_model || 'fal-ai/nano-banana/edit'
+      if (refUrls.length === 0 && /\/edit$/.test(model)) model = model.replace(/\/edit$/, '')
 
       // Fire all gens in parallel with concurrency cap = 5 to stay under
       // fal.ai rate limits + Vercel function 60s timeout. Each image gen
@@ -1315,11 +1326,11 @@ Be specific to Indonesian / SEA market. Make brand names that sound natural in I
           // (different colors, wrong port counts, mangled label text).
           const prompt = `${v.hook} of ${productHint} ${v.scene}, professional photography, ${cfg.resolution === '1080p' ? 'highly detailed' : 'clean composition'}${massProductDirective}`
           try {
-            const data = await falCall(model, {
-              prompt,
-              image_urls: refUrls.slice(0, 6),
-              output_format: 'jpeg',
-            }, falKey)
+            // Only send image_urls when we actually have refs — base (non-edit)
+            // models reject an empty/extra image_urls field.
+            const input = { prompt, output_format: 'jpeg' }
+            if (refUrls.length) input.image_urls = refUrls.slice(0, 6)
+            const data = await falCall(model, input, falKey)
             const url = data?.images?.[0]?.url || data?.image?.url
             if (!url) return null
 
