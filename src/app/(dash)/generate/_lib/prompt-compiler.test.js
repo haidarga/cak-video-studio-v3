@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { sanitize, compileImagePrompt, compileVideoPrompt, enrichLighting, inferSceneType } from './prompt-compiler.js'
+import { sanitize, compileImagePrompt, compileVideoPrompt, enrichLighting, inferSceneType, motionRealismFor } from './prompt-compiler.js'
 
 describe('sanitize — contradiction engine', () => {
   it('drops cinematic language on phone presets', () => {
@@ -94,6 +94,36 @@ describe('compileVideoPrompt', () => {
   it('picks scene-appropriate blur (beauty application)', () => {
     const out = compileVideoPrompt({ action: 'applying lip pencil to her lips', ar: '9:16' })
     expect(out).toMatch(/hands in motion with natural blur/i)
+  })
+
+  it('does NOT inject handheld motion blur into cinema presets (preset negates it)', () => {
+    const out = compileVideoPrompt({ action: 'walks forward', ar: '9:16', camera: 'studio_tvc' })
+    expect(out).not.toMatch(/motion blur/i)       // the contradiction we fixed
+    expect(out).toMatch(/smooth controlled/i)     // cinema gets controlled motion instead
+  })
+
+  it('embeds product rigidity in the product-reveal motion line (anti-morph)', () => {
+    const out = compileVideoPrompt({ action: 'she lifts the product to reveal it', ar: '9:16' })
+    expect(out).toMatch(/RIGID/)
+    expect(out).toMatch(/only the hand moves it/i)
+  })
+})
+
+describe('motionRealismFor (camera-aware)', () => {
+  it('phone → handheld blur + secondary motion', () => {
+    expect(motionRealismFor('she speaks to camera', 'phone')).toMatch(/motion blur/i)
+    expect(motionRealismFor('she speaks to camera', 'phone')).toMatch(/secondary motion|breathing/i)
+  })
+  it('cinema → smooth controlled, no motion blur', () => {
+    const m = motionRealismFor('walks forward', 'cinema')
+    expect(m).toMatch(/smooth controlled/i)
+    expect(m).not.toMatch(/motion blur/i)
+  })
+  it('animation → empty (clean frames)', () => {
+    expect(motionRealismFor('waving', 'animation')).toBe('')
+  })
+  it('defaults to phone when category omitted', () => {
+    expect(motionRealismFor('something')).toMatch(/motion blur/i)
   })
 })
 

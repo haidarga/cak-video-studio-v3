@@ -173,18 +173,25 @@ export function enrichLighting(environment, cam) {
   return 'Strong natural light from a nearby window casting a directional shadow on the face, single-source lighting creating natural depth — not flat ambient light.'
 }
 
-// ── Motion-blur baseline (video) ─────────────────────────────────────
-// Motion blur is a PERSISTENT realism layer (hides skin smoothness, rigid
-// hands, frame-to-frame product wobble), not something only the naskah author
-// supplies. Inject per inferred scene type. Skipped for animation (clean frames).
-const MOTION_BLUR_BY_SCENE = {
-  beauty_application: 'Hands in motion with natural blur during application, foreground motion blur from hand movement.',
-  talking_head: 'Slight natural motion blur as the subject speaks and gestures, hair and shoulder micro-movement.',
-  product_reveal: 'Brief motion blur as the product enters frame, settling into clear focus.',
-  walking_transition: 'Subject in motion with natural motion blur throughout, camera following naturally.',
-  broll: 'Handheld camera movement with natural motion blur at the frame edges.',
-  default: 'Slight natural motion blur from handheld movement, subject in mid-natural-motion throughout.',
+// ── Motion realism baseline (video) ──────────────────────────────────
+// A persistent realism layer that AI motion needs but the naskah author rarely
+// writes: motion blur (hides skin/hand artifacts), SECONDARY MOTION (hair +
+// clothing follow-through), GROUNDING/weight, BREATHING/micro-movement, EASING,
+// and camera↔subject reaction — the biomechanics that separate "captured" from
+// "rendered". CRITICALLY this is CAMERA-AWARE: handheld blur belongs to PHONE
+// presets only. Injecting it into cinema/studio (whose negatives literally say
+// "motion blur"/"handheld") is a self-contradiction — cinema gets a smooth,
+// controlled line instead, and animation gets nothing (clean frames).
+const PHONE_MOTION_BY_SCENE = {
+  beauty_application: 'Hands in motion with natural blur during application, genuine contact with the skin (not floating), hair responding to head movement.',
+  talking_head: 'Slight natural motion blur as the subject speaks and gestures; hair and shoulders with natural secondary motion; subtle breathing and occasional blink; natural easing in and out of every move, nothing robotic.',
+  product_reveal: 'Brief motion blur as the product enters frame, settling into clear focus; natural arm arc with visible weight; the product stays RIGID — only the hand moves it, the product itself never deforms.',
+  walking_transition: 'Natural stride with arm swing and grounded foot contact, secondary motion in hair and clothing, camera following naturally with organic deceleration.',
+  broll: 'Handheld camera movement with natural acceleration and deceleration, motion blur in the direction of the pan, subtle camera breathing.',
+  default: 'Slight natural motion blur from handheld movement; secondary motion in hair and clothing; subtle breathing and weight shift; natural easing, nothing stops abruptly.',
 }
+const CINEMA_MOTION = 'Smooth controlled camera movement (gimbal/dolly), steady framing, subtle secondary motion in hair and clothing, natural easing — no handheld shake.'
+
 export function inferSceneType(action) {
   const a = String(action || '').toLowerCase()
   if (/apply|makeup|skincare|blend|lipstick|foundation|oles|usap wajah/.test(a)) return 'beauty_application'
@@ -194,8 +201,12 @@ export function inferSceneType(action) {
   if (/speak|talk|dialogue|bicara|ngomong|smile|senyum|\bnod\b|look at camera/.test(a)) return 'talking_head'
   return 'default'
 }
-function motionBlurFor(action) {
-  return MOTION_BLUR_BY_SCENE[inferSceneType(action)] || MOTION_BLUR_BY_SCENE.default
+
+// Camera-aware motion line. category: 'phone' (default/UGC) | 'cinema' | 'animation'.
+export function motionRealismFor(action, category = 'phone') {
+  if (category === 'animation') return '' // clean animated frames — no blur/shake
+  if (category === 'cinema') return CINEMA_MOTION
+  return PHONE_MOTION_BY_SCENE[inferSceneType(action)] || PHONE_MOTION_BY_SCENE.default
 }
 
 // Layer order constant â€” referenced by tests/logs.
@@ -358,10 +369,11 @@ export function compileVideoPrompt(spec) {
   if (wardrobe) lines.push(`Wardrobe: ${wardrobe}.`)
   if (environment) lines.push(`Setting: ${environment}.`)
   if (action) lines.push(action)
-  // Motion-blur baseline: persistent realism layer that hides skin smoothness,
-  // rigid hands, and frame-to-frame product wobble. Per inferred scene type;
-  // skipped for animation (clean frames are the intended look).
-  if (!cam || cam.category !== 'animation') lines.push(motionBlurFor(action))
+  // Motion realism baseline: camera-aware (handheld blur for phone, smooth for
+  // cinema, nothing for animation) so we never contradict the preset's own
+  // negatives. Adds secondary motion + grounding + breathing + easing.
+  const motionLine = motionRealismFor(action, cam?.category || 'phone')
+  if (motionLine) lines.push(motionLine)
   lines.push(`${ar} composition.`)
   if (refsCount) lines.push('Keep character identity consistent with references.')
   // Actively forbid hallucinated on-screen text. AI video models love to render
