@@ -449,14 +449,14 @@ no skin smoothing.
 Context add-on by environment: outdoor/sunny → `Sunburn flush across nose and cheeks, sun-kissed glow, freckles surfacing in direct light.` · morning → `Slight puffiness under eyes, natural just-woke morning skin.`
 
 ### 8.2 Lighting (directional > flat) — `enrichLighting(environment, category)` → **L4b**
-"morning natural light" reads as flat ambient (bland, no depth). When the naskah/prompt names NO light source, inject DIRECTIONAL light (the #1 realism lever — hard shadow = free facial structure, specular highlight = "real photo"). Skipped for animation; skipped when a light source is already named.
+"morning natural light" reads as flat ambient (bland, no depth). When the naskah/prompt names NO light source, inject DIRECTIONAL light (the #1 realism lever — hard shadow = free facial structure, specular highlight = "real photo"). Skipped for **animation AND cinema** (cinema presets carry their own lighting tokens — softbox / golden-hour rim / soft top — so injecting window light would fight them); skipped when a light source is already named.
 - outdoor → `Bright outdoor natural light, strong directional sunlight, hard shadow from overhead sun…`
 - morning → `Soft morning window light from one side, gentle directional shadow…`
 - afternoon → `Warm late-afternoon directional light, golden long shadows…`
 - default (indoor) → `Strong natural light from a nearby window casting a directional shadow on the face, single-source lighting — not flat ambient light.`
 
-### 8.3 Motion biomechanics (CAMERA-AWARE) — `motionRealismFor(action, category)`
-A persistent video realism baseline the naskah author rarely writes: **motion blur + secondary motion (hair/clothing follow-through) + grounding/weight + breathing/micro-movement + easing**. Injected in `compileVideoPrompt` and God Mode `gen_video`.
+### 8.3 Motion biomechanics (CAMERA-AWARE) — `motionRealismFor(action, category, sceneType?)`
+A persistent video realism baseline the naskah author rarely writes: **motion blur + secondary motion (hair/clothing follow-through) + grounding/weight + breathing/micro-movement + easing**. Injected in `compileVideoPrompt` and God Mode `gen_video`. Scene type comes from the **parser** (`shot.scene_type`, reliable) when present, with the regex `inferSceneType` as fallback.
 
 **Camera-aware (critical fix):** handheld blur belongs to PHONE only — injecting it into cinema/studio (whose negatives literally say "motion blur"/"handheld") was a self-contradiction.
 - `phone` → scene-based line (`inferSceneType`): beauty / talking_head / product_reveal / walking / broll / default — each with blur + secondary motion + grounding + breathing.
@@ -494,4 +494,34 @@ The anti-morph **prompt** (`CRITICAL PRODUCT FIDELITY`, in compiler L6 + God Mod
 
 ---
 
-*Generated from source 2026-06-19. v2 adds the realism layer (src/lib/realism.js) + product anchoring L4. If the code changes, re-derive — point-in-time snapshot.*
+### 8.7 Proactive sanitizer (`sanitizeLayers`) — remove + INJECT
+The original sanitizer only REMOVED conflicting tokens, leaving a vacuum the model filled with its default (studio) look. `sanitizeLayers(parts, ctx)` now removes AND, when a removal actually happened, injects the positive replacement. Rules gained an optional `inject`:
+- studio lighting (`ring light / softbox / key light…`) on a phone preset → REMOVE + inject `natural window light from one side creating a directional shadow on the face`.
+- multi-scene (`9 panels / multi-scene`) under continuousShot → REMOVE + inject `single continuous uncut take throughout`.
+`sanitize()` (pure per-string remover) is unchanged. `compileImagePrompt` appends collected injects after the cleaned layers.
+
+# 10. SCENE COMPLEXITY PRE-FLIGHT — `src/lib/scene-complexity.js`
+
+Flags scenes the AI handles poorly BEFORE a gen is spent (so a Bulk run doesn't silently produce broken-physics videos). `assessSceneComplexity(videoMotion, imagePrompt)` → `{ tier, reliability, warning }`:
+- **Tier 4** (`15-25%`) — object-inside-object / multi-item packing (`masukin/masukkan … ke dalam`, `put … into`, `packing N items`, `satu per satu`). Warning recommends single-item / pre-filled bag / overhead angle.
+- **Tier 3** (`40-50%`) — placement / unboxing / assembly (`taruh … ke`, `unbox`, `merakit`).
+- **Tier 1** (`85%+`) — everything else, no warning.
+
+`preflightShots(shots)` returns only the risky shots with 1-based index. Pure + tested. **Wiring** (surfacing the warning in Bulk/F-Creator/QC UI) is the remaining step.
+
+# 11. OUTPUT QUALITY SCORING — `src/lib/output-quality.js`
+
+An automated quality gate so bulk production doesn't ship silently-bad output (QC the ~40 flagged, not 350 blind). 4 weighted dimensions: `skin_realism` 0.25 · `motion_authenticity` 0.25 · `product_fidelity` **0.30** · `composition_candid` 0.20.
+- `aggregateScore(scoresByKey)` — weighted avg over the dims that scored (0-10), null if none.
+- `verdict(overall, threshold=5)` — flags below threshold with a re-generate recommendation.
+- `scoreOutput(url, scoreDimension, {threshold})` — injects the vision scorer (testable + FAIL-SAFE: a failed dimension is skipped, all-fail → null, never blocks the pipeline). Scores clamped 0-10.
+
+**Wiring** (connect `scoreDimension` to a real Gemini-Vision call + auto-score after gen + flag in the Results tab) is the remaining step.
+
+# 12. TEST HARNESS
+
+Vitest (node env, `@/` alias). `npm test` / `npm run test:watch` / `npm run test:cov`. **143 tests** lock the pure logic of: `ai-edit-compose`, `postiz` (mime/ftyp), `fal-client` (ref mapping, duration, storyboard grid), `god-mode-builders` (per-model fields, LTX), `videoflow-render` gate, `subtitle-timeline` (offset), `prompt-compiler` (sanitizer + sanitizeLayers + compile + lighting/motion), `realism` (skin/lighting/motion/category), `camera-presets`, `cost-table` + `budget-gate`, `bg-removal`, `scene-complexity`, `output-quality`. Every edited runtime file is esbuild-syntax-checked before push.
+
+---
+
+*Generated from source 2026-06-19 (v3). Covers: 3 modes, 8 camera presets, parser keyword-routing + scene_type, 11-layer image compiler, minimal video compiler, storyboard grid, proactive sanitizer, realism layer (shared src/lib/realism.js — Generate + God Mode), product anchoring L4 clean-bg, scene-complexity pre-flight, output quality scoring. If the code changes, re-derive — point-in-time snapshot.*
