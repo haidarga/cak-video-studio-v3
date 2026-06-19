@@ -13,6 +13,7 @@ import { imageCost, videoCost, fmtCost } from '@/lib/cost-table'
 // src/lib/god-mode-builders.js. Keep it that way.
 import { STYLE_PRESETS } from '../_lib/style-presets'
 import { compileImagePrompt, compileVideoPrompt } from '../_lib/prompt-compiler'
+import { cleanProductBg } from '@/lib/bg-removal'
 import { CAMERA_PRESETS, listAllPresets, DEFAULT_CAMERA, getCameraPreset } from '@/lib/camera-presets'
 import { buildIdentitySentence, productNotesShort } from '@/lib/identity'
 import { applySeed, randomSeed, modelAcceptsSeed } from '@/lib/model-seed'
@@ -739,7 +740,13 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
     patchShot(idx, { image: { status: 'generating' } })
     try {
       const productKnowledge = selectedRefs.map((r) => String(r.knowledge || '').trim()).filter(Boolean).join('\n')
-      const characterProductUrls = selectedRefs.map((r) => r.fal_url).filter(Boolean)
+      // Product-kind refs get their background stripped first (L4 attention
+      // boost → less drift/morph → fewer regens). Fail-safe + cached.
+      const characterProductUrls = (await Promise.all(selectedRefs.map((r) =>
+        (r.kind === 'product' && !globalConfig.skipProduct && globalConfig.cleanProductBg !== false)
+          ? cleanProductBg(r.fal_url, null, (m, i) => falRun(m, i, { workspaceId }))
+          : Promise.resolve(r.fal_url)
+      ))).filter(Boolean)
       // Style refs = ad-hoc mood board (global section) PLUS the camera
       // preset's own mood board (per-preset attachment). Dedupe so a user-
       // selected ref doesn't end up double-counted if it's also pinned to
@@ -906,7 +913,12 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       const disabledSet = new Set(shot.disabledRefIds || [])
       const filteredSelected = selectedRefs.filter((r) => !disabledSet.has(r.id))
       const filteredStyle = styleRefs.filter((r) => !disabledSet.has(r.id))
-      const characterProductUrls = filteredSelected.map((r) => r.fal_url).filter(Boolean)
+      // Product-kind refs → clean background first (L4), same as the image path.
+      const characterProductUrls = (await Promise.all(filteredSelected.map((r) =>
+        (r.kind === 'product' && !globalConfig.skipProduct && globalConfig.cleanProductBg !== false)
+          ? cleanProductBg(r.fal_url, null, (m, i) => falRun(m, i, { workspaceId }))
+          : Promise.resolve(r.fal_url)
+      ))).filter(Boolean)
       const styleUrls = filteredStyle.map((r) => r.fal_url).filter(Boolean)
       const refUrls = [...characterProductUrls, ...styleUrls]
       // Direct mode REQUIRES refs (there's no source image to fall back on).
