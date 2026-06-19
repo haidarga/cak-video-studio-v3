@@ -123,7 +123,7 @@ const EXT_TO_MIME = { mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/web
 // Sniff real mime from magic bytes — the only source of truth when the HTTP
 // content-type lies (R2 serves octet-stream when ContentType wasn't set on
 // upload, which is the common "udah mp4 tapi Postiz 400" cause).
-function sniffMime(buf) {
+export function sniffMime(buf) {
   if (!buf || buf.length < 12) return null
   if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return 'image/jpeg'
   if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return 'image/png'
@@ -144,7 +144,7 @@ function sniffMime(buf) {
 // a 'qt  ' brand reads as video/quicktime → "Unsupported file type". The bytes
 // are already mp4-compatible; only the brand tag lies. Rewrite it in place to
 // 'mp42'/'isom' so content sniffers recognize it as mp4. No re-encode.
-function coerceMp4Brand(buf) {
+export function coerceMp4Brand(buf) {
   if (!buf || buf.length < 16 || buf.toString('ascii', 4, 8) !== 'ftyp') return { buf, changed: false }
   const major = buf.toString('ascii', 8, 12)
   // Already a real mp4 brand → leave untouched.
