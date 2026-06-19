@@ -435,4 +435,63 @@ See `src/lib/god-mode-builders.js` (`buildVideoInputForModel`) and `src/lib/fal-
 
 ---
 
-*Generated from source 2026-06-19. If the code changes, re-derive — this is a point-in-time snapshot.*
+# 8. REALISM LAYER (v2 — anti-uncanny / anti-AI-look)
+
+Added after the AI UGC Realism + Natural Motion + Product Anchoring audits. Lives in **`src/lib/realism.js`** — the SINGLE SOURCE shared by Generate (`prompt-compiler.js` imports it) AND God Mode (`agent/route.js` imports it). So both surfaces now inject the same realism.
+
+### 8.1 Skin (anti-waxy) — `phoneSkinClause(environment)`
+Replaces the weak word "natural skin" (AI defaults to retouched/plastic skin) with CONCRETE imperfection. Injected at **L9** (image) for `phone` presets, and appended in God Mode photoreal gens.
+```
+Visible skin pores especially on nose and cheeks, mild facial asymmetry,
+natural skin oiliness on T-zone, faint under-eye shadow, no beauty filter,
+no skin smoothing.
+```
+Context add-on by environment: outdoor/sunny → `Sunburn flush across nose and cheeks, sun-kissed glow, freckles surfacing in direct light.` · morning → `Slight puffiness under eyes, natural just-woke morning skin.`
+
+### 8.2 Lighting (directional > flat) — `enrichLighting(environment, category)` → **L4b**
+"morning natural light" reads as flat ambient (bland, no depth). When the naskah/prompt names NO light source, inject DIRECTIONAL light (the #1 realism lever — hard shadow = free facial structure, specular highlight = "real photo"). Skipped for animation; skipped when a light source is already named.
+- outdoor → `Bright outdoor natural light, strong directional sunlight, hard shadow from overhead sun…`
+- morning → `Soft morning window light from one side, gentle directional shadow…`
+- afternoon → `Warm late-afternoon directional light, golden long shadows…`
+- default (indoor) → `Strong natural light from a nearby window casting a directional shadow on the face, single-source lighting — not flat ambient light.`
+
+### 8.3 Motion biomechanics (CAMERA-AWARE) — `motionRealismFor(action, category)`
+A persistent video realism baseline the naskah author rarely writes: **motion blur + secondary motion (hair/clothing follow-through) + grounding/weight + breathing/micro-movement + easing**. Injected in `compileVideoPrompt` and God Mode `gen_video`.
+
+**Camera-aware (critical fix):** handheld blur belongs to PHONE only — injecting it into cinema/studio (whose negatives literally say "motion blur"/"handheld") was a self-contradiction.
+- `phone` → scene-based line (`inferSceneType`): beauty / talking_head / product_reveal / walking / broll / default — each with blur + secondary motion + grounding + breathing.
+- `cinema` → `Smooth controlled camera movement (gimbal/dolly), steady framing, subtle secondary motion, natural easing — no handheld shake.`
+- `animation` → none (clean frames).
+- `product_reveal` line embeds anti-morph: `the product stays RIGID — only the hand moves it, the product itself never deforms.`
+
+### 8.4 Parser realism rules (`/api/parse`, added to UNIVERSAL RULES)
+- **Motion-state whitelist** — "in motion / mid-action / slight blur / hands reaching" are KEPT in image_prompt (single moving instant), only true temporal chains banned.
+- **Lighting directionality** — preserve direction + hardness, never flatten to "natural light".
+- **Realism over polish** — candid real-person, not catalog; don't add "professional/studio/perfect/8K/cinematic" unless asked.
+
+### 8.5 Storyboard candid (`buildStoryboardGridPrompt`, phone only)
+Anti "storyboard production mode" line so 3×3 grids read as genuine candid snapshots, not posed keyframes. Off for cinema/studio.
+
+### 8.6 God Mode parity (no camera-preset system)
+God Mode infers the look from the prompt TEXT via `inferCategoryFromText`:
+- `/2d|cartoon|pixar|3d render|illustration/` → animation (no skin/motion realism)
+- `/cinematic|anamorphic|ARRI|TVC|studio/` → cinema (smooth motion, no skin pores)
+- else → phone (full UGC realism)
+
+# 9. PRODUCT ANCHORING (anti-drift / anti-morph)
+
+The anti-morph **prompt** (`CRITICAL PRODUCT FIDELITY`, in compiler L6 + God Mode) is MITIGATION, not a cure — root cause is optical-flow warping (video) + VAE bottleneck (text). Levels actually shipped vs flagged:
+
+| Level | What | Status |
+|------|------|--------|
+| L1 text fidelity directive | rigid-object spec in the prompt | ✅ shipped (image L6 + video) |
+| L2/L3 image refs | product photo as ref | ✅ (user-supplied) |
+| **L4 clean background** | strip product-ref bg (`src/lib/bg-removal.js`, fal birefnet) → attention 35%→90% | ✅ **shipped** — God Mode gen_image+gen_video AND Generate (product-kind refs). Fail-safe + cached. |
+| L5 IP-Adapter | dedicated product cross-attention | ⏭ flagged (model-dependent) |
+| L7 keyframe locking | Kling `tail_image_url` (start+end frame) | ⏭ flagged (highest video anti-drift) |
+| L8 product LoRA | train the product into weights | ⏭ flagged (best fidelity, needs training) |
+| Composite | real product pasted post-pro | ⏭ flagged (only 100% text-accurate route) |
+
+---
+
+*Generated from source 2026-06-19. v2 adds the realism layer (src/lib/realism.js) + product anchoring L4. If the code changes, re-derive — point-in-time snapshot.*
