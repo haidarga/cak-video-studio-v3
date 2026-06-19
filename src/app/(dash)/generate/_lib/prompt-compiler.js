@@ -81,6 +81,16 @@ export const CONTRADICTION_RULES = [
     name: 'multi-scene vs continuousShot',
     match: /(9 (panels?|beats?|scenes?|storyboards?)|multi-scene)/gi,
     conflicts_with: ['continuousShot=true'],
+    inject: 'single continuous uncut take throughout',
+  },
+  // Studio lighting can't coexist with a phone preset. Removing it leaves a
+  // vacuum the model fills with generic studio fill — so we INJECT directional
+  // window light as the positive replacement.
+  {
+    name: 'studio lighting vs phone',
+    match: /(ring light|softbox|studio lighting|beauty dish|key light|fill light|three-point lighting)/gi,
+    conflicts_with: ['camera:samsung_a13_candid', 'camera:iphone_15_clean'],
+    inject: 'natural window light from one side creating a directional shadow on the face',
   },
   // 'IGNORE outfit from reference' line is harmful when there is no override â€”
   // model gets told to randomize the outfit for no reason.
@@ -123,6 +133,35 @@ export function sanitize(text, ctx) {
     .replace(/\s+/g, ' ')
     .trim()
   return out
+}
+
+// Proactive sanitize over a list of layers: removes conflicting tokens AND
+// collects the positive replacement (`inject`) for any rule that actually
+// removed something — so we never leave a vacuum the model fills with its
+// default (studio) aesthetic. Returns { cleaned, injects }. sanitize() above is
+// kept as the pure per-string remover (used directly + by tests).
+export function sanitizeLayers(parts, ctx) {
+  const injects = new Set()
+  const cleaned = []
+  for (const part of parts) {
+    if (!part) continue
+    let out = String(part)
+    for (const rule of CONTRADICTION_RULES) {
+      if (!ruleTriggered(rule, ctx)) continue
+      const before = out
+      out = out.replace(rule.match, '')
+      if (out !== before && rule.inject) injects.add(rule.inject)
+    }
+    out = out
+      .replace(/\s{2,}/g, ' ')
+      .replace(/\s+([,.;])/g, '$1')
+      .replace(/[,.;]\s*[,.;]/g, '.')
+      .replace(/^\s*[,.;]\s*/, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (out) cleaned.push(out)
+  }
+  return { cleaned, injects: [...injects] }
 }
 
 // Style-aware quality line. Skin/lighting/motion realism now live in the shared
@@ -258,7 +297,9 @@ export function compileImagePrompt(spec) {
   // L8b + L10 + L11 pass-through raw so sanitizer doesn't strip "color palette",
   // "lighting", "well-balanced composition" from the style anchor / negatives /
   // imperative.
-  const cleaned = layers.map((l) => sanitize(l, ctx)).filter(Boolean)
+  const { cleaned, injects } = sanitizeLayers(layers, ctx)
+  // Proactive: fill the vacuum left by removed tokens with positive replacements.
+  cleaned.push(...injects)
   if (L8b_style) cleaned.push(L8b_style)
   if (L10_negatives) cleaned.push(L10_negatives)
   if (L11_edit_commands) cleaned.push(L11_edit_commands)

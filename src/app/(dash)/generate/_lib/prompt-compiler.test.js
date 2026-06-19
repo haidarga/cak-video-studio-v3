@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { sanitize, compileImagePrompt, compileVideoPrompt, enrichLighting, inferSceneType, motionRealismFor } from './prompt-compiler.js'
+import { sanitize, sanitizeLayers, compileImagePrompt, compileVideoPrompt, enrichLighting, inferSceneType, motionRealismFor } from './prompt-compiler.js'
 
 describe('sanitize — contradiction engine', () => {
   it('drops cinematic language on phone presets', () => {
@@ -32,6 +32,23 @@ describe('sanitize — contradiction engine', () => {
   it('returns empty string for falsy input', () => {
     expect(sanitize('', {})).toBe('')
     expect(sanitize(null, {})).toBe('')
+  })
+})
+
+describe('sanitizeLayers — proactive remove + inject (no vacuum)', () => {
+  it('removes studio lighting on a phone preset AND injects directional window light', () => {
+    const { cleaned, injects } = sanitizeLayers(['a shot with ring light and softbox'], { cameraId: 'samsung_a13_candid' })
+    expect(cleaned.join(' ')).not.toMatch(/ring light|softbox/i)
+    expect(injects.join(' ')).toMatch(/window light from one side/i)
+  })
+  it('injects "single continuous uncut take" when multi-scene removed under continuousShot', () => {
+    const { injects } = sanitizeLayers(['9 panels of action'], { continuousShot: true })
+    expect(injects.join(' ')).toMatch(/single continuous uncut take/i)
+  })
+  it('no inject when nothing was removed', () => {
+    const { cleaned, injects } = sanitizeLayers(['a plain bedroom shot'], { cameraId: 'samsung_a13_candid' })
+    expect(injects).toEqual([])
+    expect(cleaned).toEqual(['a plain bedroom shot'])
   })
 })
 
