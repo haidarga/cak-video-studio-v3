@@ -22,7 +22,10 @@ export function buildVoiceDirection({ lang = 'Indonesian', dialect = null, hasDi
   const d = isMeaningfulDialect(dialect) ? String(dialect).trim() : null
   let speak
   if (d) {
-    speak = `speaks ${lang} with a natural, authentic ${d} accent and dialect`
+    // Accent-only: the WORDS stay in `lang` (e.g. Indonesian), only the
+    // pronunciation/intonation carries the regional accent. This is "Bahasa
+    // Indonesia dengan logat Jawa/Medan", NOT switching the language.
+    speak = `speaks ${lang} but with a strong, authentic ${d} regional ACCENT and intonation — keep the WORDS in ${lang}, only the pronunciation and accent are ${d}`
   } else if (lang && REGIONAL_LANGS.includes(String(lang).toLowerCase())) {
     speak = `speaks in fluent native ${lang} with its natural regional accent`
   } else {

@@ -7,9 +7,10 @@ describe('buildVoiceDirection', () => {
     expect(buildVoiceDirection({ hasDialog: true, audioOn: false })).toBe('')
   })
 
-  it('adds an explicit regional accent when a dialect is set', () => {
+  it('adds accent-only (words stay in lang, only the accent is the dialect)', () => {
     const out = buildVoiceDirection({ lang: 'Indonesian', dialect: 'Medanese (Batak)', hasDialog: true })
-    expect(out).toMatch(/Indonesian with a natural, authentic Medanese \(Batak\) accent/i)
+    expect(out).toMatch(/authentic Medanese \(Batak\) regional ACCENT/i)
+    expect(out).toMatch(/keep the WORDS in Indonesian/i) // does NOT switch language
   })
 
   it('speaks in the regional language when lang itself is regional (no dialect)', () => {

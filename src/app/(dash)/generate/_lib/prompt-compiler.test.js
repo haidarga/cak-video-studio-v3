@@ -133,7 +133,8 @@ describe('compileVideoPrompt', () => {
 
   it('injects spoken accent + relaxed pace when there is dialog (native-audio)', () => {
     const out = compileVideoPrompt({ action: 'she speaks', ar: '9:16', lang: 'Indonesian', dialect: 'Jawa medok', hasDialog: true, audioOn: true })
-    expect(out).toMatch(/Jawa medok accent/i)
+    expect(out).toMatch(/Jawa medok regional ACCENT/i)
+    expect(out).toMatch(/keep the WORDS in Indonesian/i)
     expect(out).toMatch(/UNHURRIED pace/i)
   })
   it('no voice line when there is no dialog', () => {
