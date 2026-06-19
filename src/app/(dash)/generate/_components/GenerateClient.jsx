@@ -15,6 +15,17 @@ import { STYLE_PRESETS } from '../_lib/style-presets'
 import { compileImagePrompt, compileVideoPrompt } from '../_lib/prompt-compiler'
 import { cleanProductBg } from '@/lib/bg-removal'
 import { CAMERA_PRESETS, listAllPresets, DEFAULT_CAMERA, getCameraPreset } from '@/lib/camera-presets'
+
+// Dialog languages — Indonesian + English + the regional languages. Shared by
+// the global config bar AND the per-persona override so they never drift.
+const LANG_OPTIONS = [
+  ['Indonesian', 'Indonesian'], ['English', 'English'],
+  ['Indonesian (Medan dialect)', 'Bahasa Medan'], ['Javanese', 'Javanese (Jawa)'],
+  ['Sundanese', 'Sundanese (Sunda)'], ['Balinese', 'Balinese (Bali)'],
+  ['Batak', 'Batak'], ['Batak Toba', 'Batak Toba'], ['Minangkabau', 'Minang'], ['Betawi', 'Betawi'],
+  ['Banjarese', 'Banjar'], ['Buginese', 'Bugis'], ['Makassarese', 'Makassar'],
+  ['Madurese', 'Madura'], ['Acehnese', 'Aceh'], ['Palembang (Musi)', 'Palembang'],
+]
 import { buildIdentitySentence, productNotesShort } from '@/lib/identity'
 import { applySeed, randomSeed, modelAcceptsSeed } from '@/lib/model-seed'
 import { useUiMode } from '@/lib/ui-mode'
@@ -280,7 +291,7 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
               <Sel label="Aspect Ratio" value={globalConfig.ar} onChange={(v) => setGlobalConfig({ ...globalConfig, ar: v })}
                 options={[['9:16', '9:16 vertical'], ['16:9', '16:9 horizontal'], ['1:1', '1:1 square']]} />
               <Sel label="Bahasa Dialog" value={globalConfig.lang} onChange={(v) => setGlobalConfig({ ...globalConfig, lang: v })}
-                options={[['Indonesian', 'Indonesian'], ['English', 'English'], ['Javanese', 'Javanese'], ['Sundanese', 'Sundanese'], ['Balinese', 'Balinese']]} />
+                options={LANG_OPTIONS} />
               {/* Spoken accent/dialect for native-audio video models (Seedance 2 / Kling T2V / LTX).
                   Injected into the video prompt + relaxed pace. Default Netral = no accent line. */}
               <Sel label="Aksen / Dialek (audio)" value={globalConfig.dialect || 'Netral'} onChange={(v) => setGlobalConfig({ ...globalConfig, dialect: v })}
@@ -1537,6 +1548,10 @@ PRODUCT FIDELITY (critical): the product is a RIGID manufactured object — its 
                 options={[['shots', '🎬 Per-Shot'], ['storyboard', '🗂 Storyboard'], ['direct', '🎯 Direct Video']]} />
               <Sel label="Aspect Ratio" value={globalConfig.ar} onChange={(v) => setOverride({ ar: v })}
                 options={[['9:16', '9:16 vertical'], ['16:9', '16:9 horizontal'], ['1:1', '1:1 square']]} />
+              <Sel label="Bahasa Dialog" value={globalConfig.lang} onChange={(v) => setOverride({ lang: v })}
+                options={LANG_OPTIONS} />
+              <Sel label="Aksen / Dialek (audio)" value={globalConfig.dialect || 'Netral'} onChange={(v) => setOverride({ dialect: v })}
+                options={[['Netral', 'Netral'], ['Jawa medok', 'Jawa medok'], ['Sunda', 'Sunda'], ['Medan / Batak', 'Medan / Batak'], ['Batak Toba', 'Batak Toba'], ['Minang', 'Minang'], ['Betawi', 'Betawi'], ['Bali', 'Bali'], ['Bugis-Makassar', 'Bugis-Makassar']]} />
               <div className="col-span-2">
                 <Sel label="Image Model" value={globalConfig.imgModel} onChange={(v) => setOverride({ imgModel: v })}
                   options={IMAGE_MODELS.map((m) => [m.v, m.l])} />

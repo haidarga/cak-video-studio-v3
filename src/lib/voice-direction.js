@@ -10,7 +10,7 @@
 // cloned voice instead — caller should pass audioOn:false / hasDialog:false there.
 
 // Regional Indonesian languages already imply their own accent when spoken.
-const REGIONAL_LANGS = ['javanese', 'sundanese', 'balinese', 'minang', 'minangkabau', 'batak', 'betawi', 'banjar', 'bugis', 'jawa', 'sunda', 'bali']
+const REGIONAL_LANGS = ['javanese', 'sundanese', 'balinese', 'minang', 'minangkabau', 'batak', 'betawi', 'banjar', 'banjarese', 'bugis', 'buginese', 'makassar', 'makassarese', 'madura', 'madurese', 'aceh', 'acehnese', 'jawa', 'sunda', 'bali']
 
 function isMeaningfulDialect(d) {
   const s = String(d || '').trim()

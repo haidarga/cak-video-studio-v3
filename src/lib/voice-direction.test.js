@@ -14,6 +14,8 @@ describe('buildVoiceDirection', () => {
 
   it('speaks in the regional language when lang itself is regional (no dialect)', () => {
     expect(buildVoiceDirection({ lang: 'Javanese', hasDialog: true })).toMatch(/fluent native Javanese/i)
+    expect(buildVoiceDirection({ lang: 'Madurese', hasDialog: true })).toMatch(/fluent native Madurese/i)
+    expect(buildVoiceDirection({ lang: 'Acehnese', hasDialog: true })).toMatch(/fluent native Acehnese/i)
   })
 
   it('ignores a neutral/empty dialect', () => {
