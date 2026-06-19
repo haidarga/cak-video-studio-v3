@@ -283,6 +283,17 @@ export async function createPostizPost({ creds, channelId, content, mediaUrl, sc
       if (ch) platform = ch.platform || ch.raw?.providerIdentifier || ''
     } catch (e) { /* ignore — fall through */ }
   }
+  // Authoritative fallback — hit the integration directly for its real
+  // providerIdentifier. Without a resolved platform, defaultSettings() emits a
+  // GENERIC settings block (no __type / no tiktok fields), and Postiz then 400s
+  // the post with "settings.privacy_level must be a string ... (platform=unknown)"
+  // because the channel IS TikTok and it validates against the TikTok schema.
+  if (!platform || platform === 'unknown') {
+    try {
+      const integ = await getPostizIntegration(creds, channelId)
+      platform = pickPlatform(integ?.integration || integ?.data || integ) || platform
+    } catch (e) { /* ignore — defaultSettings will use the generic block */ }
+  }
 
   let imageField = []
   if (mediaUrl) {
