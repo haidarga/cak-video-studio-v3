@@ -18,7 +18,8 @@ import { CAMERA_PRESETS, listAllPresets, DEFAULT_CAMERA, getCameraPreset } from 
 import { buildIdentitySentence, productNotesShort } from '@/lib/identity'
 import { applySeed, randomSeed, modelAcceptsSeed } from '@/lib/model-seed'
 import { useUiMode } from '@/lib/ui-mode'
-import { uploadFile } from '@/lib/upload-client'
+import { uploadFile, uploadBlob } from '@/lib/upload-client'
+import { degradeRefUrl } from '@/lib/reference-degrader'
 import { LazyVideo } from '@/lib/use-lazy-video'
 
 export default function GenerateClient({ workspaceId, userId, activeBrand, personas: initialPersonas, workspaceRefs: initialRefs, incomingPreset = null }) {
@@ -740,13 +741,20 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
     patchShot(idx, { image: { status: 'generating' } })
     try {
       const productKnowledge = selectedRefs.map((r) => String(r.knowledge || '').trim()).filter(Boolean).join('\n')
-      // Product-kind refs get their background stripped first (L4 attention
-      // boost → less drift/morph → fewer regens). Fail-safe + cached.
-      const characterProductUrls = (await Promise.all(selectedRefs.map((r) =>
-        (r.kind === 'product' && !globalConfig.skipProduct && globalConfig.cleanProductBg !== false)
-          ? cleanProductBg(r.fal_url, null, (m, i) => falRun(m, i, { workspaceId }))
-          : Promise.resolve(r.fal_url)
-      ))).filter(Boolean)
+      // Ref preprocessing: product refs → strip background (L4 attention boost);
+      // character/identity refs → DEGRADE for lo-fi presets (Law #2: a clean ref
+      // anchors clean output regardless of "cheap Samsung A13" tokens — degrading
+      // the ref is what actually delivers the lo-fi look). Both fail-safe + cached.
+      const _presetId = globalConfig.cameraPreset || DEFAULT_CAMERA
+      const characterProductUrls = (await Promise.all(selectedRefs.map((r) => {
+        if (r.kind === 'product' && !globalConfig.skipProduct && globalConfig.cleanProductBg !== false) {
+          return cleanProductBg(r.fal_url, null, (m, i) => falRun(m, i, { workspaceId }))
+        }
+        if (r.kind !== 'product' && globalConfig.degradeRefs !== false) {
+          return degradeRefUrl(r.fal_url, _presetId, uploadBlob)
+        }
+        return Promise.resolve(r.fal_url)
+      }))).filter(Boolean)
       // Style refs = ad-hoc mood board (global section) PLUS the camera
       // preset's own mood board (per-preset attachment). Dedupe so a user-
       // selected ref doesn't end up double-counted if it's also pinned to
