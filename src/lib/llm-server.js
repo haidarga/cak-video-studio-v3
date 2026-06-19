@@ -54,11 +54,20 @@ async function callGoogle({ model, apiKey, contents, generationConfig }) {
     console.warn(`[llm] ${model} is deprecated, substituting with ${sub}`)
     model = sub
   }
+  // Gemini 2.5 models "think" by default, and thinking tokens are billed
+  // AGAINST maxOutputTokens. So a structured/JSON call can burn its whole
+  // budget thinking and return TRUNCATED JSON ("balik bukan JSON valid",
+  // cut mid-string). Our calls want fast complete JSON, not chain-of-thought
+  // — disable thinking unless the caller explicitly set a budget.
+  const gc = { ...generationConfig }
+  if (gc.thinkingConfig === undefined && /gemini-2\.5/.test(model)) {
+    gc.thinkingConfig = { thinkingBudget: 0 }
+  }
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contents, generationConfig }),
+    body: JSON.stringify({ contents, generationConfig: gc }),
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok || data.error) {
@@ -72,7 +81,21 @@ async function callGoogle({ model, apiKey, contents, generationConfig }) {
     err.status = 400; err.model = model; err.provider = 'google'
     throw err
   }
-  return data.candidates[0].content.parts[0].text || ''
+  // If the response still hit the token ceiling, say so explicitly instead of
+  // returning half a JSON object that fails to parse downstream.
+  const cand = data.candidates[0]
+  // Join ALL text parts (a thinking part can precede the answer); filter the
+  // ones flagged as thought so we only return the actual answer text.
+  const text = (cand?.content?.parts || [])
+    .filter((p) => p && typeof p.text === 'string' && !p.thought)
+    .map((p) => p.text)
+    .join('')
+  if (!text && cand?.finishReason === 'MAX_TOKENS') {
+    const err = new Error('Google response truncated (MAX_TOKENS) — naikin maxOutputTokens atau pendekin input')
+    err.status = 502; err.model = model; err.provider = 'google'
+    throw err
+  }
+  return text || ''
 }
 
 // ── OpenAI adapter ────────────────────────────────────────────────────
