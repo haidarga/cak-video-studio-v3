@@ -122,23 +122,80 @@ export function sanitize(text, ctx) {
   return out
 }
 
-// Style-aware quality line. Replaces the old IMG_QUALITY blob.
-function pickQuality(cam, media, skipProduct) {
+// Context-aware skin add-on from the scene's environment/time-of-day. Harsh
+// outdoor sun / morning skin surface real texture the model otherwise hides.
+function skinContext(environment) {
+  const env = String(environment || '').toLowerCase()
+  if (/outdoor|sunny|beach|pantai|pool|kolam|taman/.test(env)) return ' Sunburn flush across nose and cheeks, sun-kissed glow, freckles surfacing in direct light.'
+  if (/morning|pagi|sunrise|bangun tidur/.test(env)) return ' Slight puffiness under eyes, natural just-woke morning skin.'
+  return ''
+}
+
+// Style-aware quality line. Replaces the old IMG_QUALITY blob. For phone
+// presets it now names CONCRETE skin imperfection — "natural skin" alone is a
+// weak keyword (AI defaults to retouched/waxy skin); pores + asymmetry +
+// oiliness force real-human texture, the #1 anti-uncanny lever for UGC.
+function pickQuality(cam, media, skipProduct, environment = '') {
   if (cam.category === 'animation') {
     return media === 'video'
       ? 'Smooth animated motion, consistent character design across frames.'
       : 'Clean stylised render, consistent character design.'
   }
   if (cam.category === 'phone') {
+    const skin = 'Visible skin pores especially on nose and cheeks, mild facial asymmetry, natural skin oiliness on T-zone, faint under-eye shadow, no beauty filter, no skin smoothing.'
+    const ctx = skinContext(environment)
     return media === 'video'
-      ? 'Natural handheld motion, real-person realism, no over-processing.'
-      : 'Real-person realism, natural skin, no over-processing.'
+      ? `Natural handheld motion, real-person realism. ${skin}${ctx} No over-processing.`
+      : `Real-person realism. ${skin}${ctx} No over-processing.`
   }
   // cinema + custom
   const product = skipProduct ? '' : ' Product label sharp and legible.'
   return media === 'video'
     ? `Steady framing, consistent identity.${product}`
     : `Anatomically correct, well-composed.${product}`
+}
+
+// ── Lighting enrichment (L4b) ────────────────────────────────────────
+// "morning natural light" reads to the model as flat ambient → bland, no
+// depth. Harsh DIRECTIONAL light (single window / sun) is the #1 realism lever:
+// hard shadow gives free facial structure, specular highlight reads as "real
+// photo". Inject a directional light line ONLY when the naskah didn't already
+// name a light source, and never for animation.
+const LIGHTING_KEYWORDS = ['sunlight', 'sun ', 'window light', 'harsh light', 'directional', 'golden hour', 'overcast', 'candlelight', 'neon', 'backlight', 'rim light', 'sinar matahari', 'cahaya jendela', 'window']
+export function enrichLighting(environment, cam) {
+  if (!cam || cam.category === 'animation') return ''
+  const env = String(environment || '').toLowerCase()
+  if (!env) return ''
+  if (LIGHTING_KEYWORDS.some((k) => env.includes(k))) return '' // already specified — respect it
+  if (/outdoor|taman|pantai|pool|kolam|beach|jalan(an)?/.test(env)) return 'Bright outdoor natural light, strong directional sunlight, hard shadow from overhead sun defining facial structure.'
+  if (/pagi|morning|sunrise/.test(env)) return 'Soft morning window light from one side, gentle directional shadow, warm natural skin tones.'
+  if (/sore|afternoon|evening|senja|petang|dusk/.test(env)) return 'Warm late-afternoon directional light, golden long shadows, warm amber skin tone.'
+  return 'Strong natural light from a nearby window casting a directional shadow on the face, single-source lighting creating natural depth — not flat ambient light.'
+}
+
+// ── Motion-blur baseline (video) ─────────────────────────────────────
+// Motion blur is a PERSISTENT realism layer (hides skin smoothness, rigid
+// hands, frame-to-frame product wobble), not something only the naskah author
+// supplies. Inject per inferred scene type. Skipped for animation (clean frames).
+const MOTION_BLUR_BY_SCENE = {
+  beauty_application: 'Hands in motion with natural blur during application, foreground motion blur from hand movement.',
+  talking_head: 'Slight natural motion blur as the subject speaks and gestures, hair and shoulder micro-movement.',
+  product_reveal: 'Brief motion blur as the product enters frame, settling into clear focus.',
+  walking_transition: 'Subject in motion with natural motion blur throughout, camera following naturally.',
+  broll: 'Handheld camera movement with natural motion blur at the frame edges.',
+  default: 'Slight natural motion blur from handheld movement, subject in mid-natural-motion throughout.',
+}
+export function inferSceneType(action) {
+  const a = String(action || '').toLowerCase()
+  if (/apply|makeup|skincare|blend|lipstick|foundation|oles|usap wajah/.test(a)) return 'beauty_application'
+  if (/walk|enters frame|transition|berjalan|jalan|masuk frame/.test(a)) return 'walking_transition'
+  if (/\bpan\b|b-?roll|establishing|environment shot/.test(a)) return 'broll'
+  if (/product|reveal|angkat|tunjuk|hold up|demonstrate|showcase/.test(a)) return 'product_reveal'
+  if (/speak|talk|dialogue|bicara|ngomong|smile|senyum|\bnod\b|look at camera/.test(a)) return 'talking_head'
+  return 'default'
+}
+function motionBlurFor(action) {
+  return MOTION_BLUR_BY_SCENE[inferSceneType(action)] || MOTION_BLUR_BY_SCENE.default
 }
 
 // Layer order constant â€” referenced by tests/logs.
@@ -215,6 +272,9 @@ export function compileImagePrompt(spec) {
   // L3 = soft early-token anchor; L11 carries the imperative.
   const L3_wardrobe = wardrobe ? `Wardrobe: ${wardrobe}.` : ''
   const L4_environment = environment ? `Setting: ${environment}.` : ''
+  // L4b — directional-lighting enrichment (harsh sun / single window) when the
+  // naskah didn't name a light source. Biggest realism lever after the camera.
+  const L4b_lighting = enrichLighting(environment, cam)
   const L5_action = action || ''
   // L6_brand â€” strong product fidelity directive when a product brief is
   // attached. Previously this was just `Product: ${brand}` which the model
@@ -235,7 +295,7 @@ export function compileImagePrompt(spec) {
   const L8b_style = styleN > 0
     ? `STYLE REFERENCE: the last ${styleN === 1 ? 'image is a style reference' : `${styleN} images are style references`} â€” match their color palette, lighting, rendering style, and overall aesthetic. Do NOT copy characters, faces, or specific objects from them. Use them ONLY as visual mood/style guide.`
     : ''
-  const L9_quality = pickQuality(cam, 'image', skipProduct)
+  const L9_quality = pickQuality(cam, 'image', skipProduct, environment)
   // Anti-text terms appended when "No text" is on — stops the FIRST FRAME from
   // carrying gibberish text/signage that image-to-video would then animate.
   const negTerms = cam.negatives?.length ? cam.negatives.slice() : []
@@ -247,7 +307,7 @@ export function compileImagePrompt(spec) {
     ? `CHANGE the subjects' outfit to: ${wardrobe}. Replace the reference photo outfit completely. Keep face, hair, body and identity IDENTICAL â€” only swap clothing.`
     : ''
 
-  const layers = [L1_camera, L1b_grid, L2_identity, L3_wardrobe, L4_environment, L5_action, L5b_camera_echo, L6_brand, L7_format, L8_continuity, L9_quality]
+  const layers = [L1_camera, L1b_grid, L2_identity, L3_wardrobe, L4_environment, L4b_lighting, L5_action, L5b_camera_echo, L6_brand, L7_format, L8_continuity, L9_quality]
   // L8b + L10 + L11 pass-through raw so sanitizer doesn't strip "color palette",
   // "lighting", "well-balanced composition" from the style anchor / negatives /
   // imperative.
@@ -289,14 +349,19 @@ export function compileVideoPrompt(spec) {
   // mode: there's no image step to carry the visual style, so a 2D / animation /
   // stylized preset is ONLY honored if its tokens ride in the video prompt —
   // without this the model defaults to photoreal 3D and ignores the preset.
+  let cam = null
   if (camera) {
-    const cam = getCameraPreset(camera, userPresets)
+    cam = getCameraPreset(camera, userPresets)
     if (cam?.tokens?.length) lines.push(`${cam.tokens.join(', ')}.`)
   }
   if (identity) lines.push(`Subject: ${identity}.`)
   if (wardrobe) lines.push(`Wardrobe: ${wardrobe}.`)
   if (environment) lines.push(`Setting: ${environment}.`)
   if (action) lines.push(action)
+  // Motion-blur baseline: persistent realism layer that hides skin smoothness,
+  // rigid hands, and frame-to-frame product wobble. Per inferred scene type;
+  // skipped for animation (clean frames are the intended look).
+  if (!cam || cam.category !== 'animation') lines.push(motionBlurFor(action))
   lines.push(`${ar} composition.`)
   if (refsCount) lines.push('Keep character identity consistent with references.')
   // Actively forbid hallucinated on-screen text. AI video models love to render

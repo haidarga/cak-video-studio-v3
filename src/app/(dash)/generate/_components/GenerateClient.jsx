@@ -759,7 +759,7 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
             skipDialog: !!globalConfig.skipDialog,
             skipOnscreen: !!globalConfig.skipOnscreen,
             skipProduct: !!globalConfig.skipProduct,
-          })
+          }, cam?.category === 'phone')
         : null
       const action = isGrid ? null : (shot.raw.image_prompt || shot.raw.shot_label)
 

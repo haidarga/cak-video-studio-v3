@@ -407,7 +407,7 @@ export function buildVidInput(vidModel, { prompt, image_url, reference_urls, dur
 // woven 1-line cells where camera intent + action are joined naturally.
 //
 // constraints = { skipDialog, skipOnscreen, skipProduct }
-export function buildStoryboardGridPrompt(panels = [], ar = '9:16', concept = '', constraints = {}) {
+export function buildStoryboardGridPrompt(panels = [], ar = '9:16', concept = '', constraints = {}, candid = false) {
   const nine = panels.slice(0, 9)
   let t = 0
   const cells = nine.map((p) => {
@@ -438,7 +438,14 @@ export function buildStoryboardGridPrompt(panels = [], ar = '9:16', concept = ''
   // a semi-independent image unless told otherwise. This sentence forces the
   // model to treat the character as a locked entity across all 9 cells.
   const consistency = `CRITICAL CONSISTENCY: every character must look IDENTICAL across all 9 panels — same face shape, same proportions, same outfit, same color palette, same art style. This is one continuous scene shown in 9 keyframes, NOT 9 different versions of the character.`
-  return `${header}\n${consistency}\n${conceptLine}\n${productRule}\n\nThe 9 stills, in order (left-to-right, top-to-bottom):\n${cells}`
+  // Anti "storyboard production mode" — the 3x3 grid format nudges the model to
+  // render deliberately-composed keyframes (posed, balanced). For phone/UGC
+  // presets that reads fake. This forces genuinely candid, unstaged moments.
+  // OFF for cinema/studio presets (they WANT composed frames).
+  const candidLine = candid
+    ? `CANDID, NOT STAGED: each cell is a genuine snapshot caught mid-moment — imperfect framing, natural unposed expressions, subjects slightly off-center, real skin texture with pores and slight asymmetry, slight motion blur on hands and hair. NOT a directed photoshoot, NOT posed storyboard frames.`
+    : ''
+  return `${header}\n${consistency}\n${candidLine}\n${conceptLine}\n${productRule}\n\nThe 9 stills, in order (left-to-right, top-to-bottom):\n${cells}`
 }
 
 export function productDirective(notes) {

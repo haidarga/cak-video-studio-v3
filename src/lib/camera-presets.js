@@ -36,6 +36,7 @@ export const CAMERA_PRESETS = {
       'natural skin texture without smoothing',
       'no color grade, no filter, no editing',
       'mild overexposure on bright spots from auto-exposure',
+      '30fps self-recorded phone cadence',
     ],
     negatives: [
       // Concrete anti-references — model recognizes these
@@ -62,7 +63,13 @@ export const CAMERA_PRESETS = {
       'shot on iPhone 15 Pro',
       'smartphone video',
       'clean handheld',
+      // Motion-blur was the missing realism token on the most-used preset
+      // (it read crisp+posed, not handheld+candid). Slight blur + mid-motion
+      // hides skin smoothness / rigid hands without killing iPhone sharpness.
+      'slight natural motion blur from handheld movement',
+      'subject in mid-natural-motion',
       'natural daylight',
+      '30fps social media recording', // self-recorded cadence, not 24fps cinematic
       'crisp detail',
       'soft skin tones',
     ],
