@@ -76,7 +76,7 @@ export async function POST(req) {
   "environment": "one-line setting + lighting + time-of-day shared across all shots",
   "wardrobe": "outfit description per character, extracted from naskah if mentioned. Empty string if not specified.",
   "shots": [
-    {"shot":1,"duration":5,"video_motion":"English BEAT-STRUCTURED TIMELINE with timestamped sub-shots. Format: '[0-Xs] <action + camera angle>. [X-Ys] <action shift + camera move>. [Y-Zs] <final beat>.' Each beat ~2-3s. Map naskah narrative elements (action, camera moves, mood shifts, character reactions, prop reveals) to specific time ranges. Include camera transitions between beats (push-in / pull-back / cut / pan). DO NOT include caption text or subtext overlays in the timeline — those are added separately in the editor. Focus on what HAPPENS visually + how camera moves.","dialogue":"${constraints.skipDialog ? '' : `line in ${lang}`}","chars_in_shot":["Name1"]}
+    {"shot":1,"duration":5,"scene_type":"talking_head|beauty_application|product_reveal|walking_transition|broll|default","video_motion":"English BEAT-STRUCTURED TIMELINE with timestamped sub-shots. Format: '[0-Xs] <action + camera angle>. [X-Ys] <action shift + camera move>. [Y-Zs] <final beat>.' Each beat ~2-3s. Map naskah narrative elements (action, camera moves, mood shifts, character reactions, prop reveals) to specific time ranges. Include camera transitions between beats (push-in / pull-back / cut / pan). DO NOT include caption text or subtext overlays in the timeline — those are added separately in the editor. Focus on what HAPPENS visually + how camera moves.","dialogue":"${constraints.skipDialog ? '' : `line in ${lang}`}","chars_in_shot":["Name1"]}
   ]
 }`
       : `{
@@ -84,7 +84,7 @@ export async function POST(req) {
   "environment": "one-line setting + lighting + time-of-day shared across all shots",
   "wardrobe": "outfit description per character, extracted from naskah if mentioned. Empty string if not specified.",
   "shots": [
-    {"shot":1,"duration":5,"image_prompt":"English ACTION + camera angle only — do NOT describe faces or outfit","video_motion":"English motion max 20 words","dialogue":"${constraints.skipDialog ? '' : `line in ${lang}`}","chars_in_shot":["Name1"]}
+    {"shot":1,"duration":5,"scene_type":"talking_head|beauty_application|product_reveal|walking_transition|broll|default","image_prompt":"English ACTION + camera angle only — do NOT describe faces or outfit","video_motion":"English motion max 20 words","dialogue":"${constraints.skipDialog ? '' : `line in ${lang}`}","chars_in_shot":["Name1"]}
   ]
 }`
 
@@ -109,6 +109,7 @@ export async function POST(req) {
     'OUTPUT TYPE STRICTNESS: every string field in the schema must be a JSON STRING, not an array or object. If the naskah lists multiple outfits, JOIN them into one string ("parents wear formal outfit, kids wear casual pastel"). If multiple camera moves, join with commas. Never return [].',
     'MOTION-STATE EXCEPTION to the collage rule: descriptors of ONE moving instant are SAFE in image_prompt and must be KEPT, not stripped — "in motion", "mid-action", "hands reaching toward", "slight motion blur", "mid-gesture", "caught mid-movement". These describe a single frame that happens to be in motion, NOT a sequence. Only BAN true temporal chains (two+ separate events: "opens the door THEN aims"). Test: one moving condition = keep; two events in order = ban.',
     'LIGHTING DIRECTIONALITY (realism — critical): when the naskah names or implies a light source or time-of-day, PRESERVE its DIRECTION and HARDNESS in the environment field — e.g. "harsh direct sunlight from one side", "strong single window light, hard shadow", "late-afternoon directional sun". Do NOT flatten it into generic "natural light" / "bright lighting" / "well-lit". Hard directional light (single window / sun) is the single biggest realism lever: hard shadows give facial structure, specular highlights read as a real photo. Flat ambient light reads as AI.',
+    'SCENE TYPE: for each shot set scene_type to the dominant motion — talking_head (speaking to camera), beauty_application (applying product to face/skin), product_reveal (lifting/showing a product), walking_transition (walking/entering frame), broll (environment/pan, no main subject action), or default. It tunes the motion-realism baseline; pick the closest.',
     'REALISM OVER POLISH: this is candid real-person content, NOT a catalog shoot. Favor unstaged framing and natural moments over perfectly composed, symmetrical, magazine-style shots. Never add "professional", "studio", "perfect", "flawless", "8K", "cinematic" unless the naskah explicitly asks for a polished/cinematic look.',
     refLabels.length ? `Character names MUST come from this list (use exact names in chars_in_shot): ${refLabels.join(', ')}` : null,
   ].filter(Boolean).map((r) => `- ${r}`).join('\n')

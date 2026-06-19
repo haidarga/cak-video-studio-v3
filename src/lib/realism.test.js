@@ -24,8 +24,9 @@ describe('enrichLighting (string OR preset object)', () => {
   it('respects an already-named light source', () => {
     expect(enrichLighting('harsh sunlight from the window', 'phone')).toBe('')
   })
-  it('never enriches animation', () => {
+  it('never enriches animation OR cinema (cinema presets carry their own lighting tokens)', () => {
     expect(enrichLighting('bedroom', 'animation')).toBe('')
+    expect(enrichLighting('bedroom', 'cinema')).toBe('')
   })
 })
 
@@ -44,6 +45,14 @@ describe('motionRealismFor', () => {
   })
   it('product reveal embeds rigid-product anti-morph', () => {
     expect(motionRealismFor('she reveals the product', 'phone')).toMatch(/RIGID/)
+  })
+  it('prefers a parser-tagged sceneType over regex inference', () => {
+    // action says nothing beauty-ish, but the parser tagged it → use the tag
+    const m = motionRealismFor('she does something', 'phone', 'beauty_application')
+    expect(m).toMatch(/hands in motion with natural blur/i)
+  })
+  it('falls back to regex when the tag is invalid/missing', () => {
+    expect(motionRealismFor('she speaks to camera', 'phone', 'bogus_tag')).toMatch(/secondary motion|breathing/i)
   })
 })
 

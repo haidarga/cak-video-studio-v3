@@ -107,6 +107,12 @@ describe('compileVideoPrompt', () => {
     expect(out).toMatch(/RIGID/)
     expect(out).toMatch(/only the hand moves it/i)
   })
+
+  it('honors a parser-tagged sceneType (reliable, not regex)', () => {
+    // action text reads generic; the parser tag drives the right motion line
+    const out = compileVideoPrompt({ action: 'a quiet moment', ar: '9:16', sceneType: 'beauty_application' })
+    expect(out).toMatch(/hands in motion with natural blur/i)
+  })
 })
 
 describe('motionRealismFor (camera-aware)', () => {

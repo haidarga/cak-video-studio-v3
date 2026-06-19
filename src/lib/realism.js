@@ -29,7 +29,12 @@ const LIGHTING_KEYWORDS = ['sunlight', 'sun ', 'window light', 'harsh light', 'd
 // `category` may be a string ('phone'|'cinema'|'animation') OR a preset object.
 export function enrichLighting(environment, category) {
   const cat = typeof category === 'string' ? category : category?.category
-  if (cat === 'animation') return ''
+  // Skip animation (clean frames) AND cinema — every cinema preset already
+  // defines its own lighting in L1 tokens (studio softbox / golden hour rim /
+  // soft top light / natural available light), so injecting window light here
+  // would fight the preset's intent. Directional enrichment is a PHONE fix
+  // (phone presets don't carry a lighting token, and flat ambient is the enemy).
+  if (cat === 'animation' || cat === 'cinema') return ''
   const env = String(environment || '').toLowerCase()
   if (!env) return ''
   if (LIGHTING_KEYWORDS.some((k) => env.includes(k))) return '' // already specified — respect it
@@ -61,10 +66,13 @@ export function inferSceneType(action) {
 }
 
 // category: 'phone' (default/UGC) | 'cinema' | 'animation'.
-export function motionRealismFor(action, category = 'phone') {
+// sceneType (optional): when the PARSER tagged the scene (reliable), pass it to
+// skip the brittle regex inference. Falls back to inferSceneType(action).
+export function motionRealismFor(action, category = 'phone', sceneType = null) {
   if (category === 'animation') return ''
   if (category === 'cinema') return CINEMA_MOTION
-  return PHONE_MOTION_BY_SCENE[inferSceneType(action)] || PHONE_MOTION_BY_SCENE.default
+  const st = (sceneType && PHONE_MOTION_BY_SCENE[sceneType]) ? sceneType : inferSceneType(action)
+  return PHONE_MOTION_BY_SCENE[st] || PHONE_MOTION_BY_SCENE.default
 }
 
 // God Mode has no camera-preset system, so infer the look from the prompt text

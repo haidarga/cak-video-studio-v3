@@ -974,6 +974,7 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
         noText: !!globalConfig.skipOnscreen,
         continuousShot: !!globalConfig.continuousShot,
         refsCount: refUrls.length,
+        sceneType: shot.raw.scene_type || null, // parser-tagged → reliable motion realism
         userPresets: userCameraPresets,
       })
       // Storyboard + reference-to-video: prepend the approved 3x3 grid as the

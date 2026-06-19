@@ -288,6 +288,7 @@ export function compileVideoPrompt(spec) {
     refsCount = 0,
     noText = false,
     camera = null,
+    sceneType = null, // parser-tagged scene type (reliable) → skips brittle regex
     userPresets = [],
   } = spec
 
@@ -308,7 +309,7 @@ export function compileVideoPrompt(spec) {
   // Motion realism baseline: camera-aware (handheld blur for phone, smooth for
   // cinema, nothing for animation) so we never contradict the preset's own
   // negatives. Adds secondary motion + grounding + breathing + easing.
-  const motionLine = motionRealismFor(action, cam?.category || 'phone')
+  const motionLine = motionRealismFor(action, cam?.category || 'phone', sceneType)
   if (motionLine) lines.push(motionLine)
   lines.push(`${ar} composition.`)
   if (refsCount) lines.push('Keep character identity consistent with references.')
