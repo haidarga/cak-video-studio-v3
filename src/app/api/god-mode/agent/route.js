@@ -98,8 +98,8 @@ const TOOLS = {
 
   // ─ Generation tools ──────────────────────────────────────────────
   gen_image: {
-    description: 'Generate ONE image (NOT video) from a text prompt. Trigger phrases: "bikin foto/gambar", "buat image", "generate foto", "render gambar", "kasih foto", "potret", "hasilin gambar", "bikin poster", "edit gambar diatas". Use this when user explicitly wants an IMAGE not video. **CRITICAL**: if user uploaded image(s) to chat AND asks to edit/use them ("dari gambar diatas", "dari gambar yang gua upload"), those attachments AUTO-include as source refs — DO NOT tell user to pin anything. Pass visual prompt. Optional: model, ar override. Refs auto-stack: chat attachments + pinned persona refs + pinned product.',
-    handler: async ({ prompt, ar, model: modelOverride, extra_ref_urls }, ctx) => {
+    description: 'Generate ONE image (NOT video) from a text prompt. Trigger phrases: "bikin foto/gambar", "buat image", "generate foto", "render gambar", "kasih foto", "potret", "hasilin gambar", "bikin poster", "edit gambar diatas". Use this when user explicitly wants an IMAGE not video. **CRITICAL**: if user uploaded image(s) to chat AND asks to edit/use them ("dari gambar diatas", "dari gambar yang gua upload"), those attachments AUTO-include as source refs — DO NOT tell user to pin anything. Pass visual prompt. Optional: model, ar override. **per_image** (boolean): set TRUE when the user uploaded MULTIPLE images and wants ONE output PER image ("masing-masing", "per gambar", "untuk setiap gambar", "dari 5 gambar masing-masing buatin", "satu-satu"). Then it loops: one gen per uploaded image (each using ONLY that image as source), returns a gallery of N. Leave FALSE/omit to combine all uploads into one image. Refs auto-stack: chat attachments + pinned persona refs + pinned product.',
+    handler: async ({ prompt, ar, model: modelOverride, extra_ref_urls, per_image }, ctx) => {
       const falKey = await getFalKey(ctx.supabase, ctx.workspaceId)
       if (!falKey) return { type: 'error', error: 'no fal.ai key configured' }
 
@@ -179,6 +179,58 @@ const TOOLS = {
       // consistent. Critical for branded campaigns (UGREEN, ACEKID, etc).
       const productDirective = buildProductFidelityDirective(ctx.activeProduct)
       if (productDirective) finalPrompt += productDirective
+
+      // ── PER-IMAGE mode ──────────────────────────────────────────────
+      // "dari 5 gambar, masing-masing buatin character sheet" = FIVE gens,
+      // one per uploaded image (each using ONLY that image as source) — NOT
+      // one combined gen over all 5 (which is what the default path does and
+      // why the user got 1 sheet instead of 5). Loops + returns a gallery.
+      const uploadedImgs = (ctx.recentAttachments || []).filter((a) => a.type === 'image' && a.url).map((a) => a.url)
+      if (per_image && uploadedImgs.length >= 2) {
+        // Keep /edit (each iteration HAS a source image), honor override/config.
+        const perModel = modelOverride || cfg.image_model || 'fal-ai/nano-banana/edit'
+        // Budget gate for the whole batch (per-image cost × N).
+        const sample = buildImageInputForModel(perModel, { prompt: finalPrompt, refs: [uploadedImgs[0]], ar: finalAr, quality: cfg.resolution })
+        const projected = estimateFalCost(perModel, sample) * uploadedImgs.length
+        const gate = await assertBudget(ctx.supabase, ctx.workspaceId, { projectedUsd: projected })
+        if (!gate.ok) return { type: 'error', error: gate.reason, gate }
+
+        const out = []
+        const CONC = 5
+        for (let s = 0; s < uploadedImgs.length; s += CONC) {
+          const batch = uploadedImgs.slice(s, s + CONC)
+          const res = await Promise.all(batch.map(async (srcUrl, bi) => {
+            const idx = s + bi
+            try {
+              let d
+              try {
+                d = await falCall(perModel, buildImageInputForModel(perModel, { prompt: finalPrompt, refs: [srcUrl], ar: finalAr, quality: cfg.resolution }), falKey)
+              } catch (err) {
+                if (/failed to download|file_download_error|inaccessible/i.test(String(err?.message || ''))) {
+                  const mref = await mirrorToFalStorage(srcUrl, falKey)
+                  d = await falCall(perModel, buildImageInputForModel(perModel, { prompt: finalPrompt, refs: [mref], ar: finalAr, quality: cfg.resolution }), falKey)
+                } else throw err
+              }
+              const u = d?.images?.[0]?.url || d?.image?.url || d?.url
+              if (!u) return { error: 'no image url', index: idx }
+              const { data: row } = await ctx.supabase.from('results').insert({
+                workspace_id: ctx.workspaceId, persona_id: ctx.activePersona?.id || null,
+                type: 'image', url: u, label: `Character sheet ${idx + 1}`, ar: finalAr,
+                meta: { source: 'god-mode', batch: 'per-image', source_image: srcUrl, prompt: finalPrompt, model: perModel },
+                created_by: ctx.userId,
+              }).select('id').single()
+              return { url: u, index: idx, result_id: row?.id }
+            } catch (e) { return { error: e.message, index: idx } }
+          }))
+          out.push(...res)
+        }
+        return {
+          type: 'mass_variants_result',
+          count: out.filter((r) => r.url).length,
+          requested: uploadedImgs.length,
+          variants: out,
+        }
+      }
 
       // Auto-switch /edit variants to their text-to-image counterpart when
       // no source images are available. User asked "bikin foto X" without
@@ -1994,6 +2046,7 @@ Rules:
   * "20 ad concepts + scored + ranked + combined into production package" → viral_ad_campaign (one shot, returns all of it).
   * "brand from scratch + naskah + listing photos" → brand_builder.
   * "20 product variants in different scenes" → mass_image_variants.
+  * "dari N gambar yang gua upload, masing-masing buatin character sheet / foto / variant" → gen_image with per_image=true (ONE output PER uploaded image, returns N). Do NOT combine them into one image. Watch for "masing-masing", "per gambar", "satu-satu", "untuk setiap gambar", "dari N gambar ... masing-masing".
   * "analyze video + remake with my character + product" → analyze_reference_video first, then gen_video with refs.
   If you see a tool that fits, USE IT. Don't tell user "gua belum bisa". Don't claim limits the tools don't have.
 - IMPORTANT: viral_ad_campaign does NOT need real-time market data. It synthesizes from established viral ad frameworks (hook types, retention mechanics, conversion triggers). Use it whenever user asks for ad concepts + scoring + final package, even if they mention "viral ads from last X days".
