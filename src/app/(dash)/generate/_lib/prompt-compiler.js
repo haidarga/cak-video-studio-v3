@@ -335,8 +335,45 @@ export function compileVideoPrompt(spec) {
     dialect = null,   // regional accent (Medanese, Jawa, Sunda…) for native-audio models
     hasDialog = false,
     audioOn = true,
+    storyboard = false, // grid ref-to-video: grid owns composition → minimal text
+    dialog = null,      // raw dialog words (storyboard mode builds its own speech line)
     userPresets = [],
   } = spec
+
+  // ── STORYBOARD MODE ──
+  // The 3x3 grid already encodes scene composition, the beat sequence, camera
+  // framing, and the b-roll moments. Dumping the full per-shot prompt here
+  // (camera grunge block + motionRealismFor + freeform "static camera /
+  // intercut" motion) does two harmful things:
+  //   1. CONTRADICTS the grid wrapper ("one continuous take" vs "intercut",
+  //      "static camera" vs auto-injected "handheld pan + motion blur") → the
+  //      model can't satisfy both and improvises cuts/transitions randomly.
+  //   2. OVERPOWERS the visual reference — Seedance r2v weights long imperative
+  //      text over the image, so the planned beat composition gets ignored.
+  // Both are the user-reported "cut-to-cut / perpindahan scene / konsistensi
+  // ancur". Fix: emit a SHORT, de-conflicted prompt — look + identity +
+  // dialog/accent/pace only. The grid carries everything else.
+  if (storyboard) {
+    const sbCam = camera ? getCameraPreset(camera, userPresets) : null
+    const sb = []
+    if (sbCam?.category === 'phone') {
+      sb.push('Casual handheld phone-video look — natural skin texture, no color grade, no filter, no beautify.')
+    } else if (sbCam?.category === 'cinema') {
+      sb.push('Cinematic look — controlled exposure, filmic color, smooth controlled motion.')
+    } else if (sbCam?.category === 'animation' && sbCam?.tokens?.length) {
+      sb.push(`${sbCam.tokens.join(', ')}.`)
+    }
+    if (identity) sb.push(`Subject: ${identity}.`)
+    if (hasDialog && audioOn !== false && dialog) {
+      sb.push(`The subject says, in ${lang}: "${String(dialog).trim()}"`)
+      const vl = buildVoiceDirection({ lang, dialect, hasDialog, audioOn })
+      if (vl) sb.push(vl)
+    }
+    sb.push(`${ar} composition.`)
+    if (refsCount) sb.push('Keep the SAME character identity, outfit and art style as the references throughout — no mid-video morphing.')
+    if (noText) sb.push('Absolutely no on-screen text, captions, subtitles, watermarks, logos, letters, numbers, or any written words anywhere in the frame.')
+    return sb.filter(Boolean).join('\n')
+  }
 
   const lines = []
   // Camera preset L1 tokens FIRST (highest priority). CRITICAL for Direct Video

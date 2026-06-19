@@ -1002,6 +1002,13 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
         dialect: globalConfig.dialect || null,   // regional accent for native-audio models
         hasDialog: !globalConfig.skipDialog && !!dialogs,
         audioOn: globalConfig.audio !== false,
+        // Storyboard grid r2v: the grid owns composition/beats. Pass storyboard=true
+        // so the compiler emits a SHORT, de-conflicted prompt (look + identity +
+        // dialog/accent/pace) instead of the full per-shot motion block — the full
+        // block contradicts the grid wrapper and overpowers the visual reference,
+        // wrecking cut-to-cut + scene transitions + consistency.
+        storyboard: isGrid,
+        dialog: dialogs || null,
         userPresets: userCameraPresets,
       })
       // Storyboard + reference-to-video: prepend the approved 3x3 grid as the
@@ -1102,7 +1109,7 @@ INSTRUCTIONS:
 - ABSOLUTELY DO NOT show grid lines, panel borders, panel numbers, or 3x3 layout in the output video. The output is a normal full-frame video of the subjects.
 - Maintain the SAME character identity, outfit, and art style from the reference images across the entire video. No mid-video morphing.
 
-MOTION DETAILS:
+STYLE & DIALOG:
 ${motion}`
       }
       // PRODUCT ANTI-MORPH — i2v models re-paint the product every frame

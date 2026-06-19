@@ -143,6 +143,61 @@ describe('compileVideoPrompt', () => {
   })
 })
 
+describe('compileVideoPrompt — storyboard mode (minimal, de-conflicted)', () => {
+  // The grid carries composition + the beat sequence. The text must NOT fight it:
+  // no full phone-grunge block, no contradictory camera motion, no freeform
+  // camera direction. Only: short look + character consistency + dialog/accent/pace.
+  const sb = {
+    storyboard: true,
+    camera: 'samsung_a13_candid',
+    ar: '9:16',
+    refsCount: 3,
+    // The bug: this freeform motion contains "static camera" + "intercut" which
+    // contradicts the "one continuous take" grid wrapper. Storyboard must ignore it.
+    action: 'static camera captures Emma speaking, intercut with b-roll. The subject speaks in fluent native Indonesian: "halo mak"',
+    dialog: 'halo mak apa kabar',
+    lang: 'Indonesian',
+    dialect: 'Medanese (Batak)',
+    hasDialog: true,
+    audioOn: true,
+    noText: true,
+  }
+
+  it('does NOT dump the full phone-grunge block (no per-frame instability that wrecks consistency)', () => {
+    const out = compileVideoPrompt(sb)
+    expect(out).not.toMatch(/JPEG compression|crushed shadows|imperfect framing|self-recorded phone cadence|unflattering candid/i)
+  })
+  it('does NOT inject contradictory camera motion (no handheld pan / motion blur fighting the grid)', () => {
+    const out = compileVideoPrompt(sb)
+    expect(out).not.toMatch(/motion blur|handheld camera|\bpan\b/i)
+  })
+  it('drops the freeform camera direction that contradicts the one-take wrapper', () => {
+    const out = compileVideoPrompt(sb)
+    expect(out).not.toMatch(/static camera|intercut/i)
+  })
+  it('keeps the dialog WORDS + accent + unhurried pace (audio must survive)', () => {
+    const out = compileVideoPrompt(sb)
+    expect(out).toMatch(/halo mak apa kabar/)
+    expect(out).toMatch(/Medanese \(Batak\) regional ACCENT/i)
+    expect(out).toMatch(/UNHURRIED pace/i)
+  })
+  it('keeps a short phone-look clause + identity consistency + AR + no-text', () => {
+    const out = compileVideoPrompt(sb)
+    expect(out).toMatch(/handheld phone/i)
+    expect(out).toMatch(/no mid-video morphing/i)
+    expect(out).toMatch(/9:16 composition\./)
+    expect(out).toMatch(/no on-screen text/i)
+  })
+  it('stays short — grid carries composition, not text (vs ~250-word full dump)', () => {
+    const out = compileVideoPrompt(sb)
+    expect(out.split(/\s+/).length).toBeLessThan(130)
+  })
+  it('animation storyboard keeps its style tokens but no skin/grunge', () => {
+    const out = compileVideoPrompt({ ...sb, camera: 'animation_2d' })
+    expect(out).not.toMatch(/skin texture|JPEG/i)
+  })
+})
+
 describe('motionRealismFor (camera-aware)', () => {
   it('phone → handheld blur + secondary motion', () => {
     expect(motionRealismFor('she speaks to camera', 'phone')).toMatch(/motion blur/i)
