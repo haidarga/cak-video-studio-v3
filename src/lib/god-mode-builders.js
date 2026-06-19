@@ -99,7 +99,10 @@ export function buildVideoInputForModel(model, { motion_prompt, image_url, image
   const ar = aspect_ratio || '9:16'
 
   const isI2V = model.includes('image-to-video')
-  const isR2V = model.includes('reference-to-video')
+  // Kling's ref endpoint is '/ref-to-video'; every other family uses
+  // '/reference-to-video'. Match BOTH, else Kling-ref falls through to the
+  // default branch with no `elements` and fal 422s on missing frontal images.
+  const isR2V = model.includes('reference-to-video') || model.includes('ref-to-video')
   const isT2V = model.includes('text-to-video')
 
   // Unified refs array — explicit image_urls when provided, else fall
