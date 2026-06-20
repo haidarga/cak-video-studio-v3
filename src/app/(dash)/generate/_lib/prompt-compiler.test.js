@@ -171,9 +171,21 @@ describe('compileVideoPrompt — storyboard mode (minimal, de-conflicted)', () =
     const out = compileVideoPrompt(sb)
     expect(out).not.toMatch(/motion blur|handheld camera|\bpan\b/i)
   })
-  it('drops the freeform camera direction that contradicts the one-take wrapper', () => {
+  it('drops the freeform grunge/intercut text but PRESERVES static-camera intent', () => {
     const out = compileVideoPrompt(sb)
-    expect(out).not.toMatch(/static camera|intercut/i)
+    expect(out).not.toMatch(/intercut/i)            // raw contradictory direction gone
+    expect(out).toMatch(/LOCKED and mostly still/i) // but the static intent survives, clean
+    expect(out).toMatch(/no panning, no push-in/i)
+  })
+  it('defaults to micro-movement (not static) when the naskah did not ask for static', () => {
+    const out = compileVideoPrompt({ ...sb, action: 'she gestures while speaking', dialog: 'halo' })
+    expect(out).toMatch(/micro camera movement/i)
+    expect(out).not.toMatch(/LOCKED and mostly still/i)
+  })
+  it('always gives the subject natural secondary motion (not frozen/robotic)', () => {
+    const out = compileVideoPrompt(sb)
+    expect(out).toMatch(/secondary motion|breathing|blinks/i)
+    expect(out).toMatch(/nothing robotic/i)
   })
   it('keeps the dialog WORDS + accent + unhurried pace (audio must survive)', () => {
     const out = compileVideoPrompt(sb)
@@ -190,7 +202,7 @@ describe('compileVideoPrompt — storyboard mode (minimal, de-conflicted)', () =
   })
   it('stays short — grid carries composition, not text (vs ~250-word full dump)', () => {
     const out = compileVideoPrompt(sb)
-    expect(out.split(/\s+/).length).toBeLessThan(130)
+    expect(out.split(/\s+/).length).toBeLessThan(175)
   })
   it('animation storyboard keeps its style tokens but no skin/grunge', () => {
     const out = compileVideoPrompt({ ...sb, camera: 'animation_2d' })
