@@ -1255,13 +1255,32 @@ PRODUCT FIDELITY (critical): the product is a RIGID manufactured object — its 
       let frameUrl = null
       let extractFailed = false
       let noAnchor = false
+      // FAST PATH (storyboard source): the last GRID panel already IS the planned
+      // ending frame. Crop it straight out of the approved grid image — instant,
+      // no video download / no ffmpeg.wasm. Skips the slow extract entirely.
+      if (isPrevStoryboard && prev.image?.url) {
+        try {
+          patchShot(idx, { continuing: 'Ambil frame dari panel terakhir storyboard (instan)...' })
+          const { cropLastGridCell } = await import('@/lib/grid-crop')
+          const blob = await cropLastGridCell(prev.image.url, prev.raw.panels?.length || 9)
+          const up = await uploadBlob(blob, `lastcell-${prev.id}.jpg`, 'continuation')
+          frameUrl = up.url
+          console.log('[Continue] used last grid cell as anchor (fast path)')
+        } catch (e) {
+          console.warn('[Continue] grid-cell crop failed, falling back to video extract:', e?.message || e)
+        }
+      }
       try {
-        const blob = await extractLastFrame(prev.video.url, { offsetEnd: 0.05 })
-        patchShot(idx, { continuing: `Uploading ${(blob.size / 1024).toFixed(0)}KB to R2...` })
-        console.log('[Continue] frame extracted', blob.size, 'bytes — uploading')
-        const up = await uploadBlob(blob, `lastframe-${prev.id}.jpg`, 'continuation')
-        frameUrl = up.url
-        console.log('[Continue] uploaded', frameUrl)
+        // Only fall back to the slow video extract if the fast path didn't
+        // already produce an anchor (i.e. direct source, or crop failed).
+        if (!frameUrl) {
+          const blob = await extractLastFrame(prev.video.url, { offsetEnd: 0.05 })
+          patchShot(idx, { continuing: `Uploading ${(blob.size / 1024).toFixed(0)}KB to R2...` })
+          console.log('[Continue] frame extracted', blob.size, 'bytes — uploading')
+          const up = await uploadBlob(blob, `lastframe-${prev.id}.jpg`, 'continuation')
+          frameUrl = up.url
+          console.log('[Continue] uploaded', frameUrl)
+        }
       } catch (extractErr) {
         // Frame extract failed entirely (all 3 ffmpeg strategies). Two paths:
         // - Storyboard source: fall back to prev.image.url (the grid) as

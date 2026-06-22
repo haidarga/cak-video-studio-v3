@@ -29,7 +29,7 @@ export async function extractLastFrameViaCanvas(videoUrl) {
   await new Promise((resolve, reject) => {
     video.onloadedmetadata = resolve
     video.onerror = () => reject(new Error('video element load failed'))
-    setTimeout(() => reject(new Error('video metadata timeout (10s)')), 10_000)
+    setTimeout(() => reject(new Error('video metadata timeout (4s)')), 4_000)
   })
 
   if (!video.duration || !isFinite(video.duration)) {
@@ -43,7 +43,7 @@ export async function extractLastFrameViaCanvas(videoUrl) {
   await new Promise((resolve, reject) => {
     video.onseeked = resolve
     video.onerror = () => reject(new Error('video seek failed'))
-    setTimeout(() => reject(new Error('video seek timeout (10s)')), 10_000)
+    setTimeout(() => reject(new Error('video seek timeout (6s)')), 6_000)
   })
 
   const w = video.videoWidth, h = video.videoHeight
