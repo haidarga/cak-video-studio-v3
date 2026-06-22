@@ -54,13 +54,17 @@ async function callGoogle({ model, apiKey, contents, generationConfig }) {
     console.warn(`[llm] ${model} is deprecated, substituting with ${sub}`)
     model = sub
   }
-  // Gemini 2.5 models "think" by default, and thinking tokens are billed
+  // Gemini 2.5 FLASH "thinks" by default, and thinking tokens are billed
   // AGAINST maxOutputTokens. So a structured/JSON call can burn its whole
   // budget thinking and return TRUNCATED JSON ("balik bukan JSON valid",
   // cut mid-string). Our calls want fast complete JSON, not chain-of-thought
   // — disable thinking unless the caller explicitly set a budget.
+  //
+  // ONLY flash supports thinkingBudget:0. gemini-2.5-PRO (and other thinking-
+  // only models) REJECT budget 0 with "This model only works in thinking mode".
+  // So scope the disable to flash; let pro/thinking models think (default).
   const gc = { ...generationConfig }
-  if (gc.thinkingConfig === undefined && /gemini-2\.5/.test(model)) {
+  if (gc.thinkingConfig === undefined && /gemini-2\.5-flash/.test(model)) {
     gc.thinkingConfig = { thinkingBudget: 0 }
   }
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`
