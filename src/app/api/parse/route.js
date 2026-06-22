@@ -5,7 +5,7 @@ import { callGeminiJSON } from '@/lib/gemini-server'
 import { getActiveWorkspace } from '@/lib/workspace'
 
 export async function POST(req) {
-  const { naskah, lang = 'Indonesian', mode = 'shots', ar = '9:16', refLabels = [], brand = null, constraints = {}, shotCount = null, continuation = null } = await req.json()
+  const { naskah, lang = 'Indonesian', mode = 'shots', ar = '9:16', refLabels = [], brand = null, constraints = {}, shotCount = null, continuation = null, maxSegmentDuration = 8 } = await req.json()
   if (!naskah?.trim()) return NextResponse.json({ ok: false, error: 'naskah kosong' }, { status: 400 })
 
   const supabase = await createClient()
@@ -35,6 +35,10 @@ export async function POST(req) {
 
   const isStory = mode === 'storyboard'
   const isDirect = mode === 'direct'
+  const isLong = mode === 'longform'
+  // Per-segment cap = the chosen video model's max clip length (e.g. Veo 8s,
+  // Seedance/Kling 15s). The naskah is split so each segment fits in one clip.
+  const maxSeg = Math.max(2, Math.min(15, parseInt(maxSegmentDuration) || 8))
   const shotTypes = constraints.skipProduct
     ? 'Close Up|Medium Shot|Wide Shot'
     : 'Close Up|Medium Shot|Wide Shot|Product Shot'
@@ -58,7 +62,16 @@ export async function POST(req) {
   // emit environment/wardrobe so the motion prompt has context, plus a
   // beat-by-beat video_motion per shot (this is the only thing the video model
   // sees).
-  const schema = isStory
+  const schema = isLong
+    ? `{
+  "characters": ["Name1"],
+  "environment": "one-line setting + lighting + time-of-day shared across segments (English)",
+  "wardrobe": "outfit per character extracted from naskah if mentioned, else empty string",
+  "segments": [
+    {"n":1,"seconds":${maxSeg},"transition":"start","video_motion":"English timestamped beat timeline for THIS segment only. Format '[0-Xs] <action + camera>. [X-Ys] <next beat>.' ~2-3s per beat.","dialog":"${constraints.skipDialog ? '' : `the ${lang} line(s) spoken DURING this segment only (empty if none)`}","chars_in_shot":["Name1"]}
+  ]
+}`
+    : isStory
     ? `{
   "concept": "one-line creative concept (English)",
   "environment": "one-line setting + lighting + time-of-day shared across all panels (English, e.g. 'small neighborhood park, late afternoon golden light, scattered passersby')",
@@ -124,7 +137,13 @@ ${universalRules}
 ${continuationBlock}
 
 TASK: Convert this script into ${
-    isStory
+    isLong
+      ? `a LONG-FORM PLAN: split the FULL naskah into sequential SEGMENTS, each <= ${maxSeg}s (each segment = one generated video clip, stitched in order). Rules:
+- Cover the ENTIRE naskah in order — no gaps, no repeats. Use as many segments as needed.
+- Split dialog so each segment's spoken line FITS its seconds at ~2 words/sec (unhurried). Trim, never cram.
+- transition (CRITICAL — FOLLOW THE NASKAH, never force): first segment = "start". For each later segment, "continuous" if it flows from the SAME shot/scene/action with NO visual cut (next clip starts exactly where the previous ended → seamless handoff); "cut" if the naskah moves to a NEW scene, angle, location, or b-roll (clean hard cut, generated fresh). A monologue split only for length = "continuous"; a jump to b-roll or a new setting = "cut".
+- video_motion = a short timestamped beat timeline for THAT segment only.`
+      : isStory
       ? `ONE storyboard — CHOOSE the panel count: 4, 6, or 9 (clean grids 2x2 / 2x3 / 3x3). Pick whatever the script ACTUALLY needs at ~2-3s per beat; do NOT pad with filler b-roll just to fill a 3x3. Dialog-heavy testimonial → fewer, longer talking-head holds (4-6 panels). Action / montage / multi-location → more (6-9). Set each panel.seconds to its real length; total ~8-15s.`
       : isDirect
         ? (shotCount

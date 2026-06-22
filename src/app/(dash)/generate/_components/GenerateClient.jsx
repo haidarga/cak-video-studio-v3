@@ -13,6 +13,7 @@ import { imageCost, videoCost, fmtCost } from '@/lib/cost-table'
 // src/lib/god-mode-builders.js. Keep it that way.
 import { STYLE_PRESETS } from '../_lib/style-presets'
 import { compileImagePrompt, compileVideoPrompt } from '../_lib/prompt-compiler'
+import { planToJobs, buildConcatProject } from '@/lib/long-form'
 import { cleanProductBg } from '@/lib/bg-removal'
 import { CAMERA_PRESETS, listAllPresets, DEFAULT_CAMERA, getCameraPreset } from '@/lib/camera-presets'
 
@@ -1392,6 +1393,115 @@ PRODUCT FIDELITY (critical): the product is a RIGID manufactured object — its 
     onPatch({ busy: false })
   }
 
+  // runLongForm — ONE-CLICK long-form: split a naskah longer than the model's
+  // per-clip cap into segments, gen each in order, then stitch into ONE video.
+  // FOLLOWS THE NASKAH: continuous segments get a last-frame handoff (seamless),
+  // cut segments are generated fresh (hard cut). Self-contained — does NOT mutate
+  // shot state mid-loop (avoids stale-closure races); saves each segment + the
+  // final stitched file straight to results.
+  async function runLongForm() {
+    const fullNaskah = (state.naskah || '').trim()
+    if (!fullNaskah) { onErr(`${persona.name}: naskah kosong`); return }
+    const maxDur = getVideoMaxDuration(globalConfig.vidModel)
+    // Long-form has no per-segment still frame → ref-to-video. Switch to the
+    // chosen family's r2v variant (Seedance/Kling handle real-person refs; Veo
+    // is locked 8s + strict on faces — getVideoMaxDuration already caps it).
+    const vidModel = toRefToVideoModel(globalConfig.vidModel)
+    onPatch({ busy: true, lfStatus: 'Nyusun rencana segmen dari naskah...' }); onErr('')
+    try {
+      // 1) PLAN — parser splits the FULL naskah into ≤maxDur segments w/ cut|continuous tags.
+      const pr = await fetch('/api/parse', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          naskah: fullNaskah, lang: globalConfig.lang, mode: 'longform', ar: globalConfig.ar,
+          refLabels: selectedRefs.map((r) => r.label).filter(Boolean),
+          brand: activeBrand ? { notes: activeBrand.notes, config: activeBrand.config } : null,
+          constraints: { skipDialog: !!globalConfig.skipDialog, skipOnscreen: !!globalConfig.skipOnscreen, skipProduct: !!globalConfig.skipProduct },
+          maxSegmentDuration: maxDur,
+        }),
+      })
+      const pj = await pr.json()
+      if (!pj.ok) throw new Error(pj.error || 'parse gagal')
+      const jobs = planToJobs(pj.parsed?.segments || [], { maxDuration: maxDur })
+      if (!jobs.length) throw new Error('plan kosong — naskah gak ke-parse jadi segmen')
+
+      // 2) Refs once (product bg-clean, same as the video path). r2v needs refs.
+      const charProdUrls = (await Promise.all(selectedRefs.map((r) =>
+        (r.kind === 'product' && !globalConfig.skipProduct && globalConfig.cleanProductBg !== false)
+          ? cleanProductBg(r.fal_url, null, (m, i) => falRun(m, i, { workspaceId }))
+          : Promise.resolve(r.fal_url)
+      ))).filter(Boolean)
+      const baseRefs = [...charProdUrls, ...styleRefs.map((r) => r.fal_url).filter(Boolean)]
+      if (!baseRefs.length) throw new Error('Long-form butuh minimal 1 reference (persona refs). Pilih ref dulu.')
+
+      const identity = persona.character_prompt ? `${persona.name} (${persona.character_prompt.slice(0, 200)})` : null
+      const brand = (!globalConfig.skipProduct)
+        ? productNotesShort(selectedRefs.map((r) => String(r.knowledge || '').trim()).filter(Boolean).join('\n') || activeBrand?.notes)
+        : null
+
+      // 3) Gen each segment in order. Continuous → last-frame handoff anchor.
+      const clips = []
+      let prevVideoUrl = null
+      for (let i = 0; i < jobs.length; i++) {
+        const job = jobs[i]
+        onPatch({ lfStatus: `Segmen ${i + 1}/${jobs.length} (${job.transition})...` })
+        let segRefs = baseRefs
+        if (job.useHandoff && prevVideoUrl) {
+          try {
+            const { extractLastFrame } = await import('@/lib/ffmpeg-extract')
+            const blob = await extractLastFrame(prevVideoUrl, { offsetEnd: 0.05 })
+            const up = await uploadBlob(blob, `lf-handoff-${persona.id}-${i}.jpg`, 'longform')
+            segRefs = [...baseRefs, up.url] // last frame rides at the END = strongest continuity hint
+          } catch { /* extract failed → refs-only soft continuity (seam may show) */ }
+        }
+        const action = job.dialog
+          ? `${job.motion} The subject speaks in fluent native ${globalConfig.lang}: "${job.dialog}"`
+          : job.motion
+        const motion = compileVideoPrompt({
+          camera: globalConfig.cameraPreset || DEFAULT_CAMERA,
+          identity, environment: pj.parsed?.environment || null, action, brand,
+          ar: globalConfig.ar, skipProduct: !!globalConfig.skipProduct, noText: !!globalConfig.skipOnscreen,
+          refsCount: segRefs.length, lang: globalConfig.lang, dialect: globalConfig.dialect || null,
+          hasDialog: !globalConfig.skipDialog && !!job.dialog, audioOn: globalConfig.audio !== false,
+          userPresets: userCameraPresets,
+        })
+        const seed = globalConfig.seedLock ? globalConfig.seed : randomSeed()
+        const vidInput = applySeed(vidModel, buildVidInput(vidModel, {
+          prompt: motion, reference_urls: segRefs, duration: job.duration, aspect_ratio: globalConfig.ar,
+        }), seed)
+        const res = await falRun(vidModel, vidInput, { onProgress: (p) => onPatch({ lfStatus: `Segmen ${i + 1}/${jobs.length}: ${p}` }), workspaceId, duration: job.duration })
+        const url = res.video?.url || res.video
+        if (!url) throw new Error(`segmen ${i + 1} gak balikin video`)
+        prevVideoUrl = url
+        clips.push({ url, duration: job.duration })
+        await supabase.from('results').insert({
+          workspace_id: workspaceId, persona_id: persona.id, type: 'video', url, ar: globalConfig.ar,
+          label: `${persona.name} — Long-form seg ${i + 1}/${jobs.length}`, group_label: persona.name,
+          meta: { source: 'longform', segment: i + 1, of: jobs.length, transition: job.transition },
+        })
+      }
+
+      // 4) STITCH the ordered clips into one file (client render).
+      onPatch({ lfStatus: `Stitch ${clips.length} segmen jadi 1 video...` })
+      const project = buildConcatProject(clips, { ar: globalConfig.ar })
+      const { renderProject } = await import('@/lib/editor-render')
+      const { blob, ext, mime } = await renderProject(project, (p) => onPatch({ lfStatus: `Render: ${p}` }), { mode: 'mp4' })
+      const up = await uploadBlob(blob, `longform-${persona.id}-${Date.now()}.${ext || 'mp4'}`, 'longform')
+      await supabase.from('results').insert({
+        workspace_id: workspaceId, persona_id: persona.id, type: 'video', url: up.url, ar: globalConfig.ar,
+        label: `${persona.name} — Long-form FINAL (~${Math.round(project.durationSec)}s)`, group_label: persona.name,
+        meta: { source: 'longform-final', segments: clips.length, mime },
+      })
+      onPatch({ lfStatus: null })
+      onErr(`✓ Long-form selesai: ${clips.length} segmen → 1 video ~${Math.round(project.durationSec)}s. Cek di Results.`)
+    } catch (e) {
+      console.error('[LongForm] failed:', e)
+      onErr(`Long-form gagal: ${e.message || e}`)
+      onPatch({ lfStatus: null })
+    }
+    onPatch({ busy: false })
+  }
+
   // linkFrameToNextShot — DIFFERS from continueStoryboard:
   //   continueStoryboard creates a NEW shot with extracted last frame.
   //   linkFrameToNextShot MERGES the last frame into the EXISTING next
@@ -1635,6 +1745,13 @@ PRODUCT FIDELITY (critical): the product is a RIGID manufactured object — its 
             className="px-4 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] text-sm font-semibold hover:bg-[var(--border)] disabled:opacity-50">
             🤖 Parse with Gemini
           </button>
+          {/* Long-form: paste a naskah of any length → auto-split into ≤model-cap
+              segments, gen each (cut/continuous per naskah), stitch into ONE video. */}
+          <button onClick={runLongForm} disabled={state.busy || !state.naskah.trim()}
+            title={`Naskah panjang → auto-split jadi segmen ≤${getVideoMaxDuration(globalConfig.vidModel)}s, gen berurutan (cut/conti ngikutin naskah), stitch jadi 1 video. Pakai ${toRefToVideoModel(globalConfig.vidModel).split('/').pop()}.`}
+            className="px-4 py-2 rounded bg-gradient-to-r from-fuchsia-600 to-violet-600 text-white text-sm font-semibold hover:opacity-90 disabled:opacity-50">
+            🎞 Long-form (auto-chain)
+          </button>
           {state.shots.length > 0 && globalConfig.mode !== 'direct' && (() => {
             const imgPending = state.shots.filter((s) => !s.image?.url).length
             const estImg = imgPending * imageCost(globalConfig.imgModel)
@@ -1683,6 +1800,12 @@ PRODUCT FIDELITY (critical): the product is a RIGID manufactured object — its 
             )
           })()}
         </div>
+
+        {state.lfStatus && (
+          <div className="text-xs px-3 py-2 rounded bg-fuchsia-500/10 border border-fuchsia-500/40 text-fuchsia-300 font-medium">
+            🎞 {state.lfStatus}
+          </div>
+        )}
 
         {state.shots.length > 0 && (
           <div className="pt-3 border-t border-[var(--border)] space-y-3">
