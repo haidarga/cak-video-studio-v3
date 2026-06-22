@@ -289,6 +289,13 @@ export default function GodModeClient({ workspaceId, userId, activeBrand, person
           regen_payload: x.regen_payload, request_id: x.request_id,
           model: x.model, ar: x.ar, duration: x.duration,
         }
+        // MEMORY: keep STRATEGY/FORMULA results WHOLE (video_analysis, brand,
+        // campaign) so a later "duplikat / bikin videonya" can pull the formula
+        // from earlier context. Slimming these stripped the formula → the agent
+        // forgot what it analyzed. Gen results stay slimmed (url + regen only).
+        if (typeof r.type === 'string' && /analysis|builder|campaign|blueprint|strategy|bootstrap|formula/i.test(r.type)) {
+          return r
+        }
         const out = pick(r)
         if (Array.isArray(r.items)) out.items = r.items.slice(0, 5).map(pick)
         return out
