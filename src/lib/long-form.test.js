@@ -66,18 +66,21 @@ describe('buildConcatProject — sequential stitch project', () => {
     { url: 'https://x/2.mp4', duration: 6 },
     { url: 'https://x/3.mp4', duration: 8 },
   ]
-  it('lays clips back-to-back on the base track in order', () => {
+  it('lays clips back-to-back on the base track (video_clips) in order', () => {
     const p = buildConcatProject(clips, { ar: '9:16' })
-    expect(p.clips.map((c) => c.in_track)).toEqual([0, 8, 14])
-    expect(p.clips.map((c) => c.src_url)).toEqual(['https://x/1.mp4', 'https://x/2.mp4', 'https://x/3.mp4'])
-    expect(p.clips.every((c) => c.track_idx === 0 && c.src_in === 0)).toBe(true)
+    expect(p.video_clips.map((c) => c.in_track)).toEqual([0, 8, 14])
+    expect(p.video_clips.map((c) => c.src_url)).toEqual(['https://x/1.mp4', 'https://x/2.mp4', 'https://x/3.mp4'])
+    expect(p.video_clips.every((c) => c.track_idx === 0 && c.src_in === 0)).toBe(true)
     expect(p.durationSec).toBe(22)
   })
-  it('uses the AR canvas size', () => {
-    expect(buildConcatProject(clips, { ar: '9:16' })).toMatchObject({ width: 1080, height: 1920, fps: 30 })
+  it('emits the fields editor-render reads: video_clips + ar (not clips/width)', () => {
+    const p = buildConcatProject(clips, { ar: '9:16' })
+    expect(p.ar).toBe('9:16')
+    expect(Array.isArray(p.video_clips)).toBe(true)
+    expect(p.clips).toBeUndefined()       // the old wrong field must be gone
   })
   it('drops empty/invalid clips', () => {
     const p = buildConcatProject([{ url: 'https://x/1.mp4', duration: 8 }, { duration: 5 }, null], { ar: '9:16' })
-    expect(p.clips).toHaveLength(1)
+    expect(p.video_clips).toHaveLength(1)
   })
 })

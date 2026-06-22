@@ -559,6 +559,20 @@ export function toRefToVideoModel(vidModel) {
   return 'bytedance/seedance-2.0/fast/reference-to-video' // safe default for unknown families
 }
 
+// Inverse of toRefToVideoModel — map any model to its family's IMAGE-TO-VIDEO
+// variant. Used by long-form HYBRID: continuous segments hand off the previous
+// clip's last frame as the START image (i2v) for a seamless, no-seam join.
+export function toImageToVideoModel(vidModel) {
+  const m = (vidModel || '').toLowerCase()
+  if (m.includes('image-to-video')) return vidModel // already i2v
+  if (m.includes('veo3')) return 'fal-ai/veo3.1/fast/image-to-video'
+  if (m.includes('grok')) return 'xai/grok-imagine-video/image-to-video'
+  if (m.includes('kling')) return 'fal-ai/kling-video/v3/standard/image-to-video'
+  if (m.includes('happy-horse')) return 'alibaba/happy-horse/image-to-video'
+  if (m.includes('seedance')) return 'bytedance/seedance-2.0/fast/image-to-video'
+  return 'bytedance/seedance-2.0/fast/image-to-video' // safe default
+}
+
 export const VIDEO_MODELS = [
   { v: 'xai/grok-imagine-video/image-to-video', l: 'Grok Imagine — ~$0.07/dtk 720p (audio) 💰' },
   { v: 'xai/grok-imagine-video/reference-to-video', l: '🎭 Grok Imagine Ref-to-Video — ~$0.07/dtk (multi-ref, NO grid morph) 💰' },

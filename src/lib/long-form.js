@@ -62,12 +62,14 @@ export function arDims(ar) {
 
 // Build the editor-render project that concatenates the gen'd clips in order.
 // `clips` = [{ url, duration }] in playback order. Produces sequential base-
-// track clips (track_idx 0, back-to-back in_track) matching the shape
-// renderProject()/editor-render.js expects (src_url + src_in/src_out/speed).
+// track clips matching the EXACT shape editor-render.js consumes:
+//   project.video_clips[] (NOT `clips`) — base track = track_idx 0, back-to-back
+//   project.ar (NOT width/height) — renderer derives dimensions from ar
+// Each clip keeps its native audio (the renderer only mutes when a cloned voice
+// is set), so segment dialog survives the stitch.
 export function buildConcatProject(clips = [], { ar = '9:16', fps = 30 } = {}) {
-  const { width, height } = arDims(ar)
   let cursor = 0
-  const built = (clips || []).filter((c) => c && c.url).map((c, i) => {
+  const video_clips = (clips || []).filter((c) => c && c.url).map((c, i) => {
     const dur = Math.max(0.1, Number(c.duration) || 0)
     const clip = {
       id: `lf-${i}`,
@@ -82,5 +84,5 @@ export function buildConcatProject(clips = [], { ar = '9:16', fps = 30 } = {}) {
     cursor += dur
     return clip
   })
-  return { clips: built, width, height, fps, durationSec: cursor, captions: [], capStyle: {}, audio: null }
+  return { video_clips, ar, fps, durationSec: cursor, text_clips: [], image_clips: [], audio_clips: [] }
 }

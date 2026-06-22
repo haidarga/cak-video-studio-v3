@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { toRefToVideoModel, getVideoMaxDuration, buildStoryboardGridPrompt, buildVidInput, gridDims } from './fal-client.js'
+import { toRefToVideoModel, toImageToVideoModel, getVideoMaxDuration, buildStoryboardGridPrompt, buildVidInput, gridDims } from './fal-client.js'
 
 describe('toRefToVideoModel', () => {
   it('maps each family to its OWN ref-to-video variant (respects user pick)', () => {
@@ -17,6 +17,18 @@ describe('toRefToVideoModel', () => {
   })
   it('falls back to seedance for unknown families', () => {
     expect(toRefToVideoModel('some/unknown/text-to-video')).toBe('bytedance/seedance-2.0/fast/reference-to-video')
+  })
+})
+
+describe('toImageToVideoModel (long-form hybrid handoff)', () => {
+  it('maps each family to its i2v variant', () => {
+    expect(toImageToVideoModel('bytedance/seedance-2.0/fast/reference-to-video')).toBe('bytedance/seedance-2.0/fast/image-to-video')
+    expect(toImageToVideoModel('fal-ai/kling-video/v2.5-turbo/pro/ref-to-video')).toBe('fal-ai/kling-video/v3/standard/image-to-video')
+    expect(toImageToVideoModel('xai/grok-imagine-video/reference-to-video')).toBe('xai/grok-imagine-video/image-to-video')
+    expect(toImageToVideoModel('fal-ai/veo3.1/fast/reference-to-video')).toBe('fal-ai/veo3.1/fast/image-to-video')
+  })
+  it('returns an already-i2v model unchanged', () => {
+    expect(toImageToVideoModel('bytedance/seedance-2.0/fast/image-to-video')).toBe('bytedance/seedance-2.0/fast/image-to-video')
   })
 })
 

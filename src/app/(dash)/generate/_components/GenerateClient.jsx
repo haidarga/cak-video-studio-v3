@@ -5,7 +5,7 @@ import {
   falRun, buildImgInput, buildVidInput,
   buildStoryboardGridPrompt,
   VIDEO_MODELS, IMAGE_MODELS,
-  getVideoMaxDuration, toRefToVideoModel,
+  getVideoMaxDuration, toRefToVideoModel, toImageToVideoModel,
 } from '@/lib/fal-client'
 import { imageCost, videoCost, fmtCost } from '@/lib/cost-table'
 // Generate-ONLY libs — live under generate/_lib so god-mode work can never
@@ -1422,10 +1422,11 @@ PRODUCT FIDELITY (critical): the product is a RIGID manufactured object — its 
     const fullNaskah = (state.naskah || '').trim()
     if (!fullNaskah) { onErr(`${persona.name}: naskah kosong`); return }
     const maxDur = getVideoMaxDuration(globalConfig.vidModel)
-    // Long-form has no per-segment still frame → ref-to-video. Switch to the
-    // chosen family's r2v variant (Seedance/Kling handle real-person refs; Veo
-    // is locked 8s + strict on faces — getVideoMaxDuration already caps it).
-    const vidModel = toRefToVideoModel(globalConfig.vidModel)
+    // HYBRID: pick the model PER SEGMENT (follows the naskah).
+    //   - start / cut  → r2v from refs (fresh, identity re-anchored to refs)
+    //   - continuous   → i2v from the PREVIOUS clip's last frame = seamless join
+    const r2vModel = toRefToVideoModel(globalConfig.vidModel)
+    const i2vModel = toImageToVideoModel(globalConfig.vidModel)
     onPatch({ busy: true, lfStatus: 'Nyusun rencana segmen dari naskah...' }); onErr('')
     try {
       // 1) PLAN — parser splits the FULL naskah into ≤maxDur segments w/ cut|continuous tags.
@@ -1464,14 +1465,17 @@ PRODUCT FIDELITY (critical): the product is a RIGID manufactured object — its 
       for (let i = 0; i < jobs.length; i++) {
         const job = jobs[i]
         onPatch({ lfStatus: `Segmen ${i + 1}/${jobs.length} (${job.transition})...` })
-        let segRefs = baseRefs
+        // Continuous segment → try i2v from the previous clip's last frame
+        // (seamless handoff). If extract fails, gracefully degrade to r2v.
+        let startImg = null
         if (job.useHandoff && prevVideoUrl) {
           try {
+            onPatch({ lfStatus: `Segmen ${i + 1}/${jobs.length}: ambil frame sambungan...` })
             const { extractLastFrame } = await import('@/lib/ffmpeg-extract')
             const blob = await extractLastFrame(prevVideoUrl, { offsetEnd: 0.05 })
             const up = await uploadBlob(blob, `lf-handoff-${persona.id}-${i}.jpg`, 'longform')
-            segRefs = [...baseRefs, up.url] // last frame rides at the END = strongest continuity hint
-          } catch { /* extract failed → refs-only soft continuity (seam may show) */ }
+            startImg = up.url
+          } catch { /* extract failed → fall through to r2v (seam may show) */ }
         }
         const action = job.dialog
           ? `${job.motion} The subject speaks in fluent native ${globalConfig.lang}: "${job.dialog}"`
@@ -1480,15 +1484,19 @@ PRODUCT FIDELITY (critical): the product is a RIGID manufactured object — its 
           camera: globalConfig.cameraPreset || DEFAULT_CAMERA,
           identity, environment: pj.parsed?.environment || null, action, brand,
           ar: globalConfig.ar, skipProduct: !!globalConfig.skipProduct, noText: !!globalConfig.skipOnscreen,
-          refsCount: segRefs.length, lang: globalConfig.lang, dialect: globalConfig.dialect || null,
+          refsCount: baseRefs.length, lang: globalConfig.lang, dialect: globalConfig.dialect || null,
           hasDialog: !globalConfig.skipDialog && !!job.dialog, audioOn: globalConfig.audio !== false,
           userPresets: userCameraPresets,
         })
         const seed = globalConfig.seedLock ? globalConfig.seed : randomSeed()
-        const vidInput = applySeed(vidModel, buildVidInput(vidModel, {
-          prompt: motion, reference_urls: segRefs, duration: job.duration, aspect_ratio: globalConfig.ar,
-        }), seed)
-        const res = await falRun(vidModel, vidInput, { onProgress: (p) => onPatch({ lfStatus: `Segmen ${i + 1}/${jobs.length}: ${p}` }), workspaceId, duration: job.duration })
+        // i2v ONLY when we actually have a start frame; otherwise r2v from refs.
+        const useI2V = !!startImg
+        const segModel = useI2V ? i2vModel : r2vModel
+        const segInput = useI2V
+          ? buildVidInput(segModel, { prompt: motion, image_url: startImg, reference_urls: baseRefs, duration: job.duration, aspect_ratio: globalConfig.ar })
+          : buildVidInput(segModel, { prompt: motion, reference_urls: baseRefs, duration: job.duration, aspect_ratio: globalConfig.ar })
+        const vidInput = applySeed(segModel, segInput, seed)
+        const res = await falRun(segModel, vidInput, { onProgress: (p) => onPatch({ lfStatus: `Segmen ${i + 1}/${jobs.length} (${useI2V ? 'i2v sambung' : 'r2v'}): ${p}` }), workspaceId, duration: job.duration })
         const url = res.video?.url || res.video
         if (!url) throw new Error(`segmen ${i + 1} gak balikin video`)
         prevVideoUrl = url
@@ -1496,7 +1504,7 @@ PRODUCT FIDELITY (critical): the product is a RIGID manufactured object — its 
         await supabase.from('results').insert({
           workspace_id: workspaceId, persona_id: persona.id, type: 'video', url, ar: globalConfig.ar,
           label: `${persona.name} — Long-form seg ${i + 1}/${jobs.length}`, group_label: persona.name,
-          meta: { source: 'longform', segment: i + 1, of: jobs.length, transition: job.transition },
+          meta: { source: 'longform', segment: i + 1, of: jobs.length, transition: job.transition, mode: useI2V ? 'i2v-handoff' : 'r2v', model: segModel },
         })
       }
 
