@@ -979,9 +979,14 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       const defaultMotion = globalConfig.continuousShot
         ? `${userMotion} Single continuous take, no cuts.`
         : userMotion
-      const action = dialogs
-        ? `${defaultMotion} The subject speaks in fluent native ${globalConfig.lang}: "${dialogs}"`
-        : defaultMotion
+      // Storyboard branch builds its OWN dialog line (from `dialog`), so pass
+      // motion ONLY there — bundling dialog into `action` would double it AND
+      // bury the cut/transition direction. Non-storyboard keeps the bundle.
+      const action = isGrid
+        ? defaultMotion
+        : (dialogs
+          ? `${defaultMotion} The subject speaks in fluent native ${globalConfig.lang}: "${dialogs}"`
+          : defaultMotion)
       const identity = persona.character_prompt
         ? `${persona.name} (${persona.character_prompt.slice(0, 200)})`
         : null
@@ -1118,7 +1123,9 @@ ${motion}`
 - Images 2 onwards = subject/character/style references to render.${cont}
 
 INSTRUCTIONS:
-- Animate the SUBJECTS (not the grid) performing the actions shown in each panel of Image 1, panel-by-panel, smoothly transitioning scene-to-scene as one continuous take.
+- Animate the SUBJECTS (not the grid) performing the actions shown in each panel of Image 1, panel-by-panel.${globalConfig.continuousShot
+  ? ' Play them as ONE continuous take, smoothly transitioning scene-to-scene with no hard cuts.'
+  : ' Render EACH panel as its OWN distinct shot with a HARD CUT between panels (montage / fast-cut edit) — match each panel\'s framing (close-up / medium / wide). Do NOT merge them into one slow continuous shot.'}
 - ABSOLUTELY DO NOT show grid lines, panel borders, panel numbers, or grid layout in the output video. The output is a normal full-frame video of the subjects.
 - Maintain the SAME character identity, outfit, and art style from the reference images across the entire video. No mid-video morphing.
 

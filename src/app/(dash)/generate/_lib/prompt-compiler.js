@@ -337,6 +337,7 @@ export function compileVideoPrompt(spec) {
     audioOn = true,
     storyboard = false, // grid ref-to-video: grid owns composition → minimal text
     dialog = null,      // raw dialog words (storyboard mode builds its own speech line)
+    continuousShot = false, // ON = one unbroken take; OFF (default) = montage / cut between panels
     userPresets = [],
   } = spec
 
@@ -364,18 +365,21 @@ export function compileVideoPrompt(spec) {
       sb.push(`${sbCam.tokens.join(', ')}.`)
     }
     if (identity) sb.push(`Subject: ${identity}.`)
-    // Camera intent — keep the ONE camera signal worth preserving (the user's
-    // static/minimal vs movement intent), but NEVER the grunge handheld block
-    // that makes the model drift. Without this the model defaults to its own
-    // drift/push-in and ignores a "static" naskah. Subject always gets natural
-    // secondary motion so the talking head doesn't look frozen/robotic.
-    const wantsStatic = /\b(static|locked|tripod|minimal camera|no camera movement|tanpa gerak|kamera diam|still camera)\b/i.test(String(action || ''))
-    const camDir = wantsStatic
-      ? 'Camera stays LOCKED and mostly still — no panning, no push-in, no zoom, no big camera moves; only the subject moves.'
-      : (sbCam?.category === 'cinema'
-        ? 'Smooth, controlled camera with gentle moves only.'
-        : 'Gentle handheld feel with only micro camera movement; movement comes mostly from the subject, not big camera moves.')
-    sb.push(`${camDir} The subject has natural secondary motion — breathing, occasional blinks, hair and shoulder micro-movement, easing in and out of every move, nothing robotic.`)
+    // The user's video_motion — THIS carries the cut/transition + camera intent
+    // ("quick cuts", "handheld", "static pan"). Keep it VERBATIM. (Earlier this
+    // was dropped + replaced with a forced "micro movement / one take" line,
+    // which flattened storyboards into a single slow shot and killed montage.)
+    if (action) sb.push(String(action).trim())
+    // Cut behavior: storyboard panels are SEPARATE beats. Default = MONTAGE
+    // (hard cut between panels). The "No cuts" toggle (continuousShot) = one
+    // unbroken take. This is what makes cut-to-cut / montage actually happen.
+    if (continuousShot) {
+      sb.push('Play all panels as ONE continuous unbroken take — smooth transitions, no hard cuts.')
+    } else {
+      sb.push('Treat EACH storyboard panel as its OWN distinct shot: HARD CUT between panels (montage / fast-cut edit), matching each panel\'s framing (close-up / medium / wide). Do NOT blend the panels into one slow continuous shot.')
+    }
+    // Light realism so the subject isn't frozen — does NOT fight cuts.
+    sb.push('Natural secondary motion — breathing, occasional blinks, hair and shoulder micro-movement; nothing robotic.')
     if (hasDialog && audioOn !== false && dialog) {
       sb.push(`The subject says, in ${lang}: "${String(dialog).trim()}"`)
       const vl = buildVoiceDirection({ lang, dialect, hasDialog, audioOn })
