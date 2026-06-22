@@ -28,9 +28,9 @@ export function nextImageModel(current, tried = []) {
 // Video: Veo refuses real people. Fall back to real-person-friendly families
 // (Seedance/Kling), preserving the variant (ref-to-video / image / text).
 const VIDEO_FALLBACK = {
-  r2v: ['bytedance/seedance-2.0/fast/reference-to-video', 'fal-ai/kling-video/v2.5-turbo/pro/ref-to-video'],
-  i2v: ['bytedance/seedance-2.0/fast/image-to-video', 'fal-ai/kling-video/v3/standard/image-to-video'],
-  t2v: ['bytedance/seedance-2.0/text-to-video', 'fal-ai/kling-video/v3/standard/text-to-video'],
+  r2v: ['bytedance/seedance-2.0/fast/reference-to-video', 'fal-ai/kling-video/v2.5-turbo/pro/ref-to-video', 'xai/grok-imagine-video/reference-to-video'],
+  i2v: ['bytedance/seedance-2.0/fast/image-to-video', 'fal-ai/kling-video/v3/standard/image-to-video', 'xai/grok-imagine-video/image-to-video'],
+  t2v: ['bytedance/seedance-2.0/text-to-video', 'fal-ai/kling-video/v3/standard/text-to-video', 'xai/grok-imagine-video/text-to-video'],
 }
 export function videoVariant(model) {
   const m = String(model || '')

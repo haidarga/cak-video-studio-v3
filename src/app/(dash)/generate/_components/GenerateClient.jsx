@@ -14,6 +14,7 @@ import { imageCost, videoCost, fmtCost } from '@/lib/cost-table'
 import { STYLE_PRESETS } from '../_lib/style-presets'
 import { compileImagePrompt, compileVideoPrompt } from '../_lib/prompt-compiler'
 import { planToJobs, buildConcatProject } from '@/lib/long-form'
+import { isContentRefusal, nextVideoModel } from '@/lib/model-fallback'
 import { cleanProductBg } from '@/lib/bg-removal'
 import { CAMERA_PRESETS, listAllPresets, DEFAULT_CAMERA, getCameraPreset } from '@/lib/camera-presets'
 
@@ -1491,20 +1492,40 @@ PRODUCT FIDELITY (critical): the product is a RIGID manufactured object — its 
         const seed = globalConfig.seedLock ? globalConfig.seed : randomSeed()
         // i2v ONLY when we actually have a start frame; otherwise r2v from refs.
         const useI2V = !!startImg
-        const segModel = useI2V ? i2vModel : r2vModel
-        const segInput = useI2V
-          ? buildVidInput(segModel, { prompt: motion, image_url: startImg, reference_urls: baseRefs, duration: job.duration, aspect_ratio: globalConfig.ar })
-          : buildVidInput(segModel, { prompt: motion, reference_urls: baseRefs, duration: job.duration, aspect_ratio: globalConfig.ar })
-        const vidInput = applySeed(segModel, segInput, seed)
-        const res = await falRun(segModel, vidInput, { onProgress: (p) => onPatch({ lfStatus: `Segmen ${i + 1}/${jobs.length} (${useI2V ? 'i2v sambung' : 'r2v'}): ${p}` }), workspaceId, duration: job.duration })
-        const url = res.video?.url || res.video
-        if (!url) throw new Error(`segmen ${i + 1} gak balikin video`)
+        const firstModel = useI2V ? i2vModel : r2vModel
+        // AUTO-FALLBACK: if THIS segment's model REFUSES the content (e.g. Veo
+        // rejects a b-roll with real people), retry the SAME segment with the
+        // next real-person-friendly model of the same variant (Seedance → Kling
+        // → Grok). Real errors are NOT retried. Other segments are untouched.
+        const candidates = []
+        { let mdl = firstModel; const seen = []; while (mdl && candidates.length < 4) { candidates.push(mdl); seen.push(mdl); mdl = nextVideoModel(mdl, seen) } }
+        const buildInput = (mdl) => useI2V
+          ? buildVidInput(mdl, { prompt: motion, image_url: startImg, reference_urls: baseRefs, duration: job.duration, aspect_ratio: globalConfig.ar })
+          : buildVidInput(mdl, { prompt: motion, reference_urls: baseRefs, duration: job.duration, aspect_ratio: globalConfig.ar })
+        let url = null, usedModel = null, lastErr = null
+        for (const cand of candidates) {
+          const tag = cand.includes('seedance') ? 'Seedance' : cand.includes('kling') ? 'Kling' : cand.includes('grok') ? 'Grok' : cand.includes('veo') ? 'Veo' : cand.includes('happy-horse') ? 'HappyHorse' : cand.split('/').pop()
+          try {
+            const vidInput = applySeed(cand, buildInput(cand), seed)
+            const res = await falRun(cand, vidInput, { onProgress: (p) => onPatch({ lfStatus: `Segmen ${i + 1}/${jobs.length} [${tag}${useI2V ? ' sambung' : ''}]: ${p}` }), workspaceId, duration: job.duration })
+            url = res.video?.url || res.video
+            if (!url) throw new Error('no_media_generated: model gak balikin video URL')
+            usedModel = cand
+            break
+          } catch (e) {
+            lastErr = e
+            if (!isContentRefusal(e)) throw e // real error → stop the whole run
+            onPatch({ lfStatus: `Segmen ${i + 1}: ${tag} nolak konten → coba model lain...` })
+            // refusal → loop continues to the next fallback model
+          }
+        }
+        if (!url) throw new Error(`segmen ${i + 1} ditolak SEMUA model (${candidates.length} dicoba): ${String(lastErr?.message || lastErr).slice(0, 120)}`)
         prevVideoUrl = url
         clips.push({ url, duration: job.duration })
         await supabase.from('results').insert({
           workspace_id: workspaceId, persona_id: persona.id, type: 'video', url, ar: globalConfig.ar,
           label: `${persona.name} — Long-form seg ${i + 1}/${jobs.length}`, group_label: persona.name,
-          meta: { source: 'longform', segment: i + 1, of: jobs.length, transition: job.transition, mode: useI2V ? 'i2v-handoff' : 'r2v', model: segModel },
+          meta: { source: 'longform', segment: i + 1, of: jobs.length, transition: job.transition, mode: useI2V ? 'i2v-handoff' : 'r2v', model: usedModel },
         })
       }
 
