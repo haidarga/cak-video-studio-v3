@@ -311,6 +311,13 @@ export function buildImgInput(imgModel, { prompt, refUrls = [], ar = '9:16' }) {
 const HH_STABILITY = ' Keep ONE consistent visual style and identical subject appearance — same face, proportions, outfit and color palette across every frame. Smooth, coherent, physically stable motion. NO morphing, NO warping, NO melting, NO style drift, NO shape-shifting, NO flicker, NO identity change.'
 
 // ── Video input builder, ported from v2's src/lib/api.js ──
+// Veo 3.1 anti-morph. Lip/mouth/teeth morphing while the subject speaks is
+// Veo's main artifact. i2v exposes a `negative_prompt` field; r2v does NOT
+// (verified against fal's OpenAPI — sending it 422s), so for r2v the same
+// intent is appended to the POSITIVE prompt instead.
+export const VEO_NEGATIVE_PROMPT = 'morphing face, warping lips, distorted mouth, deformed teeth, melting facial features, smeared mouth, jittering lips, rubbery mouth, malformed teeth, extra teeth, lip-sync artifacts, flickering face, unstable facial features, face distortion, identity change, character drift, warping, melting, blurry mouth'
+export const VEO_FACE_STABILITY = ' Keep the face and especially the MOUTH, LIPS and TEETH stable, natural and consistent while speaking — no morphing, warping, smearing, melting or flickering of the lips, teeth or facial features in any frame.'
+
 // Veo 3.1 takes `duration` as a STRING with an `s` suffix and only accepts
 // 4s/6s/8s for image-to-video; reference-to-video is locked to 8s. Coerce a
 // numeric duration to the nearest allowed bucket.
@@ -413,7 +420,8 @@ export function buildVidInput(vidModel, { prompt, image_url, reference_urls, dur
     const veoAR = ['16:9', '9:16'].includes(aspect_ratio) ? aspect_ratio : (isRef ? '9:16' : 'auto')
     if (isRef) {
       return {
-        prompt,
+        // r2v has no negative_prompt field — bake anti-morph into the positive.
+        prompt: prompt + VEO_FACE_STABILITY,
         image_urls: (reference_urls || []).filter(Boolean).slice(0, 3),
         duration: '8s',
         resolution: '720p',
@@ -425,6 +433,7 @@ export function buildVidInput(vidModel, { prompt, image_url, reference_urls, dur
     return {
       prompt,
       image_url,
+      negative_prompt: VEO_NEGATIVE_PROMPT,
       duration: veoDuration(duration, false),
       resolution: '720p',
       aspect_ratio: veoAR,

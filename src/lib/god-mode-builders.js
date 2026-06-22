@@ -27,6 +27,12 @@ const LTX_NEGATIVE_PROMPT = 'color distortion, overexposure, static, blurry deta
 // video model).
 const WAN_NEGATIVE_PROMPT = 'low resolution, errors, worst quality, low quality, incomplete, extra fingers, bad proportions, blurry, distorted, morphing, warping, melting, face distortion, identity change, character drift, flickering, jitter, duplicated limbs, deformed, malformed limbs'
 
+// Veo 3.1 anti-morph. Lip/mouth/teeth morphing while speaking is Veo's main
+// artifact. i2v exposes negative_prompt; r2v does NOT (sending it 422s), so
+// r2v gets the same intent via the POSITIVE prompt.
+const VEO_NEGATIVE_PROMPT = 'morphing face, warping lips, distorted mouth, deformed teeth, melting facial features, smeared mouth, jittering lips, rubbery mouth, malformed teeth, extra teeth, lip-sync artifacts, flickering face, unstable facial features, face distortion, identity change, character drift, warping, melting, blurry mouth'
+const VEO_FACE_STABILITY = ' Keep the face and especially the MOUTH, LIPS and TEETH stable, natural and consistent while speaking — no morphing, warping, smearing, melting or flickering of the lips, teeth or facial features in any frame.'
+
 // ── Product fidelity directive ───────────────────────────────────────
 // Injects the active product's textual knowledge (description, dimensions,
 // features, label text, etc) into a prompt as a STRONG fidelity directive.
@@ -173,13 +179,14 @@ export function buildVideoInputForModel(model, { motion_prompt, image_url, image
     // permissive (user-requested MAX). i2v=image_url, r2v=image_urls (max 3
     // refs). r2v AR limited to 16:9/9:16. generate_audio for native dialog.
     const veoAR = ['16:9', '9:16'].includes(ar) ? ar : (isR2V ? '9:16' : 'auto')
-    const base = { prompt: motion_prompt, resolution: resolution || '720p', aspect_ratio: veoAR, generate_audio: true, safety_tolerance: '6' }
+    const base = { resolution: resolution || '720p', aspect_ratio: veoAR, generate_audio: true, safety_tolerance: '6' }
     if (isR2V) {
-      return { ...base, image_urls: refsArr.slice(0, 3), duration: '8s' }
+      // r2v has no negative_prompt field — bake anti-morph into the positive.
+      return { ...base, prompt: motion_prompt + VEO_FACE_STABILITY, image_urls: refsArr.slice(0, 3), duration: '8s' }
     }
     const n = parseInt(dur) || 8
     const veoDur = n >= 7 ? '8s' : n >= 5 ? '6s' : '4s'
-    return { ...base, ...(image_url || refsArr[0] ? { image_url: image_url || refsArr[0] } : {}), duration: veoDur }
+    return { ...base, prompt: motion_prompt, negative_prompt: VEO_NEGATIVE_PROMPT, ...(image_url || refsArr[0] ? { image_url: image_url || refsArr[0] } : {}), duration: veoDur }
   }
 
   // LTX-2.3 (fal-ai/ltx-2.3-quality/*) — high-quality video WITH native audio.

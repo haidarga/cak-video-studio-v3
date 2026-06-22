@@ -60,6 +60,16 @@ describe('buildVidInput — Veo 3.1 Fast', () => {
     expect(out.safety_tolerance).toBe('6')
     expect(out.image_url).toBeUndefined()
   })
+  it('i2v: adds anti-morph negative_prompt (lip/mouth artifacts)', () => {
+    const out = buildVidInput('fal-ai/veo3.1/fast/image-to-video', base)
+    expect(out.negative_prompt).toMatch(/lips|mouth/i)
+    expect(out.negative_prompt).toMatch(/morphing/i)
+  })
+  it('r2v: NO negative_prompt field (unsupported → 422); anti-morph rides in the positive prompt', () => {
+    const out = buildVidInput('fal-ai/veo3.1/fast/reference-to-video', base)
+    expect('negative_prompt' in out).toBe(false)
+    expect(out.prompt).toMatch(/MOUTH, LIPS and TEETH stable/i)
+  })
   it('r2v: unsupported AR (1:1) falls back to 9:16 (no auto for r2v)', () => {
     const out = buildVidInput('fal-ai/veo3.1/fast/reference-to-video', { ...base, aspect_ratio: '1:1' })
     expect(out.aspect_ratio).toBe('9:16')

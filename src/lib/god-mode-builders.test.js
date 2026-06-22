@@ -54,6 +54,13 @@ describe('buildVideoInputForModel — per-model field-name routing (the 422 trap
     expect(out.duration).toBe('8s')
     expect(out.safety_tolerance).toBe('6')
   })
+  it('veo3 i2v adds anti-morph negative_prompt; r2v has none but bakes it into the prompt', () => {
+    const i2v = buildVideoInputForModel('fal-ai/veo3.1/fast/image-to-video', P)
+    expect(i2v.negative_prompt).toMatch(/lips|mouth/i)
+    const r2v = buildVideoInputForModel('fal-ai/veo3.1/fast/reference-to-video', { ...P, image_url: undefined })
+    expect('negative_prompt' in r2v).toBe(false)
+    expect(r2v.prompt).toMatch(/MOUTH, LIPS and TEETH stable/i)
+  })
 })
 
 describe('buildVideoInputForModel — LTX-2.3 quality recipe', () => {
