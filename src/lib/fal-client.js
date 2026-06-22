@@ -445,8 +445,18 @@ export function buildVidInput(vidModel, { prompt, image_url, reference_urls, dur
 // woven 1-line cells where camera intent + action are joined naturally.
 //
 // constraints = { skipDialog, skipOnscreen, skipProduct }
+// gridDims — pick a CLEAN rectangle for N panels so the composite never has
+// awkward empty cells. 1-4 → 2 cols, 5+ → 3 cols. 4→2x2, 6→2x3, 9→3x3.
+export function gridDims(n) {
+  const count = Math.max(1, Math.min(9, n | 0))
+  const cols = count <= 4 ? 2 : 3
+  const rows = Math.ceil(count / cols)
+  return { count, rows, cols }
+}
+
 export function buildStoryboardGridPrompt(panels = [], ar = '9:16', concept = '', constraints = {}, candid = false) {
   const nine = panels.slice(0, 9)
+  const { count, rows, cols } = gridDims(nine.length)
   let t = 0
   const cells = nine.map((p) => {
     const dur = Math.max(1, parseInt(p.seconds) || 2)
@@ -469,13 +479,13 @@ export function buildStoryboardGridPrompt(panels = [], ar = '9:16', concept = ''
   // ad-agency presentation board with text labels. ChatGPT-image output was
   // just 9 raw photos in 3x3 with small corner numbers, no text below — that's
   // what users actually want.
-  const header = `Single composite image, ${ar} canvas, 3x3 grid layout (3 rows × 3 columns) of 9 sequential photographic stills. Tiny scene number (1-9) in top-left corner of each cell. NO text labels, NO captions, NO time stamps under the photos — clean raw photos only.`
+  const header = `Single composite image, ${ar} canvas, ${rows}x${cols} grid layout (${rows} rows × ${cols} columns) of ${count} sequential photographic stills. Tiny scene number (1-${count}) in top-left corner of each cell. NO text labels, NO captions, NO time stamps under the photos — clean raw photos only.`
   // Cross-panel consistency directive — the #1 storyboard failure mode is the
   // character morphing across the 9 panels (Tandy with different face/body
   // proportions in panel 1 vs panel 5). Diffusion models render each cell as
   // a semi-independent image unless told otherwise. This sentence forces the
   // model to treat the character as a locked entity across all 9 cells.
-  const consistency = `CRITICAL CONSISTENCY: every character must look IDENTICAL across all 9 panels — same face shape, same proportions, same outfit, same color palette, same art style. This is one continuous scene shown in 9 keyframes, NOT 9 different versions of the character.`
+  const consistency = `CRITICAL CONSISTENCY: every character must look IDENTICAL across all ${count} panels — same face shape, same proportions, same outfit, same color palette, same art style. This is one continuous scene shown in ${count} keyframes, NOT ${count} different versions of the character.`
   // Anti "storyboard production mode" — the 3x3 grid format nudges the model to
   // render deliberately-composed keyframes (posed, balanced). For phone/UGC
   // presets that reads fake. This forces genuinely candid, unstaged moments.

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { toRefToVideoModel, getVideoMaxDuration, buildStoryboardGridPrompt, buildVidInput } from './fal-client.js'
+import { toRefToVideoModel, getVideoMaxDuration, buildStoryboardGridPrompt, buildVidInput, gridDims } from './fal-client.js'
 
 describe('toRefToVideoModel', () => {
   it('maps each family to its OWN ref-to-video variant (respects user pick)', () => {
@@ -84,5 +84,32 @@ describe('buildStoryboardGridPrompt', () => {
     const out = buildStoryboardGridPrompt(panels, '9:16', '', { skipDialog: true, skipOnscreen: true })
     expect(out).not.toMatch(/\(overheard:/)
     expect(out).not.toMatch(/\[caption:/)
+  })
+})
+
+describe('gridDims — clean rectangle for N panels (no forced 3x3)', () => {
+  it('maps panel count to a clean grid', () => {
+    expect(gridDims(4)).toEqual({ count: 4, rows: 2, cols: 2 })
+    expect(gridDims(6)).toEqual({ count: 6, rows: 2, cols: 3 })
+    expect(gridDims(9)).toEqual({ count: 9, rows: 3, cols: 3 })
+  })
+  it('clamps to 1..9', () => {
+    expect(gridDims(0).count).toBe(1)
+    expect(gridDims(99).count).toBe(9)
+  })
+})
+
+describe('buildStoryboardGridPrompt — dynamic layout (not always 3x3/9)', () => {
+  const mk = (n) => Array.from({ length: n }, (_, i) => ({ n: i + 1, shot_type: 'Medium Shot', visual: `beat ${i + 1}` }))
+  it('describes a 2x2 grid of 4 stills when given 4 panels', () => {
+    const out = buildStoryboardGridPrompt(mk(4), '9:16', '', {})
+    expect(out).toMatch(/2x2 grid layout \(2 rows × 2 columns\) of 4 sequential/)
+    expect(out).toMatch(/across all 4 panels/)
+  })
+  it('describes a 2x3 grid of 6 stills when given 6 panels', () => {
+    expect(buildStoryboardGridPrompt(mk(6), '9:16', '', {})).toMatch(/2x3 grid layout \(2 rows × 3 columns\) of 6 sequential/)
+  })
+  it('still describes 3x3/9 when given 9 panels', () => {
+    expect(buildStoryboardGridPrompt(mk(9), '9:16', '', {})).toMatch(/3x3 grid layout \(3 rows × 3 columns\) of 9 sequential/)
   })
 })

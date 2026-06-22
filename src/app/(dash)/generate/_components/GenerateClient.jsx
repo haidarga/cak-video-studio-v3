@@ -678,7 +678,13 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       // + single 15s video). Per-shot mode = N separate shots.
       let shotsInit
       if (globalConfig.mode === 'storyboard') {
-        const panels = data.parsed.panels || []
+        const rawPanels = data.parsed.panels || []
+        // Parser now picks the panel count (4/6/9) from duration + dialog/action
+        // balance instead of always forcing 9. Defensive snap: if it returns an
+        // off-grid count (5/7/8), trim DOWN to the nearest clean grid so the
+        // composite never has blank cells. 4→2x2, 6→2x3, 9→3x3.
+        const cleanCount = rawPanels.length >= 9 ? 9 : rawPanels.length >= 6 ? 6 : rawPanels.length >= 4 ? 4 : rawPanels.length
+        const panels = rawPanels.slice(0, cleanCount)
         shotsInit = [{
           id: `${persona.id}-storyboard-${Date.now()}`,
           raw: {
@@ -1087,6 +1093,11 @@ BRIEF:
 ${motion}`
       }
       if (isGrid && isRefVid && shot.image?.url) {
+        // Grid is no longer always 3x3 — panel count is parser-driven (4/6/9).
+        // Describe the ACTUAL layout so the model reads the right number of beats.
+        const gN = shot.raw.panels?.length || 9
+        const gCols = gN <= 4 ? 2 : 3
+        const gRows = Math.ceil(gN / gCols)
         let cont = ''
         // Branch on continuity_fallback flag (set by continueStoryboard when
         // the last-frame extract failed and we fell back to the prev shot's
@@ -1101,12 +1112,12 @@ ${motion}`
           cont = `\n- The SECOND-TO-LAST reference image is the previous segment's storyboard grid — match its art style and character look exactly. The LAST reference image is the final frame of the previous segment — START the new sequence from that pose/setting. The first second of output should look like a natural continuation of that frame.`
         }
         finalMotion = `IMAGE ROLES:
-- Image 1 = a 3x3 storyboard GRID showing 9 sequential keyframes (panels) read left-to-right, top-to-bottom. It is a SEQUENCE MAP, NOT a frame to animate.
+- Image 1 = a ${gRows}x${gCols} storyboard GRID showing ${gN} sequential keyframes (panels) read left-to-right, top-to-bottom. It is a SEQUENCE MAP, NOT a frame to animate.
 - Images 2 onwards = subject/character/style references to render.${cont}
 
 INSTRUCTIONS:
 - Animate the SUBJECTS (not the grid) performing the actions shown in each panel of Image 1, panel-by-panel, smoothly transitioning scene-to-scene as one continuous take.
-- ABSOLUTELY DO NOT show grid lines, panel borders, panel numbers, or 3x3 layout in the output video. The output is a normal full-frame video of the subjects.
+- ABSOLUTELY DO NOT show grid lines, panel borders, panel numbers, or grid layout in the output video. The output is a normal full-frame video of the subjects.
 - Maintain the SAME character identity, outfit, and art style from the reference images across the entire video. No mid-video morphing.
 
 STYLE & DIALOG:

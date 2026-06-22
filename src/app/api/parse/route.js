@@ -67,7 +67,7 @@ export async function POST(req) {
   "characters": ["Name1"],
   "panels": [
     {"n":1,"title":"HOOK","visual":"English ACTION + camera angle only — do NOT describe faces or outfit (those are locked)","dialog":"${constraints.skipDialog ? '' : `line in ${lang}`}","onscreen":"${constraints.skipOnscreen ? '' : `short ${lang} caption`}","shot_type":"${shotTypes}","seconds":2,"chars_in_shot":["Name1"]}
-    // 9 panels total. Each panel.visual is just the action + framing — no aesthetic words, no lighting words (env handles that), no face/outfit details.
+    // 4, 6, or 9 panels — pick what the script actually needs (see TASK); never pad with filler b-roll just to reach a 3x3. Each panel.visual is just the action + framing — no aesthetic words, no lighting words (env handles that), no face/outfit details.
   ]
 }`
     : isDirect
@@ -125,7 +125,7 @@ ${continuationBlock}
 
 TASK: Convert this script into ${
     isStory
-      ? 'ONE 3x3 storyboard (9 panels, ~15s total)'
+      ? `ONE storyboard — CHOOSE the panel count: 4, 6, or 9 (clean grids 2x2 / 2x3 / 3x3). Pick whatever the script ACTUALLY needs at ~2-3s per beat; do NOT pad with filler b-roll just to fill a 3x3. Dialog-heavy testimonial → fewer, longer talking-head holds (4-6 panels). Action / montage / multi-location → more (6-9). Set each panel.seconds to its real length; total ~8-15s.`
       : isDirect
         ? (shotCount
             ? `EXACTLY ${shotCount} DIRECT VIDEO shot${shotCount > 1 ? 's' : ''} (each 5-10s). Each shot is generated DIRECTLY from text + reference photos — no intermediate still frame.
