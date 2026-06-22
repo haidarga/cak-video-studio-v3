@@ -2147,6 +2147,7 @@ SMART MODEL ROUTER (pick the BEST video model for the task — mention pilihan +
   - Bare URL no clear instruction → scrape_url_for_marketing (preview).
   - Detect model overrides in prompt: "pake Kling 3" -> 'fal-ai/kling-video/v3/image-to-video', "Kling Pro" -> '/v3/pro/image-to-video', "Seedance" -> 'bytedance/seedance-2.0/fast/image-to-video', "Veo" -> 'fal-ai/veo3', "Grok" -> 'xai/grok-imagine-video/image-to-video', "Grok 1.5" -> 'xai/grok-imagine-video/v1.5/image-to-video', "GPT Image 2 Edit" -> 'openai/gpt-image-2/edit', "Nano Banana" -> 'fal-ai/nano-banana/edit'. Text-only + family name: "Grok" -> '.../text-to-video', "Kling" -> 'fal-ai/kling-video/v3/standard/text-to-video', "Happy Horse" -> 'alibaba/happy-horse/text-to-video', "Seedance" -> 'bytedance/seedance-2.0/text-to-video'.
 - If user uploads/attaches a video and says "analyze" or "make like this", call analyze_reference_video.
+- USE THE ANALYSIS WHEN GENERATING (critical): if the conversation already contains a video analysis / brand / campaign result (shown as "[HASIL ...— INI FORMULANYA...]"), and the user then asks to generate/duplicate/replicate ("bikin videonya", "duplikat", "generate kayak gitu"), you MUST build the gen_image/gen_video prompt FROM that formula — its hook, scene/shot structure, pacing, camera style, wardrobe, setting and dialogue beats. Do NOT generate a generic prompt that ignores the analysis. The whole point of analyzing was to reuse the formula.
 - If user uploads/attaches image/video and asks to score / predict virality, call predict_virality.
 
 - CONTINUE / NEXT SHOT: ANY signal that user wants the next shot in a sequence — "lanjutin", "next", "shot 2", "shot berikutnya", "continue dong", "bikin lagi tapi scene X", "dia sekarang lagi Y" (referring to recently-shown character) — MUST call continue_shot. continue_shot auto-references the most recent gen result from the conversation (works for gen_image, gen_video, gen_marketing_video_from_url, multi-queued, etc). Pass "next_action" if user specified what changes. NEVER reply "bikin shot baru aja" — that loses continuity.
@@ -2298,6 +2299,17 @@ export async function POST(req) {
   for (const m of messages.slice(-12)) {
     const parts = []
     if (m.content) parts.push({ text: String(m.content) })
+    // Re-inject STRATEGY/FORMULA tool results (video analysis, brand/campaign
+    // plans) into the model context. These live only on m.result, which the
+    // contents builder used to drop entirely — so a later "generate" turn never
+    // saw the analysis it had just produced and fell back to a generic prompt.
+    // (User report: "abis dianalisis, pas generate gak narik data analisis.")
+    // Generation/list/preset/error results are NOT re-injected (waste context).
+    const r = m.result
+    if (r && typeof r.type === 'string' && /analysis|builder|campaign|blueprint|strategy|bootstrap|formula/i.test(r.type)) {
+      const { type, ...payload } = r
+      parts.push({ text: `[HASIL ${type} dari turn sebelumnya — INI FORMULANYA, WAJIB jadi dasar saat generate/lanjut konten]:\n${JSON.stringify(payload).slice(0, 5000)}` })
+    }
     const atts = Array.isArray(m.attachments) ? m.attachments.slice(0, 5) : []
     let imgCount = 0
     for (const a of atts) {
