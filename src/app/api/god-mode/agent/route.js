@@ -2147,6 +2147,7 @@ SMART MODEL ROUTER (pick the BEST video model for the task — mention pilihan +
   - Bare URL no clear instruction → scrape_url_for_marketing (preview).
   - Detect model overrides in prompt: "pake Kling 3" -> 'fal-ai/kling-video/v3/image-to-video', "Kling Pro" -> '/v3/pro/image-to-video', "Seedance" -> 'bytedance/seedance-2.0/fast/image-to-video', "Veo" -> 'fal-ai/veo3', "Grok" -> 'xai/grok-imagine-video/image-to-video', "Grok 1.5" -> 'xai/grok-imagine-video/v1.5/image-to-video', "GPT Image 2 Edit" -> 'openai/gpt-image-2/edit', "Nano Banana" -> 'fal-ai/nano-banana/edit'. Text-only + family name: "Grok" -> '.../text-to-video', "Kling" -> 'fal-ai/kling-video/v3/standard/text-to-video', "Happy Horse" -> 'alibaba/happy-horse/text-to-video', "Seedance" -> 'bytedance/seedance-2.0/text-to-video'.
 - If user uploads/attaches a video and says "analyze" or "make like this", call analyze_reference_video.
+- DON'T RE-ANALYZE: if the conversation ALREADY contains a "[HASIL video_analysis ...]" for the uploaded/linked video, do NOT call analyze_reference_video again — you already have the formula. Go straight to generating from it (gen_video / gen_image) per the user's new instruction (e.g. "tapi lokasinya Hong Kong, pake persona Emma" = same formula, swap location + character). Re-analyzing wastes a call and can fail if the attachment scrolled out of view.
 - USE THE ANALYSIS WHEN GENERATING (critical): if the conversation already contains a video analysis / brand / campaign result (shown as "[HASIL ...— INI FORMULANYA...]"), and the user then asks to generate/duplicate/replicate ("bikin videonya", "duplikat", "generate kayak gitu"), you MUST build the gen_image/gen_video prompt FROM that formula — its hook, scene/shot structure, pacing, camera style, wardrobe, setting and dialogue beats. Do NOT generate a generic prompt that ignores the analysis. The whole point of analyzing was to reuse the formula.
 - REPLICATING A MONTAGE / FAST-CUT VLOG (important — manage expectations honestly): if the formula describes a MULTI-SHOT MONTAGE (many short 1-2s cuts, varied close-up/medium/wide, music, text overlay), understand ONE gen_video = ONE continuous clip — it can NOT become a hard-cut edited montage. So do the BEST single-clip version: (a) write motion_prompt as a TIMESTAMPED MULTI-SHOT BEAT TIMELINE that packs the formula's shots into one take — e.g. "[0-2s] POV close-up of coffee cup on cafe table, handheld. [2-4s] medium shot: woman with braided hair + glasses sips, looks around. [4-6s] wide shot of the cafe interior. [6-8s] close-up of pastry, hand reaching in." ; (b) set duration to the MAX the model allows (10-15s) so more beats fit; (c) prefer a MULTI-SHOT capable model — Seedance ('bytedance/seedance-2.0/text-to-video' or i2v) or Kling 3 ('fal-ai/kling-video/v3/standard/text-to-video'), NOT Veo; (d) carry the formula's character notes (hair, glasses, wardrobe) + mood into the prompt. In your TEXT reply, be honest: "ini versi 1-klip multi-shot; buat montase potongan cepat 1-2 detik beneran kayak referensi, butuh gen beberapa klip lalu di-stitch di Editor — bilang kalo mau gua pecah jadi shot list."
 - If user uploads/attaches image/video and asks to score / predict virality, call predict_virality.
@@ -2193,10 +2194,21 @@ export async function POST(req) {
     .maybeSingle()
   if (!membership) return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 403 })
 
-  // Most-recent user message attachments — used by tools that operate on
+  // Attachments from the recent conversation — used by tools that operate on
   // uploaded content (analyze_reference_video, predict_virality, gen_image).
+  // SCANS BACK over the last 8 messages (most-recent first, deduped by url), NOT
+  // just the final message. Bug it fixes: a video/image uploaded one turn ago
+  // vanished from `recentAttachments`, so a follow-up like "bikin videonya dari
+  // itu" / a re-analyze failed with "gak nemu attachment" even though the file
+  // was right there in the chat. Most-recent-first preserves "latest wins".
   const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user')
-  const recentAttachments = lastUserMsg?.attachments || []
+  const recentAttachments = []
+  for (const m of [...messages].reverse().slice(0, 8)) {
+    if (!Array.isArray(m.attachments)) continue
+    for (const a of m.attachments) {
+      if (a?.url && !recentAttachments.some((x) => x.url === a.url)) recentAttachments.push(a)
+    }
+  }
   const lastUserText = lastUserMsg?.content ? String(lastUserMsg.content).trim() : ''
 
   // Collect URLs mentioned anywhere in the recent conversation (last 6 msgs).
