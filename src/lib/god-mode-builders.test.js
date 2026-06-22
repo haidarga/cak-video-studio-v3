@@ -40,6 +40,20 @@ describe('buildVideoInputForModel — per-model field-name routing (the 422 trap
     expect(out.duration).toBe('10')
     expect(out.generate_audio).toBe(true)
   })
+
+  it('veo3 i2v: image_url, string duration bucket, safety_tolerance "6", audio on', () => {
+    const out = buildVideoInputForModel('fal-ai/veo3.1/fast/image-to-video', P)
+    expect(out.image_url).toBe('https://x/a.jpg')
+    expect(out.duration).toBe('6s')          // 5 → 6s bucket
+    expect(out.safety_tolerance).toBe('6')
+    expect(out.generate_audio).toBe(true)
+  })
+  it('veo3 r2v: image_urls (max 3), locked 8s, safety_tolerance "6"', () => {
+    const out = buildVideoInputForModel('fal-ai/veo3.1/fast/reference-to-video', { ...P, image_url: undefined, image_urls: ['a', 'b', 'c', 'd'] })
+    expect(out.image_urls).toEqual(['a', 'b', 'c'])
+    expect(out.duration).toBe('8s')
+    expect(out.safety_tolerance).toBe('6')
+  })
 })
 
 describe('buildVideoInputForModel — LTX-2.3 quality recipe', () => {

@@ -311,6 +311,17 @@ export function buildImgInput(imgModel, { prompt, refUrls = [], ar = '9:16' }) {
 const HH_STABILITY = ' Keep ONE consistent visual style and identical subject appearance — same face, proportions, outfit and color palette across every frame. Smooth, coherent, physically stable motion. NO morphing, NO warping, NO melting, NO style drift, NO shape-shifting, NO flicker, NO identity change.'
 
 // ── Video input builder, ported from v2's src/lib/api.js ──
+// Veo 3.1 takes `duration` as a STRING with an `s` suffix and only accepts
+// 4s/6s/8s for image-to-video; reference-to-video is locked to 8s. Coerce a
+// numeric duration to the nearest allowed bucket.
+function veoDuration(duration, isRef) {
+  if (isRef) return '8s'
+  const n = parseInt(duration) || 8
+  if (n >= 7) return '8s'
+  if (n >= 5) return '6s'
+  return '4s'
+}
+
 export function buildVidInput(vidModel, { prompt, image_url, reference_urls, duration, aspect_ratio }) {
   const isRef = vidModel.includes('reference-to-video')
   // Pure text-to-video — NO image fields at all (sending them 422s on some
@@ -392,6 +403,33 @@ export function buildVidInput(vidModel, { prompt, image_url, reference_urls, dur
       duration: Math.max(5, Math.min(15, parseInt(duration) || 5)),
       resolution: '720p',
       aspect_ratio: aspect_ratio || 'auto',
+    }
+  }
+  if (vidModel.includes('veo3')) {
+    // Veo 3.1 Fast (Google). safety_tolerance is a STRING "1".."6" where 6 =
+    // most permissive (user-requested MAX — there is nothing above 6). i2v takes
+    // image_url, r2v takes image_urls (Veo caps reference images at 3). r2v AR
+    // is limited to 16:9/9:16 (no "auto"/1:1); i2v also accepts "auto".
+    const veoAR = ['16:9', '9:16'].includes(aspect_ratio) ? aspect_ratio : (isRef ? '9:16' : 'auto')
+    if (isRef) {
+      return {
+        prompt,
+        image_urls: (reference_urls || []).filter(Boolean).slice(0, 3),
+        duration: '8s',
+        resolution: '720p',
+        aspect_ratio: veoAR,
+        generate_audio: true,
+        safety_tolerance: '6',
+      }
+    }
+    return {
+      prompt,
+      image_url,
+      duration: veoDuration(duration, false),
+      resolution: '720p',
+      aspect_ratio: veoAR,
+      generate_audio: true,
+      safety_tolerance: '6',
     }
   }
   return { prompt, image_url, duration: parseInt(duration) || 5, aspect_ratio }
@@ -493,6 +531,7 @@ export function getVideoMaxDuration(vidModel) {
 export function toRefToVideoModel(vidModel) {
   const m = (vidModel || '').toLowerCase()
   if (m.includes('reference-to-video') || m.includes('ref-to-video')) return vidModel // already ref
+  if (m.includes('veo3')) return 'fal-ai/veo3.1/fast/reference-to-video'
   if (m.includes('grok')) return 'xai/grok-imagine-video/reference-to-video'
   if (m.includes('kling')) return 'fal-ai/kling-video/v2.5-turbo/pro/ref-to-video'
   if (m.includes('happy-horse')) return 'alibaba/happy-horse/reference-to-video'
@@ -513,6 +552,8 @@ export const VIDEO_MODELS = [
   { v: 'alibaba/happy-horse/reference-to-video', l: '🎭 Happy Horse Ref-to-Video — ~$0.14/dtk' },
   { v: 'alibaba/happy-horse/text-to-video', l: '📝 Happy Horse T2V — ~$0.14/dtk 720p (native audio, 1080p $0.28)' },
   { v: 'xai/grok-imagine-video/v1.5/image-to-video', l: 'Grok 1.5 i2v — ~$0.14/dtk 720p (audio, higher quality)' },
+  { v: 'fal-ai/veo3.1/fast/image-to-video', l: '🎬 Veo 3.1 Fast — ~$0.15/dtk (Google, native audio, 4/6/8s)' },
+  { v: 'fal-ai/veo3.1/fast/reference-to-video', l: '🎭 Veo 3.1 Fast Ref-to-Video — ~$0.15/dtk (multi-ref, native audio, 8s)' },
   { v: 'fal-ai/bytedance/seedance/v1/lite/reference-to-video', l: '🎭 Seedance Lite Ref-to-Video — ~$0.16/dtk' },
   { v: 'bytedance/seedance-2.0/fast/image-to-video', l: 'Seedance 2 Fast — ~$0.24/dtk' },
   { v: 'bytedance/seedance-2.0/fast/reference-to-video', l: '🎭 Seedance 2 Fast Ref-to-Video — ~$0.24/dtk' },

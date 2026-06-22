@@ -168,7 +168,18 @@ export function buildVideoInputForModel(model, { motion_prompt, image_url, image
   }
 
   if (model.includes('veo3')) {
-    return { prompt: motion_prompt, ...(image_url ? { image_url } : {}), duration: parseInt(dur), aspect_ratio: ar }
+    // Veo 3.1 Fast (Google). duration is a STRING w/ `s` suffix (4s/6s/8s for
+    // i2v; r2v locked to 8s). safety_tolerance is a STRING "1".."6", 6 = most
+    // permissive (user-requested MAX). i2v=image_url, r2v=image_urls (max 3
+    // refs). r2v AR limited to 16:9/9:16. generate_audio for native dialog.
+    const veoAR = ['16:9', '9:16'].includes(ar) ? ar : (isR2V ? '9:16' : 'auto')
+    const base = { prompt: motion_prompt, resolution: resolution || '720p', aspect_ratio: veoAR, generate_audio: true, safety_tolerance: '6' }
+    if (isR2V) {
+      return { ...base, image_urls: refsArr.slice(0, 3), duration: '8s' }
+    }
+    const n = parseInt(dur) || 8
+    const veoDur = n >= 7 ? '8s' : n >= 5 ? '6s' : '4s'
+    return { ...base, ...(image_url || refsArr[0] ? { image_url: image_url || refsArr[0] } : {}), duration: veoDur }
   }
 
   // LTX-2.3 (fal-ai/ltx-2.3-quality/*) — high-quality video WITH native audio.
