@@ -2919,14 +2919,22 @@ function PresetEditorModal({ preset, onChange, err, busy, workspaceId, onCancel,
           {err && <div className="text-xs text-red-400 bg-red-900/20 border border-red-900/40 p-2 rounded">⚠ {err}</div>}
           <div className="grid grid-cols-2 gap-3">
             <Field label="Label (ditampilin di dropdown)">
-              <input value={preset.label} onChange={(e) => onChange({ ...preset, label: e.target.value })}
+              <input value={preset.label} onChange={(e) => {
+                const label = e.target.value
+                // Auto-slug the key from the label for NEW presets, until the
+                // user manually edits the key. Removes the "key kosong → gagal
+                // bikin" confusion (placeholder looked like a filled value).
+                const autoKey = label.toLowerCase().trim().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60)
+                const syncKey = !preset._row_id && !preset._keyEdited
+                onChange({ ...preset, label, ...(syncKey ? { preset_key: autoKey } : {}) })
+              }}
                 placeholder="My Brand UGC"
                 className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)]" />
             </Field>
-            <Field label="Preset key (id, lowercase + underscore)">
+            <Field label="Preset key (auto dari label — bisa diubah)">
               <input value={preset.preset_key} disabled={!!preset._row_id}
-                onChange={(e) => onChange({ ...preset, preset_key: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_') })}
-                placeholder="acekid_brand_ugc"
+                onChange={(e) => onChange({ ...preset, preset_key: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'), _keyEdited: true })}
+                placeholder="iphone15_ugc_candid"
                 className="w-full text-xs px-2 py-1.5 rounded bg-[var(--surface2)] border border-[var(--border)] font-mono disabled:opacity-60" />
             </Field>
           </div>
