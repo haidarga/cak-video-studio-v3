@@ -48,7 +48,7 @@ export function enrichLighting(environment, category) {
 const PHONE_MOTION_BY_SCENE = {
   beauty_application: 'Hands in motion with natural blur during application, genuine contact with the skin (not floating), hair responding to head movement.',
   talking_head: 'Slight natural motion blur as the subject speaks and gestures; hair and shoulders with natural secondary motion; subtle breathing and occasional blink; natural easing in and out of every move, nothing robotic.',
-  product_reveal: 'Brief motion blur as the product enters frame, settling into clear focus; natural arm arc with visible weight; the product stays RIGID — only the hand moves it, the product itself never deforms.',
+  product_reveal: 'Brief motion blur as the product enters frame, settling into clear focus; natural arm arc with visible weight; the product is a solid RIGID object that holds its exact shape and label steady — only the hand moves it, slowly and gently.',
   walking_transition: 'Natural stride with arm swing and grounded foot contact, secondary motion in hair and clothing, camera following naturally with organic deceleration.',
   broll: 'Handheld camera movement with natural acceleration and deceleration, motion blur in the direction of the pan, subtle camera breathing.',
   default: 'Slight natural motion blur from handheld movement; secondary motion in hair and clothing; subtle breathing and weight shift; natural easing, nothing stops abruptly.',

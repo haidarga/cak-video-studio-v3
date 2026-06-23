@@ -1121,15 +1121,15 @@ INSTRUCTIONS:
 STYLE & DIALOG:
 ${motion}`
       }
-      // PRODUCT ANTI-MORPH — i2v models re-paint the product every frame
-      // after frame 1; without a rigid-object directive the shape/label
-      // warps mid-video even when the start image was perfect (the
-      // "image oke, video DUARR" failure mode). Strong fidelity block,
-      // appended only when a product is actually in play.
+      // PRODUCT FIDELITY — stated POSITIVELY. Video models don't parse negation;
+      // piling "no morphing/no warping/no melting" into the prompt makes them
+      // LATCH onto those concepts and morph MORE (pink-elephant effect). So we
+      // describe stability as a positive state + minimal product motion (the
+      // real anti-morph lever is LESS movement, not "don't morph").
       if (!globalConfig.skipProduct && brand) {
         finalMotion += `
 
-PRODUCT FIDELITY (critical): the product is a RIGID manufactured object — its shape, proportions, port/button layout, colors and label text must stay IDENTICAL to the first frame in EVERY frame. No warping, no morphing, no melting, no re-imagined details, no gibberish text on the label. Keep the product itself mostly static; movement comes from the camera and the person, never from the product deforming.`
+PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. It holds its EXACT same shape, proportions, port/button layout, colors and label text in every single frame — rock-steady and identical to the first frame. The product stays still and stable; any movement comes only from the hand or the camera, gently and slowly. Treat the product as a fixed solid prop.`
       }
       const vidSeed = globalConfig.seedLock ? globalConfig.seed : randomSeed()
       const vidInput = applySeed(vidModel, buildVidInput(vidModel, {

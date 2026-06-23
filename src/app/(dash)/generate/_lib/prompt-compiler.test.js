@@ -203,15 +203,19 @@ describe('compileVideoPrompt — storyboard mode (montage-aware, motion preserve
   })
 })
 
-describe('compileVideoPrompt — anti-drift/morph motion baseline', () => {
-  it('adds a controlled-motion / no-morph clause for non-animation', () => {
+describe('compileVideoPrompt — anti-drift motion baseline (POSITIVE phrasing)', () => {
+  it('adds a gentle/steady-shape clause for non-animation', () => {
     const out = compileVideoPrompt({ action: 'she walks fast and spins', ar: '9:16', camera: 'iphone_15_clean' })
-    expect(out).toMatch(/controlled.*motion|no extreme/i)
-    expect(out).toMatch(/no warping, melting, morphing|morphing/i)
+    expect(out).toMatch(/gentle.*smooth|physically grounded/i)
+    expect(out).toMatch(/solid, consistent shape|same real person/i)
+  })
+  it('does NOT use negation morph-words (they backfire on video models)', () => {
+    const out = compileVideoPrompt({ action: 'she walks', ar: '9:16', camera: 'iphone_15_clean' })
+    expect(out).not.toMatch(/no warping, melting, morphing/i)
   })
   it('skips it for animation (different physics)', () => {
     const out = compileVideoPrompt({ action: 'waving', ar: '9:16', camera: 'animation_2d' })
-    expect(out).not.toMatch(/no warping, melting, morphing/i)
+    expect(out).not.toMatch(/physically grounded/i)
   })
 })
 

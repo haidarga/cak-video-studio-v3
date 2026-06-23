@@ -425,11 +425,12 @@ export function compileVideoPrompt(spec) {
   if (wantsStaticCam) {
     lines.push('Camera is LOCKED on a tripod — absolutely NO camera movement: no handheld shake, no pan, no tilt, no push-in, no zoom, no drift. The frame stays perfectly still; ONLY the subject moves (natural body, hands, hair, breathing, blinks).')
   }
-  // Anti-drift/morph baseline: EXTREME motion is the #1 cause of AI warping/
-  // melting. Force controlled, physically-grounded motion + a no-morph clause.
-  // Skipped for animation (different physics) — phone/cinema/default get it.
+  // Anti-drift baseline, stated POSITIVELY. Video models don't parse negation —
+  // words like "no morphing/warping/melting" make them latch onto those concepts
+  // and morph MORE. So we ask for the desired STATE (steady, solid, consistent)
+  // + the real lever: gentle controlled motion. Skipped for animation.
   if (cam?.category !== 'animation') {
-    lines.push('Keep ALL motion controlled, smooth and physically grounded — no extreme or whip-fast movements, no rapid zooms, no violent action. The subject stays consistent every frame: NO warping, melting, morphing, stretching or duplicated features.')
+    lines.push('Motion stays gentle, smooth and physically grounded — slow deliberate movement, steady pacing. The subject keeps a solid, consistent shape and identity in every frame, looking like the same real person/object throughout.')
   }
   // Spoken-audio direction: language + regional accent/dialect + relaxed pace,
   // for native-audio models. Only when there's dialog and audio is on.
