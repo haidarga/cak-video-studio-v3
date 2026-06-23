@@ -1471,11 +1471,14 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
         if (job.useHandoff && prevVideoUrl) {
           try {
             onPatch({ lfStatus: `Segmen ${i + 1}/${jobs.length}: ambil frame sambungan...` })
-            const { extractLastFrame } = await import('@/lib/ffmpeg-extract')
-            const blob = await extractLastFrame(prevVideoUrl, { offsetEnd: 0.05 })
+            // CANVAS-ONLY (no ffmpeg.wasm fallback) — the wasm path is 30MB +
+            // full-decode and was HANGING long-form per segment. If the fast
+            // canvas grab fails, we degrade to r2v from refs instead of hanging.
+            const { extractLastFrameViaCanvas } = await import('@/lib/ffmpeg-extract')
+            const blob = await extractLastFrameViaCanvas(prevVideoUrl)
             const up = await uploadBlob(blob, `lf-handoff-${persona.id}-${i}.jpg`, 'longform')
             startImg = up.url
-          } catch { /* extract failed → fall through to r2v (seam may show) */ }
+          } catch { /* canvas failed → r2v from refs (soft seam, but never hangs) */ }
         }
         // MEMORY / CONTEXT: each segment must know the WHOLE video + what already
         // happened, not just its own beat — otherwise it's generated "blind" and
