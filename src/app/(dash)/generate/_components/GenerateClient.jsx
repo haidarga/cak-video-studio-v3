@@ -662,6 +662,9 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
         body: JSON.stringify({
           naskah: state.naskah, lang: globalConfig.lang, mode: globalConfig.mode, ar: globalConfig.ar,
           refLabels, brand: activeBrand ? { notes: activeBrand.notes, config: activeBrand.config } : null,
+          // Tell the parser the chosen model's per-clip cap so storyboard total
+          // never exceeds it (was making 20s panels for a 15s-cap model).
+          maxSegmentDuration: getVideoMaxDuration(globalConfig.vidModel),
           // Honor output constraints — parser respects these instead of forcing
           // dialog/onscreen/product into every panel.
           constraints: {

@@ -80,7 +80,7 @@ export async function POST(req) {
   "video_motion": "one-line camera-movement description for the whole sequence (English, max 20 words). If user toggled continuousShot, describe a single fluid take with no cuts.",
   "characters": ["Name1"],
   "panels": [
-    {"n":1,"title":"HOOK","visual":"English ACTION + camera angle only — do NOT describe faces or outfit (those are locked)","dialog":"${constraints.skipDialog ? '' : `line in ${lang}`}","onscreen":"${constraints.skipOnscreen ? '' : `short ${lang} caption`}","shot_type":"${shotTypes}","seconds":2,"chars_in_shot":["Name1"]}
+    {"n":1,"title":"HOOK","visual":"REQUIRED, NEVER empty — English: shot type + what the subject is DOING + the EXPRESSION/emotion that matches this panel's dialogue (tired, regretful, surprised, urging). If the naskah is dialog-only with no action, STILL write a sensible talking-head visual with the right emotion + a small natural gesture. Do NOT describe facial structure/identity (locked by refs).","dialog":"${constraints.skipDialog ? '' : `line in ${lang}`}","onscreen":"${constraints.skipOnscreen ? '' : `short ${lang} caption`}","shot_type":"${shotTypes}","seconds":3,"chars_in_shot":["Name1"]}
     // 4, 6, or 9 panels — pick what the script actually needs (see TASK); never pad with filler b-roll just to reach a 3x3. Each panel.visual is just the action + framing — no aesthetic words, no lighting words (env handles that), no face/outfit details.
   ]
 }`
@@ -147,7 +147,7 @@ TASK: Convert this script into ${
 - transition (CRITICAL — FOLLOW THE NASKAH, never force): first segment = "start". For each later segment, "continuous" if it flows from the SAME shot/scene/action with NO visual cut (next clip starts exactly where the previous ended → seamless handoff); "cut" if the naskah moves to a NEW scene, angle, location, or b-roll (clean hard cut, generated fresh).
 - video_motion = a short timestamped beat timeline for THAT segment only.`
       : isStory
-      ? `ONE storyboard — CHOOSE the panel count: 4, 6, or 9 (clean grids 2x2 / 2x3 / 3x3). Pick whatever the script ACTUALLY needs at ~2-3s per beat; do NOT pad with filler b-roll just to fill a 3x3. Dialog-heavy testimonial → fewer, longer talking-head holds (4-6 panels). Action / montage / multi-location → more (6-9). Set each panel.seconds to its real length; total ~8-15s.`
+      ? `ONE storyboard — CHOOSE the panel count: 4, 6, or 9 (clean grids 2x2 / 2x3 / 3x3). Pick whatever the script ACTUALLY needs at ~2-3s per beat; do NOT pad with filler b-roll just to fill a 3x3. Dialog-heavy testimonial → fewer, longer talking-head holds (4-6 panels). Action / montage / multi-location → more (6-9). HARD CAP: each panel.seconds is 2-3s, and the TOTAL of all panel.seconds MUST be <= ${maxSeg}s (the model can't render one clip longer than that). If the dialog needs more time than ${maxSeg}s, TRIM it — never exceed the cap.`
       : isDirect
         ? (shotCount
             ? `EXACTLY ${shotCount} DIRECT VIDEO shot${shotCount > 1 ? 's' : ''} (each 5-10s). Each shot is generated DIRECTLY from text + reference photos — no intermediate still frame.
