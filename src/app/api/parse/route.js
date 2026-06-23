@@ -139,9 +139,10 @@ ${continuationBlock}
 TASK: Convert this script into ${
     isLong
       ? `a LONG-FORM PLAN: split the FULL naskah into sequential SEGMENTS, each <= ${maxSeg}s (each segment = one generated video clip, stitched in order). Rules:
-- Cover the ENTIRE naskah in order — no gaps, no repeats. Use as many segments as needed.
+- Cover the ENTIRE naskah in order — no gaps, no repeats.
+- USE THE FEWEST SEGMENTS POSSIBLE. Make each segment as LONG as allowed (pack it close to ${maxSeg}s). Every extra segment = another seam where the video looks disjointed, so DON'T over-split. Only start a new segment when (a) the content genuinely exceeds ${maxSeg}s, OR (b) the naskah has a real HARD CUT to a new scene/location/b-roll. A continuous monologue of 12s on a 15s-cap model = ONE segment, not two.
 - Split dialog so each segment's spoken line FITS its seconds at ~2 words/sec (unhurried). Trim, never cram.
-- transition (CRITICAL — FOLLOW THE NASKAH, never force): first segment = "start". For each later segment, "continuous" if it flows from the SAME shot/scene/action with NO visual cut (next clip starts exactly where the previous ended → seamless handoff); "cut" if the naskah moves to a NEW scene, angle, location, or b-roll (clean hard cut, generated fresh). A monologue split only for length = "continuous"; a jump to b-roll or a new setting = "cut".
+- transition (CRITICAL — FOLLOW THE NASKAH, never force): first segment = "start". For each later segment, "continuous" if it flows from the SAME shot/scene/action with NO visual cut (next clip starts exactly where the previous ended → seamless handoff); "cut" if the naskah moves to a NEW scene, angle, location, or b-roll (clean hard cut, generated fresh).
 - video_motion = a short timestamped beat timeline for THAT segment only.`
       : isStory
       ? `ONE storyboard — CHOOSE the panel count: 4, 6, or 9 (clean grids 2x2 / 2x3 / 3x3). Pick whatever the script ACTUALLY needs at ~2-3s per beat; do NOT pad with filler b-roll just to fill a 3x3. Dialog-heavy testimonial → fewer, longer talking-head holds (4-6 panels). Action / montage / multi-location → more (6-9). Set each panel.seconds to its real length; total ~8-15s.`

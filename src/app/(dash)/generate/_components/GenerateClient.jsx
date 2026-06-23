@@ -1468,6 +1468,9 @@ PRODUCT FIDELITY (critical): the product is a RIGID manufactured object — its 
         : null
 
       // 3) Gen each segment in order. Continuous → last-frame handoff anchor.
+      // ONE seed for the whole run → the character/look stays consistent across
+      // segments (a fresh random seed per clip is a big source of "gak nyambung").
+      const runSeed = globalConfig.seedLock ? globalConfig.seed : randomSeed()
       const clips = []
       let prevVideoUrl = null
       for (let i = 0; i < jobs.length; i++) {
@@ -1485,9 +1488,15 @@ PRODUCT FIDELITY (critical): the product is a RIGID manufactured object — its 
             startImg = up.url
           } catch { /* extract failed → fall through to r2v (seam may show) */ }
         }
-        const action = job.dialog
+        // Continuous segments: tell the model to pick up EXACTLY where the prev
+        // clip ended (same location/lighting/wardrobe/framing) so the join reads
+        // seamless, not like a fresh unrelated shot. Cut segments stay fresh.
+        const contNote = (job.useHandoff && i > 0)
+          ? ' Continue SEAMLESSLY from the previous shot — identical location, lighting, wardrobe and framing; start exactly where it ended, no jump.'
+          : ''
+        const action = (job.dialog
           ? `${job.motion} The subject speaks in fluent native ${globalConfig.lang}: "${job.dialog}"`
-          : job.motion
+          : job.motion) + contNote
         const motion = compileVideoPrompt({
           camera: globalConfig.cameraPreset || DEFAULT_CAMERA,
           identity, environment: pj.parsed?.environment || null, action, brand,
@@ -1496,7 +1505,7 @@ PRODUCT FIDELITY (critical): the product is a RIGID manufactured object — its 
           hasDialog: !globalConfig.skipDialog && !!job.dialog, audioOn: globalConfig.audio !== false,
           userPresets: userCameraPresets,
         })
-        const seed = globalConfig.seedLock ? globalConfig.seed : randomSeed()
+        const seed = runSeed
         // i2v ONLY when we actually have a start frame; otherwise r2v from refs.
         const useI2V = !!startImg
         const firstModel = useI2V ? i2vModel : r2vModel
