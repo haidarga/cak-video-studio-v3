@@ -97,13 +97,14 @@ export async function POST(req) {
   "environment": "one-line setting + lighting + time-of-day shared across all shots",
   "wardrobe": "outfit description per character, extracted from naskah if mentioned. Empty string if not specified.",
   "shots": [
-    {"shot":1,"duration":5,"scene_type":"talking_head|beauty_application|product_reveal|walking_transition|broll|default","image_prompt":"English ACTION + camera angle only — do NOT describe faces or outfit","video_motion":"English motion max 20 words","dialogue":"${constraints.skipDialog ? '' : `line in ${lang}`}","chars_in_shot":["Name1"]}
+    {"shot":1,"duration":5,"scene_type":"talking_head|beauty_application|product_reveal|walking_transition|broll|default","image_prompt":"English — the FROZEN peak moment, VIVID + specific (this is what makes the shot expressive, not generic): ONE action + camera angle/shot type + the EXACT EMOTIONAL EXPRESSION (e.g. tired eyes with a soft genuine smile, eyebrows raised in surprise, a small regretful frown, eyes welling up, mid-laugh) + body language / micro-gesture (hand near chin, shoulders slumped, leaning in) + candid mood. Do NOT describe facial STRUCTURE or identity (eye color, exact features, hair — locked by refs), but DO capture the feeling vividly. Match the emotion to the dialogue/beat.","video_motion":"English motion max 20 words","dialogue":"${constraints.skipDialog ? '' : `line in ${lang}`}","chars_in_shot":["Name1"]}
   ]
 }`
 
   // Hard rules applied universally (used to be guard only in per-shot mode).
   const universalRules = [
     'NEVER describe faces in detail (eye color, exact features, hair texture). Character identity is locked by reference photos.',
+    'EXPRESSION IS NOT IDENTITY — capture it vividly (do NOT strip it). Emotional expression, gaze direction, micro-expression and gesture (tired eyes, soft smile, surprised, regretful, mid-laugh, leaning in, hand to chin) are what make a shot EXPRESSIVE instead of generic/dead. ALWAYS include the shot\'s emotion + body language in image_prompt, matched to the dialogue/beat. Banning "face detail" means structure/identity ONLY (eye color, features), NEVER the emotion.',
     'CARDINAL RULE — ADAPT THE NASKAH FAITHFULLY. If the user wrote specific instructions, OBEY them verbatim. Treat the naskah as a brief: every concrete direction in it (camera move, mood, style label, composition cue, action verb, prop, color hint, time-of-day, lighting word) belongs in the appropriate output field. DO NOT generalize away the user\'s specifics. Generic output is a failure.',
     'IMPORTANT — image_prompt vs video_motion are STRUCTURALLY DIFFERENT, do not write the same text into both:',
     '  • image_prompt = ONE FROZEN MOMENT. A single still frame. Describe the PEAK / most cinematic instant of the action — the climax of the scene the video will play through. NEVER list a sequence ("X then Y then Z") in image_prompt — diffusion models render sequences as multi-panel collages / 4-grid storyboards, which is broken. Pick ONE verb in present-continuous tense ("panda aiming the firearm at intruders") not a chain ("breaks door, then aims, then shoots").',
