@@ -11,7 +11,6 @@ import { imageCost, videoCost, fmtCost } from '@/lib/cost-table'
 // Generate-ONLY libs — live under generate/_lib so god-mode work can never
 // touch them (and vice versa). God Mode has its own prompt path in
 // src/lib/god-mode-builders.js. Keep it that way.
-import { STYLE_PRESETS } from '../_lib/style-presets'
 import { compileImagePrompt, compileVideoPrompt } from '../_lib/prompt-compiler'
 import { planToJobs, buildConcatProject } from '@/lib/long-form'
 import { isContentRefusal, nextVideoModel } from '@/lib/model-fallback'
@@ -137,10 +136,6 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId])
 
-  // Pick style — does NOT touch model selection (user controls model independently)
-  function pickStyle(styleKey) {
-    setGlobalConfig((c) => ({ ...c, style: styleKey === c.style ? 'none' : styleKey }))
-  }
   const [stateByPersona, setStateByPersona] = useState({})
   const [err, setErr] = useState('')
   // UI compactness — settings panels collapse by default to reduce visual noise.
@@ -371,31 +366,9 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
             wardrobe / continuous-shot hint live here. */}
         {uiMode === 'pro' && showAdvanced && (
           <div className="space-y-3 pt-2 border-t border-[var(--border)]">
-            {/* Legacy Style preset — kept for back-compat, but Camera Preset
-                supersedes. Hidden behind Advanced because most users won't need it. */}
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="block text-[10px] uppercase text-[var(--muted)] tracking-wider font-semibold">
-                  🎨 Style / Genre <span className="text-[9px] font-normal text-[var(--muted2)]">(legacy — Camera Preset di atas udah supersede ini)</span>
-                </label>
-                {globalConfig.style && globalConfig.style !== 'none' && (
-                  <button onClick={() => setGlobalConfig({ ...globalConfig, style: 'none' })} className="text-[10px] text-[var(--muted)] underline hover:text-white">Clear</button>
-                )}
-              </div>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-1.5">
-                {Object.entries(STYLE_PRESETS).map(([key, preset]) => {
-                  const on = globalConfig.style === key
-                  return (
-                    <button key={key} onClick={() => pickStyle(key)}
-                      className={`text-left p-1.5 rounded border text-[10px] ${on ? 'border-[var(--accent)] bg-[var(--accent)]/10' : 'border-[var(--border)] bg-[var(--surface2)] hover:border-[var(--muted)]'}`}>
-                      <div className="text-xs font-semibold">{preset.label}</div>
-                      <div className="text-[9px] text-[var(--muted)] mt-0.5 line-clamp-1">{preset.description}</div>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-
+            {/* Legacy Style/Genre presets removed — Camera Preset (above) is the
+                single source of visual identity; the old genre presets injected
+                conflicting style tokens that fought the preset. */}
             <StyleRefsPicker workspaceId={workspaceId} userId={userId}
               selectedIds={globalConfig.styleRefIds || new Set()}
               onChange={(ids) => setGlobalConfig({ ...globalConfig, styleRefIds: ids })} />
