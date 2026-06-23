@@ -1105,6 +1105,19 @@ ${motion}`
         const gN = shot.raw.panels?.length || 9
         const gCols = gN <= 4 ? 2 : 3
         const gRows = Math.ceil(gN / gCols)
+        // ARC CONTEXT (memory) for CHAINED storyboards: when this storyboard is a
+        // continuation, tell the model the whole-video throughline + what earlier
+        // parts already showed — so part 2/3 stays on-story (mirrors long-form).
+        // A single (non-chained) storyboard already has full context via its grid.
+        let arcNote = ''
+        if (continuationRefs.length > 0 || shot.continued_from) {
+          const prior = state.shots.slice(0, idx).map((s, k) => {
+            const c = s.raw?.concept || (s.raw?.panels || []).map((p) => p.visual).filter(Boolean).slice(0, 2).join(', ') || ''
+            return c ? `${k + 1}) ${String(c).slice(0, 90)}` : null
+          }).filter(Boolean).join('  ')
+          const concept = state.shots[0]?.raw?.concept || shot.raw?.concept || ''
+          arcNote = `\n\nARC CONTEXT — this is a CONTINUATION of ONE longer video${concept ? ` about: ${String(concept).slice(0, 120)}` : ''}.${prior ? ` Earlier parts already showed: ${prior}.` : ''} Keep the SAME character, look, location world and tone; continue the story FORWARD — do not restart or drift off-topic.`
+        }
         let cont = ''
         // Branch on continuity_fallback flag (set by continueStoryboard when
         // the last-frame extract failed and we fell back to the prev shot's
@@ -1120,7 +1133,7 @@ ${motion}`
         }
         finalMotion = `IMAGE ROLES:
 - Image 1 = a ${gRows}x${gCols} storyboard GRID showing ${gN} sequential keyframes (panels) read left-to-right, top-to-bottom. It is a SEQUENCE MAP, NOT a frame to animate.
-- Images 2 onwards = subject/character/style references to render.${cont}
+- Images 2 onwards = subject/character/style references to render.${cont}${arcNote}
 
 INSTRUCTIONS:
 - Animate the SUBJECTS (not the grid) performing the actions shown in each panel of Image 1, panel-by-panel.${globalConfig.continuousShot
