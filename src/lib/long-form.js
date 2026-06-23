@@ -80,6 +80,8 @@ export function buildConcatProject(clips = [], { ar = '9:16', fps = 30 } = {}) {
       src_in: 0,
       src_out: dur,
       speed: 1,
+      // HARD CUT between clips — explicitly no crossfade/fade/dissolve/blur.
+      transition_in: { type: 'cut' },
     }
     cursor += dur
     return clip

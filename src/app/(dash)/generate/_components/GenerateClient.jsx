@@ -1141,7 +1141,7 @@ ${motion}`
 INSTRUCTIONS:
 - Animate the SUBJECTS (not the grid) performing the actions shown in each panel of Image 1, panel-by-panel.${globalConfig.continuousShot
   ? ' Play them as ONE continuous take, smoothly transitioning scene-to-scene with no hard cuts.'
-  : ' Render EACH panel as its OWN distinct shot with a HARD CUT between panels (montage / fast-cut edit) — match each panel\'s framing (close-up / medium / wide). Do NOT merge them into one slow continuous shot.'}
+  : ' Render EACH panel as its OWN distinct shot with a HARD CUT between panels (montage / fast-cut edit) — match each panel\'s framing (close-up / medium / wide). Do NOT merge them into one slow continuous shot. Straight hard cuts ONLY — NO fade in/out, NO crossfade/dissolve, NO blur or whip transitions.'}
 - ABSOLUTELY DO NOT show grid lines, panel borders, panel numbers, or grid layout in the output video. The output is a normal full-frame video of the subjects.
 - Maintain the SAME character identity, outfit, and art style from the reference images across the entire video. No mid-video morphing.
 

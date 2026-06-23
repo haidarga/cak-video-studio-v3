@@ -79,6 +79,10 @@ describe('buildConcatProject — sequential stitch project', () => {
     expect(Array.isArray(p.video_clips)).toBe(true)
     expect(p.clips).toBeUndefined()       // the old wrong field must be gone
   })
+  it('forces HARD CUT between clips (no crossfade/fade/blur)', () => {
+    const p = buildConcatProject(clips, { ar: '9:16' })
+    expect(p.video_clips.every((c) => c.transition_in?.type === 'cut')).toBe(true)
+  })
   it('drops empty/invalid clips', () => {
     const p = buildConcatProject([{ url: 'https://x/1.mp4', duration: 8 }, { duration: 5 }, null], { ar: '9:16' })
     expect(p.video_clips).toHaveLength(1)

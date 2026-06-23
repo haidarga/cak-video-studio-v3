@@ -376,7 +376,7 @@ export function compileVideoPrompt(spec) {
     if (continuousShot) {
       sb.push('Play all panels as ONE continuous unbroken take — smooth transitions, no hard cuts.')
     } else {
-      sb.push('Treat EACH storyboard panel as its OWN distinct shot: HARD CUT between panels (montage / fast-cut edit), matching each panel\'s framing (close-up / medium / wide). Do NOT blend the panels into one slow continuous shot.')
+      sb.push('Treat EACH storyboard panel as its OWN distinct shot: HARD CUT between panels (montage / fast-cut edit), matching each panel\'s framing (close-up / medium / wide). Do NOT blend the panels into one slow continuous shot. Use ONLY straight hard cuts — NO fade in/out, NO crossfade/dissolve, NO blur or whip transitions between shots.')
     }
     // Light realism so the subject isn't frozen — does NOT fight cuts.
     sb.push('Natural secondary motion — breathing, occasional blinks, hair and shoulder micro-movement; nothing robotic.')
