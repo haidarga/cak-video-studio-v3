@@ -425,6 +425,12 @@ export function compileVideoPrompt(spec) {
   if (wantsStaticCam) {
     lines.push('Camera is LOCKED on a tripod — absolutely NO camera movement: no handheld shake, no pan, no tilt, no push-in, no zoom, no drift. The frame stays perfectly still; ONLY the subject moves (natural body, hands, hair, breathing, blinks).')
   }
+  // Anti-drift/morph baseline: EXTREME motion is the #1 cause of AI warping/
+  // melting. Force controlled, physically-grounded motion + a no-morph clause.
+  // Skipped for animation (different physics) — phone/cinema/default get it.
+  if (cam?.category !== 'animation') {
+    lines.push('Keep ALL motion controlled, smooth and physically grounded — no extreme or whip-fast movements, no rapid zooms, no violent action. The subject stays consistent every frame: NO warping, melting, morphing, stretching or duplicated features.')
+  }
   // Spoken-audio direction: language + regional accent/dialect + relaxed pace,
   // for native-audio models. Only when there's dialog and audio is on.
   const voiceLine = buildVoiceDirection({ lang, dialect, hasDialog, audioOn })
