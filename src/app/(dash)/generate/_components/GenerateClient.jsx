@@ -1488,15 +1488,22 @@ PRODUCT FIDELITY (critical): the product is a RIGID manufactured object — its 
             startImg = up.url
           } catch { /* extract failed → fall through to r2v (seam may show) */ }
         }
+        // MEMORY / CONTEXT: each segment must know the WHOLE video + what already
+        // happened, not just its own beat — otherwise it's generated "blind" and
+        // drifts off-topic ("ngawur"). Feed the overall concept + position + a
+        // short recap of prior beats so this segment stays on the same throughline.
+        const lfConcept = pj.parsed?.concept ? String(pj.parsed.concept).trim() : ''
+        const priorBeats = jobs.slice(0, i).map((j, k) => `${k + 1}) ${String(j.motion).slice(0, 90)}`).join('  ')
+        const ctxNote = `CONTEXT — this is part ${i + 1} of ${jobs.length} of ONE continuous video${lfConcept ? ` about: ${lfConcept}` : ''}. Same person, consistent look and tone throughout.${priorBeats ? ` Already shown: ${priorBeats}.` : ''} Stay on this throughline — do not introduce unrelated scenes or change the subject.`
         // Continuous segments: tell the model to pick up EXACTLY where the prev
         // clip ended (same location/lighting/wardrobe/framing) so the join reads
         // seamless, not like a fresh unrelated shot. Cut segments stay fresh.
         const contNote = (job.useHandoff && i > 0)
           ? ' Continue SEAMLESSLY from the previous shot — identical location, lighting, wardrobe and framing; start exactly where it ended, no jump.'
           : ''
-        const action = (job.dialog
+        const action = `${ctxNote}\n${job.dialog
           ? `${job.motion} The subject speaks in fluent native ${globalConfig.lang}: "${job.dialog}"`
-          : job.motion) + contNote
+          : job.motion}${contNote}`
         const motion = compileVideoPrompt({
           camera: globalConfig.cameraPreset || DEFAULT_CAMERA,
           identity, environment: pj.parsed?.environment || null, action, brand,

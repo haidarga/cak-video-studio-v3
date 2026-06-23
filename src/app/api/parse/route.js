@@ -64,6 +64,7 @@ export async function POST(req) {
   // sees).
   const schema = isLong
     ? `{
+  "concept": "one-line overall concept of the WHOLE video (English) — the throughline every segment shares",
   "characters": ["Name1"],
   "environment": "one-line setting + lighting + time-of-day shared across segments (English)",
   "wardrobe": "outfit per character extracted from naskah if mentioned, else empty string",
