@@ -430,7 +430,14 @@ export function compileVideoPrompt(spec) {
   const voiceLine = buildVoiceDirection({ lang, dialect, hasDialog, audioOn })
   if (voiceLine) lines.push(voiceLine)
   lines.push(`${ar} composition.`)
-  if (refsCount) lines.push('Keep character identity consistent with references.')
+  if (refsCount) {
+    lines.push('Keep character identity consistent with references.')
+    // Anti-collage: reference images are often multi-pose CHARACTER SHEETS, and
+    // ref-to-video models tend to REPRODUCE that layout → a split-screen /
+    // stacked / doubled output (two copies of the person in one frame). Forbid
+    // it explicitly: the refs are identity guides, not a composition to copy.
+    lines.push('Render ONE single subject in a normal full-frame shot — NOT a split-screen, NOT a collage, NOT stacked panels, NOT a grid, NOT multiple copies or duplicates of the person. The reference images are identity guides ONLY; do NOT reproduce their layout or show more than one of the subject.')
+  }
   // Actively forbid hallucinated on-screen text. AI video models love to render
   // gibberish captions/signage/watermarks; "No text" must FORBID it, not just
   // omit a text instruction — that's why text kept showing up.

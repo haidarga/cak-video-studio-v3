@@ -203,6 +203,19 @@ describe('compileVideoPrompt — storyboard mode (montage-aware, motion preserve
   })
 })
 
+describe('compileVideoPrompt — anti-collage when refs present (sheet → stacked bug)', () => {
+  it('forbids split-screen / stacked / duplicate subject when refs are passed', () => {
+    const out = compileVideoPrompt({ action: 'she speaks', ar: '9:16', refsCount: 3 })
+    expect(out).toMatch(/single subject/i)
+    expect(out).toMatch(/NOT a split-screen|NOT a collage|stacked/i)
+    expect(out).toMatch(/do NOT reproduce their layout/i)
+  })
+  it('omits the anti-collage line when there are no refs', () => {
+    const out = compileVideoPrompt({ action: 'she speaks', ar: '9:16', refsCount: 0 })
+    expect(out).not.toMatch(/split-screen|reproduce their layout/i)
+  })
+})
+
 describe('compileVideoPrompt — static camera intent (non-storyboard)', () => {
   // User wrote "camera fixed / no camera movement" but the iphone_15 preset
   // tokens ("clean handheld, motion blur from handheld movement") led the prompt
