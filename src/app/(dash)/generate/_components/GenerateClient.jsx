@@ -2759,6 +2759,12 @@ function CameraPresetPicker({ workspaceId, value, onChange, userPresets, onUserP
   function startEdit(preset) {
     setEditing({
       ...preset,
+      // Loaded user presets carry the key as `id` (not `preset_key`). Without
+      // this fallback, editing an existing preset had an empty preset_key → the
+      // disabled field showed only the placeholder → save failed "Preset key
+      // wajib" with no way to fix it (field locked). Populate from id.
+      preset_key: preset.preset_key || preset.id || '',
+      _keyEdited: true, // existing key shouldn't be auto-overwritten by the label
       tokens: preset.tokens || [],
       negatives: preset.negatives || [],
     })
