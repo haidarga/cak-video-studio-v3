@@ -396,10 +396,20 @@ export function compileVideoPrompt(spec) {
   // mode: there's no image step to carry the visual style, so a 2D / animation /
   // stylized preset is ONLY honored if its tokens ride in the video prompt —
   // without this the model defaults to photoreal 3D and ignores the preset.
+  // Static-camera intent: when the user's motion asks for a fixed/locked/static
+  // camera, the preset's own "handheld / motion-blur-from-handheld" tokens
+  // CONTRADICT it (preset tokens lead = highest priority, so the model obeys
+  // handheld and ignores "camera fixed"). Strip the movement tokens here and
+  // add an explicit locked-tripod override at the end (recency).
+  const wantsStaticCam = /\b(static|fixed|locked|tripod|kamera diam|tidak bergerak|no camera movement|minimal camera|still camera)\b/i.test(String(action || ''))
   let cam = null
   if (camera) {
     cam = getCameraPreset(camera, userPresets)
-    if (cam?.tokens?.length) lines.push(`${cam.tokens.join(', ')}.`)
+    let camTokens = cam?.tokens?.length ? [...cam.tokens] : []
+    if (wantsStaticCam) {
+      camTokens = camTokens.filter((t) => !/handheld|motion blur from handheld|camera shake|mid-natural-motion|panning|\bpan\b|push-in|dolly|tracking/i.test(t))
+    }
+    if (camTokens.length) lines.push(`${camTokens.join(', ')}.`)
   }
   if (identity) lines.push(`Subject: ${identity}.`)
   if (wardrobe) lines.push(`Wardrobe: ${wardrobe}.`)
@@ -407,9 +417,14 @@ export function compileVideoPrompt(spec) {
   if (action) lines.push(action)
   // Motion realism baseline: camera-aware (handheld blur for phone, smooth for
   // cinema, nothing for animation) so we never contradict the preset's own
-  // negatives. Adds secondary motion + grounding + breathing + easing.
-  const motionLine = motionRealismFor(action, cam?.category || 'phone', sceneType)
+  // negatives. Adds secondary motion + grounding + breathing + easing. SKIP when
+  // a static camera was requested — its handheld-blur phrasing fights "locked".
+  const motionLine = wantsStaticCam ? '' : motionRealismFor(action, cam?.category || 'phone', sceneType)
   if (motionLine) lines.push(motionLine)
+  // Strong locked-camera override (recency bias beats the leading preset tokens).
+  if (wantsStaticCam) {
+    lines.push('Camera is LOCKED on a tripod — absolutely NO camera movement: no handheld shake, no pan, no tilt, no push-in, no zoom, no drift. The frame stays perfectly still; ONLY the subject moves (natural body, hands, hair, breathing, blinks).')
+  }
   // Spoken-audio direction: language + regional accent/dialect + relaxed pace,
   // for native-audio models. Only when there's dialog and audio is on.
   const voiceLine = buildVoiceDirection({ lang, dialect, hasDialog, audioOn })

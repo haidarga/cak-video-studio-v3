@@ -203,6 +203,33 @@ describe('compileVideoPrompt — storyboard mode (montage-aware, motion preserve
   })
 })
 
+describe('compileVideoPrompt — static camera intent (non-storyboard)', () => {
+  // User wrote "camera fixed / no camera movement" but the iphone_15 preset
+  // tokens ("clean handheld, motion blur from handheld movement") led the prompt
+  // and overrode it → camera still moved. Static intent must win.
+  const staticSpec = { camera: 'iphone_15_clean', ar: '9:16', action: 'The camera is fixed. Emma cuts fruit while speaking. No camera movement.' }
+
+  it('strips the preset handheld/movement tokens when static is requested', () => {
+    const out = compileVideoPrompt(staticSpec)
+    expect(out).not.toMatch(/clean handheld/i)
+    expect(out).not.toMatch(/motion blur from handheld movement/i)
+  })
+  it('adds a strong LOCKED-tripod override (recency beats the leading preset)', () => {
+    const out = compileVideoPrompt(staticSpec)
+    expect(out).toMatch(/LOCKED on a tripod/i)
+    expect(out).toMatch(/no pan/i)
+  })
+  it('does NOT inject motionRealism handheld phrasing under static', () => {
+    const out = compileVideoPrompt(staticSpec)
+    expect(out).not.toMatch(/motion blur as the subject/i)
+  })
+  it('leaves handheld realism intact when NOT static', () => {
+    const out = compileVideoPrompt({ camera: 'iphone_15_clean', ar: '9:16', action: 'Emma walks and talks to camera' })
+    expect(out).not.toMatch(/LOCKED on a tripod/i)
+    expect(out).toMatch(/clean handheld/i) // preset kept
+  })
+})
+
 describe('motionRealismFor (camera-aware)', () => {
   it('phone → handheld blur + secondary motion', () => {
     expect(motionRealismFor('she speaks to camera', 'phone')).toMatch(/motion blur/i)
