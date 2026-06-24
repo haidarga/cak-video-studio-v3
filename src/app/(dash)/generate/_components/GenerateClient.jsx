@@ -761,7 +761,21 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       const adhocStyleUrls = styleRefs.map((r) => r.fal_url).filter(Boolean)
       const cam = getCameraPreset(globalConfig.cameraPreset || DEFAULT_CAMERA, userCameraPresets)
       const presetStyleUrls = Array.isArray(cam?.style_ref_urls) ? cam.style_ref_urls : []
-      const styleUrls = Array.from(new Set([...adhocStyleUrls, ...presetStyleUrls]))
+      let styleUrls = Array.from(new Set([...adhocStyleUrls, ...presetStyleUrls]))
+      // IDENTITY GUARD (critical — "kok wajahnya berubah?"): pixel-locking EDIT
+      // models (gpt-image-2/edit, grok-imagine edit, nano-banana edit) reproduce
+      // EVERY input image. A style/mood-board ref that contains a PERSON bleeds
+      // that face into the output and CHANGES the character. The text "do NOT
+      // copy faces from style refs" is way too weak to stop an edit model. So
+      // when there's a character ref to protect AND the model is edit/pixel-lock,
+      // DROP the style-ref IMAGES entirely — the preset's aesthetic still rides
+      // in via the L1 camera tokens (device/lighting/look), just without faces.
+      const isPixelLockEdit = /edit/i.test(globalConfig.imgModel || '')
+      const hasCharacterRef = selectedRefs.some((r) => r?.kind !== 'product' && r?.fal_url)
+      if (isPixelLockEdit && hasCharacterRef && styleUrls.length) {
+        console.warn(`[gen] dropping ${styleUrls.length} style-ref image(s) for edit model "${globalConfig.imgModel}" to protect character identity (style still applied via camera preset tokens)`)
+        styleUrls = []
+      }
       // ORDER MATTERS: style refs go LAST so the compiler's L8b "the last N
       // images are style references" claim is literally true to the model.
       const refUrls = [...characterProductUrls, ...styleUrls]
@@ -926,7 +940,17 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
           ? cleanProductBg(r.fal_url, null, (m, i) => falRun(m, i, { workspaceId }))
           : Promise.resolve(r.fal_url)
       ))).filter(Boolean)
-      const styleUrls = filteredStyle.map((r) => r.fal_url).filter(Boolean)
+      let styleUrls = filteredStyle.map((r) => r.fal_url).filter(Boolean)
+      // IDENTITY GUARD (same as image path): reference-to-video models reproduce
+      // every ref image, so a style ref containing a person bleeds that face into
+      // the video. Drop style-ref images when a character ref is present + this is
+      // a ref-to-video gen — keep only the real character/product refs.
+      const hasCharacterRefVid = filteredSelected.some((r) => r?.kind !== 'product' && r?.fal_url)
+      const isRefToVideoFinal = /reference-to-video|ref-to-video/.test(vidModel || '')
+      if (isRefToVideoFinal && hasCharacterRefVid && styleUrls.length) {
+        console.warn(`[gen] dropping ${styleUrls.length} style-ref image(s) for ref-to-video model "${vidModel}" to protect character identity`)
+        styleUrls = []
+      }
       const refUrls = [...characterProductUrls, ...styleUrls]
       // Direct mode REQUIRES refs (there's no source image to fall back on).
       // Guard early with a clear error so user knows to upload refs first.
