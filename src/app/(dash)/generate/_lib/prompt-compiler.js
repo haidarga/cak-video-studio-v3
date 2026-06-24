@@ -100,6 +100,16 @@ export const CONTRADICTION_RULES = [
     match: /IGNORE the outfit shown in (any |the )?reference photo[^.]*\./gi,
     conflicts_with: ['wardrobeOverride:empty'],
   },
+  // Candid "off-center / imperfect composition" preset tokens DIRECTLY fight an
+  // explicit front-facing / centered request from the naskah ("tampak depan",
+  // "facing camera"). When the shot wants the subject squared to the lens, drop
+  // the off-axis tokens and inject the centered framing as the replacement.
+  {
+    name: 'off-center vs front-facing',
+    match: /(candid off-center framing|off-center framing|off-centre framing|imperfect natural composition|candid off-center|off-center composition)/gi,
+    conflicts_with: ['frontFacing=true'],
+    inject: 'subject centered and squared to the camera, face and torso toward the lens, front view',
+  },
 ]
 
 function ruleTriggered(rule, ctx) {
@@ -109,6 +119,7 @@ function ruleTriggered(rule, ctx) {
     if (c === 'continuousShot=true') return ctx.continuousShot
     if (c === 'wardrobeOverride:empty') return !ctx.wardrobe
     if (c === 'refs:empty') return !ctx.refsCount
+    if (c === 'frontFacing=true') return ctx.frontFacing
     if (c.startsWith('camera:')) return ctx.cameraId === c.slice(7)
     if (c.startsWith('ar:')) return ctx.ar === c.slice(3)
     return false
@@ -248,7 +259,12 @@ export function compileImagePrompt(spec) {
   } = spec
 
   const cam = getCameraPreset(camera, userPresets)
-  const ctx = { cameraId: cam.id, ar, skipProduct, continuousShot, refsCount, wardrobe: !!wardrobe, media: 'image' }
+  // Front-facing intent: the naskah asked the subject to face the camera / be
+  // shown front-on. This must override the candid "off-center" preset bias AND
+  // the "Avoid: posed/centered/symmetrical" negatives (which otherwise force the
+  // model to turn the subject sideways). Detected from the action/image_prompt.
+  const frontFacing = /\bfacing (the |straight )?camer|front[-\s]?view|front[-\s]?facing|looking (up |straight |directly )?(in|at|to|into) (the )?camera|eye contact|menghadap (ke )?kamera|hadap (ke )?depan|tampak depan|madep depan|straight-on view/i.test(String(action || ''))
+  const ctx = { cameraId: cam.id, ar, skipProduct, continuousShot, refsCount, wardrobe: !!wardrobe, media: 'image', frontFacing }
 
   const L1_camera = cam.tokens?.join(', ') || ''
   const L5b_camera_echo = cam.tokens?.length
@@ -285,7 +301,13 @@ export function compileImagePrompt(spec) {
   const L9_quality = pickQuality(cam, 'image', skipProduct, environment)
   // Anti-text terms appended when "No text" is on — stops the FIRST FRAME from
   // carrying gibberish text/signage that image-to-video would then animate.
-  const negTerms = cam.negatives?.length ? cam.negatives.slice() : []
+  let negTerms = cam.negatives?.length ? cam.negatives.slice() : []
+  // When the shot is explicitly front-facing, DROP the preset negatives that ban
+  // centered/posed/symmetrical framing — otherwise "Avoid: perfectly centered,
+  // symmetrical framing, posed" forces the model to render the subject sideways
+  // even though the prompt says "front view". (Negatives bypass the sanitizer,
+  // so they have to be filtered here directly.)
+  if (frontFacing) negTerms = negTerms.filter((t) => !/perfectly centered|symmetric|(^|\s)posed(\s|$)|off-cent(er|re)|centered framing/i.test(t))
   if (skipOnscreen) negTerms.push('on-screen text', 'captions', 'subtitles', 'watermark', 'logos', 'letters', 'written words', 'gibberish text', 'signage')
   const L10_negatives = negTerms.length ? `Avoid: ${negTerms.join(', ')}.` : ''
 
