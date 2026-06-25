@@ -272,16 +272,40 @@ function defaultSettings(platform, opts = {}) {
 }
 
 // ── Create post ─────────────────────────────────────────────────────
-export async function createPostizPost({ creds, channelId, content, mediaUrl, scheduledFor, platform, tiktokAutoAddMusic }) {
+export async function createPostizPost({ creds, channelId, channelLabel, content, mediaUrl, scheduledFor, platform, tiktokAutoAddMusic }) {
   if (!channelId) throw new Error('channelId kosong — persona belum link ke Postiz channel')
   normCreds(creds) // throws if missing — fail fast before downloading media
 
+  // CHANNEL DRIFT GUARD (critical — "kok postingan Rio nyasar ke akun Ben?"):
+  // Postiz reissues integration ids when a channel is reconnected. A stale id
+  // stored on the persona no longer exists in Postiz — and self-hosted Postiz,
+  // given an unknown integration id, silently routes the post to the account's
+  // FALLBACK integration (another persona's channel). So we MUST verify the id
+  // against the live integration list before posting. If the id is gone, try to
+  // self-heal by matching the bound channel username/name; if that fails too,
+  // FAIL CLOSED — never let content land on the wrong account.
+  let liveChannels = []
+  try { liveChannels = await fetchPostizChannels(creds) } catch (e) { /* network down — skip validation rather than block a good post */ }
+  if (liveChannels.length) {
+    let match = liveChannels.find((c) => String(c.id) === String(channelId))
+    if (!match && channelLabel) {
+      const want = String(channelLabel).toLowerCase().replace(/^@/, '').trim()
+      match = liveChannels.find((c) =>
+        [c.username, c.name].some((v) => String(v || '').toLowerCase().replace(/^@/, '').trim() === want))
+      if (match) {
+        console.warn(`[postiz] channel id drift HEALED: "${channelId}" → "${match.id}" via label "${channelLabel}"`)
+        channelId = String(match.id)
+        if (!platform || platform === 'unknown') platform = match.platform || platform
+      }
+    }
+    if (!match) {
+      throw new Error(`Channel "${channelLabel || channelId}" gak ketemu di Postiz (channel ID drift / channel ke-disconnect). Klik 🔄 Sync Channels di /posting lalu re-link persona ke channel yang bener — post DIBATALIN biar gak nyasar ke akun lain.`)
+    }
+  }
+
   if (!platform) {
-    try {
-      const channels = await fetchPostizChannels(creds)
-      const ch = channels.find((c) => String(c.id) === String(channelId))
-      if (ch) platform = ch.platform || ch.raw?.providerIdentifier || ''
-    } catch (e) { /* ignore — fall through */ }
+    const ch = liveChannels.find((c) => String(c.id) === String(channelId))
+    if (ch) platform = ch.platform || ch.raw?.providerIdentifier || ''
   }
   // Authoritative fallback — hit the integration directly for its real
   // providerIdentifier. Without a resolved platform, defaultSettings() emits a
