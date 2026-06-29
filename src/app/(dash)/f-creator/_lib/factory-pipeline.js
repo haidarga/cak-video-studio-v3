@@ -65,6 +65,7 @@ function uid() { return Math.random().toString(36).slice(2, 10) }
 const R2V_TO_I2V = {
   'xai/grok-imagine-video/reference-to-video': 'xai/grok-imagine-video/image-to-video',
   'bytedance/seedance-2.0/fast/reference-to-video': 'bytedance/seedance-2.0/fast/image-to-video',
+  'bytedance/seedance-2.0/mini/reference-to-video': 'bytedance/seedance-2.0/mini/image-to-video',
   'alibaba/happy-horse/reference-to-video': 'alibaba/happy-horse/image-to-video',
   'fal-ai/kling-video/v2.5-turbo/pro/ref-to-video': 'fal-ai/kling-video/v3/standard/image-to-video',
   'fal-ai/bytedance/seedance/v1/lite/reference-to-video': 'fal-ai/bytedance/seedance/v1/lite/image-to-video',
@@ -73,6 +74,7 @@ const I2V_TO_R2V = {
   'xai/grok-imagine-video/image-to-video': 'xai/grok-imagine-video/reference-to-video',
   'xai/grok-imagine-video/v1.5/image-to-video': 'xai/grok-imagine-video/reference-to-video',
   'bytedance/seedance-2.0/fast/image-to-video': 'bytedance/seedance-2.0/fast/reference-to-video',
+  'bytedance/seedance-2.0/mini/image-to-video': 'bytedance/seedance-2.0/mini/reference-to-video',
   'alibaba/happy-horse/image-to-video': 'alibaba/happy-horse/reference-to-video',
   'fal-ai/kling-video/v3/standard/image-to-video': 'fal-ai/kling-video/v2.5-turbo/pro/ref-to-video',
   'fal-ai/kling-video/v3/pro/image-to-video': 'fal-ai/kling-video/v2.5-turbo/pro/ref-to-video',

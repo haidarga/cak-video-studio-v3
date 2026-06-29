@@ -459,6 +459,7 @@ const TOOLS = {
           // Image-to-video — pick i2v variant of the configured family if possible
           const i2vMap = {
             'bytedance/seedance-2.0/fast/reference-to-video': 'bytedance/seedance-2.0/fast/image-to-video',
+            'bytedance/seedance-2.0/mini/reference-to-video': 'bytedance/seedance-2.0/mini/image-to-video',
             'fal-ai/kling-video/v3/reference-to-video': 'fal-ai/kling-video/v3/image-to-video',
             'alibaba/happy-horse/reference-to-video': 'alibaba/happy-horse/image-to-video',
             'xai/grok-imagine-video/reference-to-video': 'xai/grok-imagine-video/image-to-video',
@@ -481,6 +482,7 @@ const TOOLS = {
             'fal-ai/kling-video/v3/standard/image-to-video': 'fal-ai/kling-video/v3/reference-to-video',
             'fal-ai/kling-video/v3/pro/image-to-video': 'fal-ai/kling-video/v3/reference-to-video',
             'bytedance/seedance-2.0/fast/image-to-video': 'bytedance/seedance-2.0/fast/reference-to-video',
+            'bytedance/seedance-2.0/mini/image-to-video': 'bytedance/seedance-2.0/mini/reference-to-video',
             'alibaba/happy-horse/image-to-video': 'alibaba/happy-horse/reference-to-video',
             'xai/grok-imagine-video/image-to-video': 'xai/grok-imagine-video/reference-to-video',
           }
@@ -497,6 +499,7 @@ const TOOLS = {
         const t2vMap = {
           'xai/grok-imagine-video/reference-to-video': 'xai/grok-imagine-video/text-to-video',
           'bytedance/seedance-2.0/fast/reference-to-video': 'bytedance/seedance-2.0/text-to-video',
+          'bytedance/seedance-2.0/mini/reference-to-video': 'bytedance/seedance-2.0/text-to-video',
           'alibaba/happy-horse/reference-to-video': 'alibaba/happy-horse/text-to-video',
           'fal-ai/kling-video/v3/reference-to-video': 'fal-ai/kling-video/v3/standard/text-to-video',
           'fal-ai/kling-video/v2.5-turbo/pro/ref-to-video': 'fal-ai/kling-video/v3/standard/text-to-video',
@@ -964,6 +967,7 @@ ${html.slice(0, 22000)}`
         if (!videoModel) {
           const i2vMap = {
             'bytedance/seedance-2.0/fast/reference-to-video': 'bytedance/seedance-2.0/fast/image-to-video',
+            'bytedance/seedance-2.0/mini/reference-to-video': 'bytedance/seedance-2.0/mini/image-to-video',
             'fal-ai/kling-video/v3/reference-to-video': 'fal-ai/kling-video/v3/image-to-video',
             'alibaba/happy-horse/reference-to-video': 'alibaba/happy-horse/image-to-video',
           }

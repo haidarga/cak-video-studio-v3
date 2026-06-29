@@ -43,6 +43,8 @@ const ALIAS_MAP = {
   'bytedance/seedance-2.0/fast/text-to-video': 'fal-ai/seedance-2/fast/text-to-video',
   'bytedance/seedance-2.0/pro/reference-to-video': 'fal-ai/seedance-2/pro/reference-to-video',
   'bytedance/seedance-2.0/pro/image-to-video': 'fal-ai/seedance-2/pro/image-to-video',
+  'bytedance/seedance-2.0/mini/image-to-video': 'fal-ai/seedance-2/mini/image-to-video',
+  'bytedance/seedance-2.0/mini/reference-to-video': 'fal-ai/seedance-2/mini/reference-to-video',
 
   // ── xAI Grok Imagine Video (verified — drops middle "grok-imagine-video") ──
   // Both i2v and r2v variants share this exact pattern. Dashboard endpoint

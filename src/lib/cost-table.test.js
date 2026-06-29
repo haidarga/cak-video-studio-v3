@@ -15,6 +15,7 @@ describe('videoCost', () => {
   it('multiplies per-second rate by duration', () => {
     expect(videoCost('xai/grok-imagine-video/text-to-video', 5)).toBeCloseTo(0.35, 5)
     expect(videoCost('bytedance/seedance-2.0/fast/reference-to-video', 10)).toBeCloseTo(2.4, 5)
+    expect(videoCost('bytedance/seedance-2.0/mini/image-to-video', 10)).toBeCloseTo(1.55, 5)
   })
   it('defaults duration to 5s', () => {
     expect(videoCost('xai/grok-imagine-video/text-to-video')).toBeCloseTo(0.35, 5)

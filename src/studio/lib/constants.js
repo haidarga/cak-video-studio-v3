@@ -29,8 +29,10 @@ export const VIDEO_MODELS = [
   { v: 'fal-ai/kling-video/o3/standard/reference-to-video', l: '🎭 Kling O3 Ref-to-Video — ~$0.11/dtk (multi-char)' },
   { v: 'fal-ai/kling-video/v3/standard/image-to-video', l: 'Kling v3 Standard — ~$0.08/dtk 💰 termurah' },
   { v: 'alibaba/happy-horse/image-to-video', l: 'Happy Horse 1.0 — ~$0.14/dtk' },
+  { v: 'bytedance/seedance-2.0/mini/image-to-video', l: 'Seedance 2 Mini — ~$0.15/dtk 720p (faster, audio) 💰' },
   { v: 'bytedance/seedance-2.0/fast/image-to-video', l: 'Seedance 2 Fast — ~$0.24/dtk (audio included)' },
   { v: 'alibaba/happy-horse/reference-to-video', l: '🎭 Happy Horse Ref-to-Video — ~$0.14/dtk' },
+  { v: 'bytedance/seedance-2.0/mini/reference-to-video', l: '🎭 Seedance 2 Mini Ref-to-Video — ~$0.15/dtk 720p (faster) 💰' },
   { v: 'bytedance/seedance-2.0/fast/reference-to-video', l: '🎭 Seedance 2 Fast Ref-to-Video — ~$0.24/dtk' },
 ]
 

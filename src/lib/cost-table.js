@@ -47,6 +47,8 @@ export const VIDEO_COSTS_PER_SECOND = {
   'alibaba/happy-horse/reference-to-video': 0.14,
   'fal-ai/bytedance/seedance/v1/lite/reference-to-video': 0.16,
   'fal-ai/bytedance/seedance/v1/lite/image-to-video': 0.16,
+  'bytedance/seedance-2.0/mini/image-to-video': 0.155,      // 720p $0.1547/s (480p $0.0721/s)
+  'bytedance/seedance-2.0/mini/reference-to-video': 0.155,  // 720p $0.1547/s
   'bytedance/seedance-2.0/fast/image-to-video': 0.24,
   'bytedance/seedance-2.0/fast/reference-to-video': 0.24,
   'fal-ai/bytedance/seedance/v1/pro/image-to-video': 0.25,

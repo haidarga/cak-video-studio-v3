@@ -554,6 +554,7 @@ export function toRefToVideoModel(vidModel) {
   if (m.includes('grok')) return 'xai/grok-imagine-video/reference-to-video'
   if (m.includes('kling')) return 'fal-ai/kling-video/v2.5-turbo/pro/ref-to-video'
   if (m.includes('happy-horse')) return 'alibaba/happy-horse/reference-to-video'
+  if (m.includes('seedance-2.0/mini')) return 'bytedance/seedance-2.0/mini/reference-to-video'
   if (m.includes('seedance-2')) return 'bytedance/seedance-2.0/fast/reference-to-video'
   if (m.includes('seedance')) return 'fal-ai/bytedance/seedance/v1/lite/reference-to-video'
   return 'bytedance/seedance-2.0/fast/reference-to-video' // safe default for unknown families
@@ -569,6 +570,7 @@ export function toImageToVideoModel(vidModel) {
   if (m.includes('grok')) return 'xai/grok-imagine-video/image-to-video'
   if (m.includes('kling')) return 'fal-ai/kling-video/v3/standard/image-to-video'
   if (m.includes('happy-horse')) return 'alibaba/happy-horse/image-to-video'
+  if (m.includes('seedance-2.0/mini')) return 'bytedance/seedance-2.0/mini/image-to-video'
   if (m.includes('seedance')) return 'bytedance/seedance-2.0/fast/image-to-video'
   return 'bytedance/seedance-2.0/fast/image-to-video' // safe default
 }
@@ -588,6 +590,8 @@ export const VIDEO_MODELS = [
   { v: 'fal-ai/veo3.1/fast/image-to-video', l: '🎬 Veo 3.1 Fast — ~$0.15/dtk (Google, native audio, 4/6/8s)' },
   { v: 'fal-ai/veo3.1/fast/reference-to-video', l: '🎭 Veo 3.1 Fast Ref-to-Video — ~$0.15/dtk (multi-ref, native audio, 8s)' },
   { v: 'fal-ai/bytedance/seedance/v1/lite/reference-to-video', l: '🎭 Seedance Lite Ref-to-Video — ~$0.16/dtk' },
+  { v: 'bytedance/seedance-2.0/mini/image-to-video', l: 'Seedance 2 Mini — ~$0.15/dtk 720p (faster, audio) 💰' },
+  { v: 'bytedance/seedance-2.0/mini/reference-to-video', l: '🎭 Seedance 2 Mini Ref-to-Video — ~$0.15/dtk 720p (faster) 💰' },
   { v: 'bytedance/seedance-2.0/fast/image-to-video', l: 'Seedance 2 Fast — ~$0.24/dtk' },
   { v: 'bytedance/seedance-2.0/fast/reference-to-video', l: '🎭 Seedance 2 Fast Ref-to-Video — ~$0.24/dtk' },
   { v: 'fal-ai/kling-video/v3/pro/image-to-video', l: 'Kling v3 Pro — ~$0.28/dtk (best quality)' },
