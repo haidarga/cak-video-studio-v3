@@ -131,8 +131,24 @@ export async function voiceChange(apiKey, voiceId, audioBuf, opts = {}) {
 // Falls back to fetching the video directly if the user passes an audio URL.
 export async function extractAudio(videoUrl) {
   const v2Base = process.env.V2_BACKEND_URL || 'https://cahmul2-cak-video-studio-v2.hf.space'
-  const r = await fetch(`${v2Base}/api/extract-audio?url=${encodeURIComponent(videoUrl)}`)
-  if (!r.ok) throw new Error(`extract-audio ${r.status}: ${(await r.text()).slice(0, 200)}`)
+  let host = videoUrl
+  try { host = new URL(videoUrl).host } catch {}
+  let r
+  try {
+    r = await fetch(`${v2Base}/api/extract-audio?url=${encodeURIComponent(videoUrl)}`)
+  } catch (e) {
+    throw new Error(`extract-audio: gak bisa hubungi v2 backend (${v2Base}) — ${e.message}`)
+  }
+  if (!r.ok) {
+    const body = (await r.text()).slice(0, 200)
+    // v2 returns {"error":"fetch failed"} (connection-level) when IT can't
+    // download the video URL — link mati/expired (fal.media URLs are temporary)
+    // or the host isn't reachable from the HF Space. Make that actionable.
+    if (/fetch failed/i.test(body)) {
+      throw new Error(`Video gak bisa di-download dari "${host}" — kemungkinan link-nya udah expired (URL fal.media itu sementara) atau host-nya gak ke-reach dari server. Re-generate video-nya dulu biar dapet URL fresh. (url: ${videoUrl.slice(0, 140)})`)
+    }
+    throw new Error(`extract-audio ${r.status} (host ${host}): ${body}`)
+  }
   return await r.arrayBuffer()
 }
 
