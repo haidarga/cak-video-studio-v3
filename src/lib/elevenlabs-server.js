@@ -125,6 +125,30 @@ export async function voiceChange(apiKey, voiceId, audioBuf, opts = {}) {
   return await r.arrayBuffer()
 }
 
+// ── Re-host a video onto fal.media storage ──────────────────────────
+// WHY: the v2 HF Space's /api/extract-audio downloads the video URL server-side,
+// but the Space CANNOT reach our R2 public host (pub-*.r2.dev gets rate-limited /
+// blocked from datacenter fleets — the same failure fal's own downloader hits;
+// see god-mode mirrorToFalStorage). fal.media IS reachable from the Space
+// (verified). So for any NON-fal URL we download it here on Vercel (which CAN
+// reach R2) and re-upload to fal storage, then hand the Space a fal.media URL it
+// can actually fetch. Returns a fal.media URL.
+//
+// Self-contained on purpose — the voice path must not import god-mode builders
+// (keep god-mode / generate / voice surfaces decoupled).
+export async function rehostToFal(url, falKey) {
+  if (!falKey) throw new Error('FAL_KEY belum di-set — gak bisa re-host video buat extract audio')
+  let res
+  try { res = await fetch(url) } catch (e) { throw new Error(`re-host: gak bisa download video — ${e.message} (url: ${url.slice(0, 120)})`) }
+  if (!res.ok) throw new Error(`re-host: download video ${res.status} (url: ${url.slice(0, 120)})`)
+  const blob = await res.blob()
+  const { fal } = await import('@fal-ai/client')
+  fal.config({ credentials: falKey })
+  const falUrl = await fal.storage.upload(blob)
+  if (!falUrl) throw new Error('re-host: fal.storage.upload balik URL kosong')
+  return falUrl
+}
+
 // ── Extract audio from a video URL ──
 // v3 (Vercel) doesn't have ffmpeg. v2 HF Space does — and v2 already exposes
 // /api/extract-audio with CORS to vercel.app. We just proxy through it.

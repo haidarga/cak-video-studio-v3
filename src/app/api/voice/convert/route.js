@@ -1,9 +1,13 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { voiceChange, extractAudio, getWorkspaceKey } from '@/lib/elevenlabs-server'
+import { voiceChange, extractAudio, getWorkspaceKey, rehostToFal } from '@/lib/elevenlabs-server'
 import { getActiveWorkspace } from '@/lib/workspace'
 import { assertBudget } from '@/lib/budget-gate'
 import { uploadToR2 } from '@/lib/r2-client'
+
+// Re-host (download from R2 + upload to fal) + ffmpeg extract + S2S + upload can
+// take a while on a multi-MB clip — give it room so it doesn't 504 mid-convert.
+export const maxDuration = 120
 
 // Rough ElevenLabs Speech-to-Speech cost per call. Actual cost depends on
 // minutes of audio; this is a conservative estimate for one shot (~10s) used
@@ -30,8 +34,17 @@ export async function POST(req) {
     const gate = await assertBudget(supabase, wsId, { projectedUsd: VOICE_CONVERT_USD })
     if (!gate.ok) return NextResponse.json({ ok: false, error: gate.reason, gate }, { status: 402 })
 
-    // 1. Extract audio (server ffmpeg on v2 HF Space — Vercel doesn't have ffmpeg)
-    const audioBuf = await extractAudio(video_url)
+    // 1. Extract audio (server ffmpeg on v2 HF Space — Vercel doesn't have ffmpeg).
+    // The Space can't reach our R2 host (pub-*.r2.dev is blocked from datacenter
+    // fleets), so any non-fal video is re-hosted to fal.media first (the Space
+    // CAN fetch fal.media). fal-sourced videos are passed straight through.
+    let srcUrl = video_url
+    if (!/\.fal\.media\//i.test(video_url)) {
+      const { data: ws } = await supabase.from('workspaces').select('fal_key').eq('id', wsId).maybeSingle()
+      const falKey = ws?.fal_key || process.env.FAL_KEY || ''
+      srcUrl = await rehostToFal(video_url, falKey)
+    }
+    const audioBuf = await extractAudio(srcUrl)
     // 2. Speech-to-Speech
     const convertedBuf = await voiceChange(key, voice_id, new Uint8Array(audioBuf))
     // 3. Upload to R2 (cheap egress for cloned-voice mp3s)
