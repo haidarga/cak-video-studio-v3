@@ -14,6 +14,7 @@ import { imageCost, videoCost, fmtCost } from '@/lib/cost-table'
 import { compileImagePrompt, compileVideoPrompt } from '../_lib/prompt-compiler'
 import { planToJobs, buildConcatProject } from '@/lib/long-form'
 import { isContentRefusal, nextVideoModel } from '@/lib/model-fallback'
+import { normalizeToGrid } from '@/lib/storyboard-grid'
 import { cleanProductBg } from '@/lib/bg-removal'
 import { CAMERA_PRESETS, listAllPresets, DEFAULT_CAMERA, getCameraPreset } from '@/lib/camera-presets'
 
@@ -657,12 +658,10 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       let shotsInit
       if (globalConfig.mode === 'storyboard') {
         const rawPanels = data.parsed.panels || []
-        // Parser now picks the panel count (4/6/9) from duration + dialog/action
-        // balance instead of always forcing 9. Defensive snap: if it returns an
-        // off-grid count (5/7/8), trim DOWN to the nearest clean grid so the
-        // composite never has blank cells. 4→2x2, 6→2x3, 9→3x3.
-        const cleanCount = rawPanels.length >= 9 ? 9 : rawPanels.length >= 6 ? 6 : rawPanels.length >= 4 ? 4 : rawPanels.length
-        const panels = rawPanels.slice(0, cleanCount)
+        // Snap to a clean grid (4/6/9) WITHOUT dropping any beat — see
+        // normalizeToGrid(). Old code sliced DOWN (5→4) and silently deleted the
+        // final CTA panel; this rounds UP and splits the longest beat instead.
+        const panels = normalizeToGrid(rawPanels)
         shotsInit = [{
           id: `${persona.id}-storyboard-${Date.now()}`,
           raw: {
