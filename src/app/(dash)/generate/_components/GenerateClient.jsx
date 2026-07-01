@@ -1405,6 +1405,9 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
               refLabels: selectedRefs.map((rf) => rf.label).filter(Boolean),
               brand: activeBrand ? { notes: activeBrand.notes, config: activeBrand.config } : null,
               constraints: { continuousShot: !!globalConfig.continuousShot, skipDialog: !!globalConfig.skipDialog, skipOnscreen: !!globalConfig.skipOnscreen, skipProduct: !!globalConfig.skipProduct },
+              // Without this the route defaults maxSegmentDuration to 8s and
+              // clamps this segment's panels to 8 instead of the model cap (15).
+              maxSegmentDuration: maxDur,
             }),
           })
           const j = await r.json()

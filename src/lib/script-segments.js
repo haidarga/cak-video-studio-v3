@@ -13,7 +13,7 @@
 
 // Matches a timestamp range in either "0-4s" / "15-18 s" form or "0:00-0:15"
 // mm:ss form, with hyphen / en-dash / em-dash separators.
-const TS = /(\d{1,2}):(\d{2})\s*[-–—]\s*(\d{1,2}):(\d{2})|(\d+)\s*[-–—]\s*(\d+)\s*s\b/i
+const TS = /(\d{1,2}):(\d{2})\s*[-–—]\s*(\d{1,2}):(\d{2})|(\d+)\s*s?\s*[-–—]\s*(\d+)\s*s\b/i
 
 function parseRange(line) {
   const m = String(line).match(TS)
@@ -94,20 +94,22 @@ export function clampPanelsToMaxSeg(panels, maxSeg) {
   const secs = list.map((p) => Math.max(1, parseInt(p?.seconds) || 1))
   const total = secs.reduce((a, b) => a + b, 0)
   if (total <= cap) return list.map((p, i) => ({ ...p, seconds: secs[i] }))
+  // More panels than the cap has whole seconds → each beat can only get the 1s
+  // floor (a video beat can't be < 1s), so the sum is forced to list.length and
+  // CANNOT equal cap. The real fix for this is fewer panels (normalizeToGrid's
+  // job, not ours); pin each to 1s and warn rather than spin the trim loop.
+  if (list.length >= cap) {
+    console.warn(`[clampPanels] ${list.length} panels but clip cap is only ${cap}s — each pinned to 1s (total ${list.length}s > cap). Use fewer panels for this model.`)
+    return list.map((p) => ({ ...p, seconds: 1 }))
+  }
+  // list.length < cap → an all-1s floor sums to < cap, so leftover is always >= 0
+  // here and the result sums to EXACTLY cap.
   const scaled = secs.map((s) => Math.max(1, Math.floor((s * cap) / total)))
   const byBiggest = secs.map((s, i) => [s, i]).sort((a, b) => b[0] - a[0] || a[1] - b[1]).map((x) => x[1])
   let leftover = cap - scaled.reduce((a, b) => a + b, 0)
   let k = 0
-  // add the remainder to the largest-original panels (keeps proportions)
-  while (leftover > 0 && byBiggest.length) { scaled[byBiggest[k % byBiggest.length]] += 1; leftover--; k++ }
-  // if the min-1 floor overshot the cap, trim from the smallest (never below 1)
-  const bySmallest = [...byBiggest].reverse()
-  k = 0
   let guard = 0
-  while (leftover < 0 && bySmallest.length && guard < 10000) {
-    const idx = bySmallest[k % bySmallest.length]
-    if (scaled[idx] > 1) { scaled[idx] -= 1; leftover++ }
-    k++; guard++
-  }
+  // add the remainder to the largest-original panels (keeps proportions)
+  while (leftover > 0 && byBiggest.length && guard < 10000) { scaled[byBiggest[k % byBiggest.length]] += 1; leftover--; k++; guard++ }
   return list.map((p, i) => ({ ...p, seconds: scaled[i] }))
 }

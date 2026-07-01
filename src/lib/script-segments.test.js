@@ -146,4 +146,19 @@ describe('clampPanelsToMaxSeg — the guarantee that kills the 19s bug', () => {
     const out = clampPanelsToMaxSeg([{ n: 1 }, { n: 2, seconds: 'x' }], 15)
     out.forEach((p) => expect(p.seconds).toBeGreaterThanOrEqual(1))
   })
+  it('panels count > cap seconds: pins each to 1s (count is the real problem, not this fn)', () => {
+    // 9 panels on an 8s model cap — cannot fit 9 beats >=1s into 8s.
+    const panels = Array.from({ length: 9 }, (_, i) => ({ n: i + 1, seconds: 2 }))
+    const out = clampPanelsToMaxSeg(panels, 8)
+    expect(out.length).toBe(9)                 // never drops a panel
+    expect(out.every((p) => p.seconds === 1)).toBe(true)
+    expect(out.every((p) => Number.isInteger(p.seconds))).toBe(true)
+  })
+})
+
+describe('parseSceneTimestamps — extra timestamp shapes', () => {
+  it('matches "(5s-10s)" style with a trailing s on the start bound too', () => {
+    const s = parseSceneTimestamps('Scene X (5s-10s)\nbody line')
+    expect(s.map((x) => [x.start, x.end])).toEqual([[5, 10]])
+  })
 })
