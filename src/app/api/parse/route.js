@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { callGeminiJSON } from '@/lib/gemini-server'
 import { getActiveWorkspace } from '@/lib/workspace'
+import { clampPanelsToMaxSeg } from '@/lib/script-segments'
 
 export async function POST(req) {
   const { naskah, lang = 'Indonesian', mode = 'shots', ar = '9:16', refLabels = [], brand = null, constraints = {}, shotCount = null, continuation = null, maxSegmentDuration = 8 } = await req.json()
@@ -197,6 +198,13 @@ ${naskah}`
       temperature: 0.7,
       maxOutputTokens: 16384,
     })
+    // DETERMINISTIC duration guard — the LLM does not reliably obey "sum to
+    // <=${maxSeg}s", so enforce it in code. A single clip physically cannot
+    // exceed the model cap; clamp here so a 19s/6-panel storyboard on a 15s
+    // model becomes exactly 15s, proportions kept, no panel dropped.
+    if (isStory && Array.isArray(parsed?.panels) && parsed.panels.length) {
+      parsed.panels = clampPanelsToMaxSeg(parsed.panels, maxSeg)
+    }
     return NextResponse.json({ ok: true, parsed })
   } catch (e) {
     // Transient Gemini errors (overload, rate limit) return 200 with ok:false

@@ -15,6 +15,7 @@ import { compileImagePrompt, compileVideoPrompt } from '../_lib/prompt-compiler'
 import { planToJobs, buildConcatProject } from '@/lib/long-form'
 import { isContentRefusal, nextVideoModel } from '@/lib/model-fallback'
 import { normalizeToGrid } from '@/lib/storyboard-grid'
+import { parseSceneTimestamps, packScenesIntoSegments } from '@/lib/script-segments'
 import { cleanProductBg } from '@/lib/bg-removal'
 import { CAMERA_PRESETS, listAllPresets, DEFAULT_CAMERA, getCameraPreset } from '@/lib/camera-presets'
 
@@ -631,10 +632,21 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
     onPatch({ busy: true }); onErr('')
     try {
       const refLabels = selectedRefs.map((r) => r.label).filter(Boolean)
+      // DETERMINISTIC SEGMENTATION — if the naskah has explicit scene timestamps
+      // and is longer than one clip, split it in CODE (not via the LLM, which
+      // mis-counts) and storyboard ONLY segment 1. The rest is stashed on the
+      // shot so "Continue" pulls the exact next segment. Empty when the script
+      // has no timestamps or fits in one clip → normal single-parse behavior.
+      const segMaxSeg = getVideoMaxDuration(globalConfig.vidModel)
+      const lfSegments = globalConfig.mode === 'storyboard'
+        ? packScenesIntoSegments(parseSceneTimestamps(state.naskah), segMaxSeg)
+        : []
+      const isSegmented = lfSegments.length > 1
+      const naskahToSend = isSegmented ? lfSegments[0].text : state.naskah
       const res = await fetch('/api/parse', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          naskah: state.naskah, lang: globalConfig.lang, mode: globalConfig.mode, ar: globalConfig.ar,
+          naskah: naskahToSend, lang: globalConfig.lang, mode: globalConfig.mode, ar: globalConfig.ar,
           refLabels, brand: activeBrand ? { notes: activeBrand.notes, config: activeBrand.config } : null,
           // Tell the parser the chosen model's per-clip cap so storyboard total
           // never exceeds it (was making 20s panels for a 15s-cap model).
@@ -685,8 +697,14 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
             chars_in_shot: data.parsed.characters || [],
             duration: panels.reduce((sum, p) => sum + (parseInt(p.seconds) || 2), 0) || 15,
             shot_label: 'Storyboard 3×3',
+            // Deterministic continuation: full ordered segment texts + which one
+            // this storyboard IS. "Continue" reads these to gen the exact next
+            // segment (no LLM guessing / no repeat). Absent when not segmented.
+            ...(isSegmented ? { lf_segments: lfSegments.map((s) => s.text), lf_seg_index: 0, lf_total: lfSegments.length } : {}),
           },
-          label: `${persona.name} — Storyboard`,
+          label: isSegmented
+            ? `${persona.name} — Storyboard (bagian 1/${lfSegments.length})`
+            : `${persona.name} — Storyboard`,
           image: { status: 'idle' },
           video: { status: 'idle' },
           approved: false,
@@ -1369,7 +1387,30 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
       let contSeg = null
       const fullNaskah = (state.naskah || '').trim()
       const maxDur = getVideoMaxDuration(globalConfig.vidModel)
-      if (fullNaskah) {
+      // DETERMINISTIC next segment: if this storyboard was code-split from a
+      // timestamped naskah, gen the EXACT next segment text — no LLM guessing
+      // of "what's left", no repeat. Falls back to the covered-summary parse for
+      // scripts with no timestamps.
+      const segTexts = Array.isArray(prev.raw?.lf_segments) ? prev.raw.lf_segments : null
+      const curSegIdx = Number.isInteger(prev.raw?.lf_seg_index) ? prev.raw.lf_seg_index : 0
+      const nextSegIdx = curSegIdx + 1
+      const hasNextSeg = !!segTexts && nextSegIdx < segTexts.length
+      if (hasNextSeg) {
+        try {
+          patchShot(idx, { continuing: `Nyusun bagian ${nextSegIdx + 1}/${segTexts.length}...` })
+          const r = await fetch('/api/parse', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              naskah: segTexts[nextSegIdx], lang: globalConfig.lang, mode: globalConfig.mode, ar: globalConfig.ar,
+              refLabels: selectedRefs.map((rf) => rf.label).filter(Boolean),
+              brand: activeBrand ? { notes: activeBrand.notes, config: activeBrand.config } : null,
+              constraints: { continuousShot: !!globalConfig.continuousShot, skipDialog: !!globalConfig.skipDialog, skipOnscreen: !!globalConfig.skipOnscreen, skipProduct: !!globalConfig.skipProduct },
+            }),
+          })
+          const j = await r.json()
+          if (j.ok) contSeg = j.parsed
+        } catch { /* fall back to the manual hint below */ }
+      } else if (fullNaskah) {
         try {
           patchShot(idx, { continuing: 'Nyusun lanjutan dari naskah...' })
           const covered = state.shots.map((s, i) => {
@@ -1391,17 +1432,24 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
         } catch { /* fall back to the manual hint below */ }
       }
       const directSeg = contSeg?.shots?.[0] || null
+      // Grid-normalize continuation panels the same way the first parse does
+      // (4/6/9, never drop a beat); panels are already duration-clamped server-side.
+      const contPanels = isPrevStoryboard ? normalizeToGrid(contSeg?.panels || []) : []
+      const contDuration = contPanels.reduce((s, p) => s + (parseInt(p.seconds) || 2), 0) || Math.min(15, maxDur)
       const newShot = {
         id: `${persona.id}-cont-${Date.now()}`,
         raw: isPrevStoryboard
           ? {
               ...baseRaw,
-              panels: contSeg?.panels || [],
+              panels: contPanels,
               concept: toStr(contSeg?.concept) || '',
               environment: toStr(contSeg?.environment) || baseRaw.environment,
               wardrobe: toStr(contSeg?.wardrobe) || baseRaw.wardrobe,
               video_motion: toStr(contSeg?.video_motion) || motionHint,
-              duration: Math.min(15, maxDur),
+              duration: contDuration,
+              // carry the deterministic segment cursor forward so a 3rd/4th
+              // Continue keeps pulling the exact next chunk.
+              ...(hasNextSeg ? { lf_segments: segTexts, lf_seg_index: nextSegIdx, lf_total: segTexts.length } : {}),
             }
           : {
               ...baseRaw,
@@ -1409,7 +1457,9 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
               dialogue: toStr(directSeg?.dialogue) || '',
               duration: Math.min(maxDur, parseInt(directSeg?.duration) || prev.raw.duration || 5),
             },
-        label: `${prev.label} — Continuation`,
+        label: hasNextSeg
+          ? `${persona.name} — Storyboard (bagian ${nextSegIdx + 1}/${segTexts.length})`
+          : `${prev.label} — Continuation`,
         image: { status: 'idle' },
         video: { status: 'idle' },
         approved: false,
