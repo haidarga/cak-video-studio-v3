@@ -156,11 +156,13 @@ TASK: Convert this script into ${
 - transition (CRITICAL — FOLLOW THE NASKAH, never force): first segment = "start". For each later segment, "continuous" if it flows from the SAME shot/scene/action with NO visual cut (next clip starts exactly where the previous ended → seamless handoff); "cut" if the naskah moves to a NEW scene, angle, location, or b-roll (clean hard cut, generated fresh).
 - video_motion = a short timestamped beat timeline for THAT segment only.`
       : isStory
-      ? `ONE storyboard for the WHOLE script.
-- PANEL COUNT must be a CLEAN GRID: 4 (2x2), 6 (2x3), or 9 (3x3). Pick the SMALLEST clean count that gives EVERY beat of the script its own panel.
-- COVER EVERY BEAT — including the final beat / closing line the script actually ends on (often the most important). NEVER drop a beat to make the count fit the grid. If the script's natural beats don't land exactly on 4/6/9, SPLIT the longest beat into two panels to reach the next clean count — never delete one. (e.g. a 5-beat script → 6 panels, not 4.) Do NOT invent an extra product/CTA panel the script doesn't have.
-- DURATION (critical — this is the #1 complaint): if the script gives timestamps (e.g. "0:00–0:03", "0:11–0:15") or states a total (e.g. "15 detik"), the SUM of all panel.seconds MUST EQUAL that EXACT total, capped at ${maxSeg}s. Read the LAST timestamp as the intended total. If the script asks for MORE than ${maxSeg}s, scale every beat down proportionally so the sum is exactly ${maxSeg}s — still cover every beat, never drop. If no duration is stated, use ~2-4s per beat.
-- Per-panel seconds: 2-5s each. The SUM must obey the duration rule above — do NOT undershoot (an 11s storyboard for a 15s script is WRONG).`
+      ? `ONE storyboard = ONE video clip, and one clip can be AT MOST ${maxSeg}s long (the model physically cannot render more in a single clip).
+- PANEL COUNT must be a CLEAN GRID: 4 (2x2), 6 (2x3), or 9 (3x3) — the SMALLEST clean count that gives each beat you include its own panel. If the beats you include don't land on a clean count, SPLIT the longest one into two panels; never delete a beat to fit the grid. Do NOT invent an extra product/CTA panel the script doesn't have.
+- HOW MUCH OF THE SCRIPT TO COVER — read the script's timestamps / stated duration and decide:
+  • SCRIPT FITS IN ${maxSeg}s (its total is <= ${maxSeg}s): storyboard the ENTIRE script. Cover EVERY beat including the final closing / CTA line (often the most important — never drop it). The SUM of panel.seconds MUST EQUAL the script's stated total (a "15 detik" script sums to exactly 15). Do NOT undershoot — an 11s storyboard for a 15s script is WRONG.
+  • SCRIPT IS LONGER THAN ${maxSeg}s (e.g. a 30s script on a ${maxSeg}s model): storyboard ONLY the beats that fall inside the FIRST ${maxSeg}s of the script, IN ORDER, with panel.seconds summing to about ${maxSeg}s. Do NOT time-compress or cram the WHOLE script into ${maxSeg}s — the LATER beats are generated separately as a CONTINUATION clip. Stop at the natural beat boundary closest to ${maxSeg}s and leave the rest.
+  • CONTINUATION MODE is active (see the CONTINUATION MODE block above): storyboard ONLY the NEXT beats that come AFTER the already-covered ones, again capped to ${maxSeg}s. Do NOT restart, do NOT repeat any covered beat.
+- Per-panel seconds: 2-5s each.`
       : isDirect
         ? (shotCount
             ? `EXACTLY ${shotCount} DIRECT VIDEO shot${shotCount > 1 ? 's' : ''} (each 5-10s). Each shot is generated DIRECTLY from text + reference photos — no intermediate still frame.
