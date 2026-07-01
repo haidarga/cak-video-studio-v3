@@ -16,10 +16,13 @@ export async function POST(req) {
   const refHint = refLabels.length
     ? `\nAvailable reference labels (use exact names in chars_in_shot when applicable): ${refLabels.join(', ')}`
     : ''
-  // Skip brand block when user opts out of product placement — prevents
-  // Gemini from cramming product into CTA panel.
+  // Brand notes are TONE/ACCURACY context only — NOT a license to insert a
+  // product. Without the explicit guard below, "respect strictly" made Gemini
+  // cram the brand's product into a CTA panel even when the naskah never
+  // mentioned a product (e.g. a Golden Rama *travel* script sprouting a
+  // margarine shot). The naskah is authoritative for what appears on screen.
   const brandBlock = (brand?.notes && !constraints.skipProduct)
-    ? `\nBRAND KNOWLEDGE (respect strictly, never contradict):\n${brand.notes}`
+    ? `\nBRAND CONTEXT (for tone + factual accuracy ONLY — do NOT add any product, package, or brand item to the visuals unless the NASKAH itself explicitly calls for it):\n${brand.notes}`
     : ''
 
   // Build constraint hint block — user-explicit overrides take precedence over
@@ -107,6 +110,7 @@ export async function POST(req) {
     'NEVER describe faces in detail (eye color, exact features, hair texture). Character identity is locked by reference photos.',
     'EXPRESSION IS NOT IDENTITY — capture it vividly (do NOT strip it). Emotional expression, gaze direction, micro-expression and gesture (tired eyes, soft smile, surprised, regretful, mid-laugh, leaning in, hand to chin) are what make a shot EXPRESSIVE instead of generic/dead. ALWAYS include the shot\'s emotion + body language in image_prompt, matched to the dialogue/beat. Banning "face detail" means structure/identity ONLY (eye color, features), NEVER the emotion.',
     'CARDINAL RULE — ADAPT THE NASKAH FAITHFULLY. If the user wrote specific instructions, OBEY them verbatim. Treat the naskah as a brief: every concrete direction in it (camera move, mood, style label, composition cue, action verb, prop, color hint, time-of-day, lighting word) belongs in the appropriate output field. DO NOT generalize away the user\'s specifics. Generic output is a failure.',
+    'NO INVENTED PRODUCTS (critical — the naskah is authoritative for what appears on screen): NEVER add a product, package, bottle, box, brand item, logo, "Product Shot", or product-CTA panel unless the NASKAH TEXT itself explicitly mentions or shows that product. If the script has no product (e.g. a travel, lifestyle, or storytelling piece), then ZERO products appear in ANY shot/panel and there is NO product-reveal or product-CTA — even if a brand name is attached to the job or BRAND CONTEXT is provided. A brand being present is NOT permission to insert its product. When in doubt, leave the product OUT.',
     'IMPORTANT — image_prompt vs video_motion are STRUCTURALLY DIFFERENT, do not write the same text into both:',
     '  • image_prompt = ONE FROZEN MOMENT. A single still frame. Describe the PEAK / most cinematic instant of the action — the climax of the scene the video will play through. NEVER list a sequence ("X then Y then Z") in image_prompt — diffusion models render sequences as multi-panel collages / 4-grid storyboards, which is broken. Pick ONE verb in present-continuous tense ("panda aiming the firearm at intruders") not a chain ("breaks door, then aims, then shoots").',
     '  • video_motion = FULL ACTION TIMELINE. Beat-by-beat description of the whole sequence the image-to-video model has to play out. Repeat the verb chain ("first the panda forces the door, then raises the firearm, then fires at the intruders"). Without this the model just freezes the source image.',
@@ -154,7 +158,7 @@ TASK: Convert this script into ${
       : isStory
       ? `ONE storyboard for the WHOLE script.
 - PANEL COUNT must be a CLEAN GRID: 4 (2x2), 6 (2x3), or 9 (3x3). Pick the SMALLEST clean count that gives EVERY beat of the script its own panel.
-- COVER EVERY BEAT — especially the FINAL CTA / product / closing beat (usually the MOST important one). NEVER drop a beat to make the count fit the grid. If the script's natural beats don't land exactly on 4/6/9, SPLIT the longest beat into two panels to reach the next clean count — never delete one. (e.g. a 5-beat script → 6 panels, not 4.)
+- COVER EVERY BEAT — including the final beat / closing line the script actually ends on (often the most important). NEVER drop a beat to make the count fit the grid. If the script's natural beats don't land exactly on 4/6/9, SPLIT the longest beat into two panels to reach the next clean count — never delete one. (e.g. a 5-beat script → 6 panels, not 4.) Do NOT invent an extra product/CTA panel the script doesn't have.
 - DURATION (critical — this is the #1 complaint): if the script gives timestamps (e.g. "0:00–0:03", "0:11–0:15") or states a total (e.g. "15 detik"), the SUM of all panel.seconds MUST EQUAL that EXACT total, capped at ${maxSeg}s. Read the LAST timestamp as the intended total. If the script asks for MORE than ${maxSeg}s, scale every beat down proportionally so the sum is exactly ${maxSeg}s — still cover every beat, never drop. If no duration is stated, use ~2-4s per beat.
 - Per-panel seconds: 2-5s each. The SUM must obey the duration rule above — do NOT undershoot (an 11s storyboard for a 15s script is WRONG).`
       : isDirect
