@@ -164,8 +164,17 @@ async function falRunOnce(model, input, { onProgress, maxWaitMs, workspaceId, du
     const finish = (row) => {
       if (settled) return
       if (row.status === 'done') {
+        const result = buildResult(row)
+        // Reject instead of resolving {} on a "done" row with no extractable
+        // URL — otherwise callers crash later with a generic "cannot read url"
+        // that hides the real cause (unrecognized fal payload shape).
+        if (!result?.video?.url && !result?.images?.[0]?.url) {
+          settled = true; cleanup()
+          reject(new Error(`fal job ${requestId} done but no video URL in payload: ${JSON.stringify(row.payload || row.payload_url).slice(0, 200)}`))
+          return
+        }
         settled = true; cleanup()
-        resolve(buildResult(row))
+        resolve(result)
       } else if (row.status === 'error') {
         settled = true; cleanup()
         reject(new Error(row.error || 'gen failed'))
@@ -182,15 +191,24 @@ async function falRunOnce(model, input, { onProgress, maxWaitMs, workspaceId, du
         table: 'gen_jobs',
         filter: `request_id=eq.${requestId}`,
       }, (payload) => finish(payload.new))
-      .subscribe()
+      .subscribe((status, err) => {
+        // Without this callback a dead realtime channel (CHANNEL_ERROR /
+        // TIMED_OUT / wrong publication / RLS on the realtime grant) fails
+        // SILENTLY — completion then rides entirely on the slow fallback poll
+        // with zero signal about why. Surface it so it's diagnosable.
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          console.warn(`[falRunOnce] realtime channel ${status} for ${requestId} — relying on fallback poll`, err || '')
+        }
+      })
 
     // Now check current state — handles the race where webhook fired before
     // we subscribed (job took <1s, very rare for video but possible for cached
     // image gens).
     supabase.from('gen_jobs').select('*').eq('request_id', requestId).maybeSingle()
       .then(({ data }) => { if (data) finish(data) })
+      .catch((e) => console.warn('[falRunOnce] initial race-check select failed', e))
 
-    // Fallback poll every 20s of OUR Supabase + fal direct status.
+    // Fallback poll every 8s of OUR Supabase + fal direct status.
     // Two reasons for the dual poll:
     //   1. Supabase realtime sometimes silently drops on flaky networks /
     //      phone backgrounding — without this, the UI would just sit on
@@ -203,12 +221,21 @@ async function falRunOnce(model, input, { onProgress, maxWaitMs, workspaceId, du
     const pollOnce = async () => {
       if (settled) return
       const elapsed = Math.round((Date.now() - start) / 1000)
-      const { data } = await supabase.from('gen_jobs').select('*').eq('request_id', requestId).maybeSingle()
+      // Guarded — a thrown select (transient network) must NOT skip the fal
+      // direct-status probe below (its own try/catch). Previously an exception
+      // here silently killed the whole tick.
+      let data = null
+      try {
+        ({ data } = await supabase.from('gen_jobs').select('*').eq('request_id', requestId).maybeSingle())
+      } catch (e) { console.warn('[falRunOnce] poll gen_jobs select failed', e) }
       if (data?.status === 'done' || data?.status === 'error') { finish(data); return }
       // Probe fal direct status via /api/god-mode/gen-status which already
       // handles canonical-path resolution + reads status_url from gen_jobs.
       try {
-        const qs = new URLSearchParams({ request_id: requestId, model })
+        // persist=0 — this endpoint must NOT insert a results row for the
+        // generate flow (the caller inserts its own); without this every
+        // poll-detected completion created a duplicate "God Mode — video".
+        const qs = new URLSearchParams({ request_id: requestId, model, persist: '0' })
         const r = await fetch(`/api/god-mode/gen-status?${qs}`, { cache: 'no-store' })
         // 401 = session token expired mid-gen (laptop sleep / background-tab
         // timer throttling stops supabase-js's auto-refresh). Refresh the
@@ -235,7 +262,10 @@ async function falRunOnce(model, input, { onProgress, maxWaitMs, workspaceId, du
         onProgress?.(`waiting (${elapsed}s)`)
       }
     }
-    fallbackInterval = setInterval(pollOnce, 20000)
+    // 8s (was 20s) — realtime should settle instantly, but when it silently
+    // drops this poll is the only signal; 8s caps the "stuck" window that made
+    // users re-gen (→ duplicates). Cheap: it hits our own Supabase + fal status.
+    fallbackInterval = setInterval(pollOnce, 8000)
 
     // Instant recovery when the tab comes back: background tabs throttle
     // timers (and sleep suspends them entirely), so the 20s interval may not

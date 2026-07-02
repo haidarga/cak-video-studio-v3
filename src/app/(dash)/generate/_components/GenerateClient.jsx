@@ -905,6 +905,16 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
   async function genVideoForShot(idx) {
     const shot = state.shots[idx]
     if (!shot) return
+    // IN-FLIGHT GUARD — the Re-gen button re-enables mid-gen because the status
+    // becomes a live progress string ("IN_QUEUE #3 (40s)", etc.), not the exact
+    // 'generating' the button checks. A user watching a slow (or realtime-stuck)
+    // gen could re-click and spawn a SECOND fal job → duplicate result. Block
+    // any status that isn't a terminal/idle state.
+    const vst = shot.video?.status
+    if (vst && vst !== 'idle' && vst !== 'done' && vst !== 'error') {
+      onErr(`${persona.name}: video lagi digenerate (${vst}) — tunggu selesai, jangan klik ulang (bikin dobel).`)
+      return
+    }
     // Validate motion field — empty/blank motion = model generates from text
     // prompt that's literally nothing or just the system role-id. User reported
     // a real $0.70 burn from the Continue button creating a shot with the

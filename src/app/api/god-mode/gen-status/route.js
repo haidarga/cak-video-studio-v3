@@ -39,6 +39,11 @@ export async function GET(req) {
   const url = new URL(req.url)
   const requestId = url.searchParams.get('request_id')
   const model = url.searchParams.get('model')
+  // persist=0 → flip gen_jobs to done but DO NOT insert a results row. The
+  // GENERATE flow's fallback poll (fal-client.js falRunOnce) passes this so it
+  // doesn't create a phantom "God Mode — video" row IN ADDITION to the result
+  // genVideoForShot inserts itself → was the source of duplicate videos.
+  const persist = url.searchParams.get('persist') !== '0'
   if (!requestId || !model) {
     return NextResponse.json({ ok: false, error: 'request_id + model required' }, { status: 400 })
   }
@@ -91,15 +96,20 @@ export async function GET(req) {
   }
 
   async function persistAndRespond(videoUrl, matchedModel) {
-    const { data: row } = await supabase.from('results').insert({
-      workspace_id: wsId,
-      persona_id: personaId,
-      type: 'video', url: videoUrl,
-      label: 'God Mode — video',
-      ar,
-      meta: { source: 'god-mode', motion, model: matchedModel || model, request_id: requestId },
-      created_by: user.id,
-    }).select('id').single()
+    // Skip the results insert when persist=0 (generate flow owns its own insert).
+    let row = null
+    if (persist) {
+      const ins = await supabase.from('results').insert({
+        workspace_id: wsId,
+        persona_id: personaId,
+        type: 'video', url: videoUrl,
+        label: 'God Mode — video',
+        ar,
+        meta: { source: 'god-mode', motion, model: matchedModel || model, request_id: requestId },
+        created_by: user.id,
+      }).select('id').single()
+      row = ins.data
+    }
     // Mark the gen_jobs row done so a late fal webhook sees status='done' and
     // skips its duplicate usage-log + results write (webhook is idempotent on
     // status). No-op if no gen_jobs row exists for this request.
