@@ -15,6 +15,9 @@ import { createClient } from '@/lib/supabase/server'
 import { getActiveWorkspace } from '@/lib/workspace'
 import { callGeminiJSON } from '@/lib/gemini-server'
 import { normalizeState } from '@/lib/shot-memory'
+import { assertPublicHttpUrl } from '@/lib/ssrf-guard'
+
+const MAX_FRAME_BYTES = 10 * 1024 * 1024 // 10MB — frames are small JPEGs
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -37,12 +40,19 @@ export async function POST(req) {
     if (!wsId) return NextResponse.json({ ok: false, error: 'no workspace' }, { status: 200 })
     const { image_url, characters = [] } = await req.json()
     if (!image_url) return NextResponse.json({ ok: false, error: 'image_url required' }, { status: 400 })
+    // SSRF guard — this is a server-side fetch of a client-supplied URL; block
+    // internal/metadata addresses (same guard god-mode uses for its image fetch).
+    assertPublicHttpUrl(image_url, 'image_url')
 
-    // Frame → inline_data part (mirrors god-mode agent/route.js:2349-2350).
+    // Frame → inline_data part (mirrors god-mode agent/route.js:2346-2350).
     let imgRes
     try { imgRes = await fetch(image_url) } catch (e) { throw new Error(`fetch frame failed: ${e.message}`) }
     if (!imgRes.ok) throw new Error(`fetch frame ${imgRes.status}`)
+    // Size cap before buffering + base64 (avoid memory blowup on a huge URL).
+    const clen = parseInt(imgRes.headers.get('content-length') || '0', 10)
+    if (clen && clen > MAX_FRAME_BYTES) throw new Error(`frame too large (${clen} bytes)`)
     const buf = Buffer.from(await imgRes.arrayBuffer())
+    if (buf.length > MAX_FRAME_BYTES) throw new Error(`frame too large (${buf.length} bytes)`)
     const ct = imgRes.headers.get('content-type') || ''
     const mime = ct.startsWith('image/') ? ct : 'image/jpeg'
 
@@ -61,7 +71,14 @@ ${SCHEMA}`
     })
     return NextResponse.json({ ok: true, state: normalizeState(parsed) })
   } catch (e) {
-    // Soft-fail (200) — memory is an enhancement, not a gate.
-    return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: 200 })
+    // Soft-fail (200) — memory is an enhancement, not a gate. BUT distinguish a
+    // permanent config/auth problem (missing Gemini key, vision-incompatible
+    // model, blocked prompt) from a benign transient/fetch failure, so a
+    // workspace whose Shot Memory is silently dead-forever is actually visible:
+    // log it server-side and flag configError so the client can surface it once.
+    const msg = String(e?.message || e)
+    const configError = /gemini_key|belum di-set|not set|unauthorized|no fal key|api key|blocked/i.test(msg)
+    if (configError) console.error('[shot-memory/extract] disabled — config/auth issue:', msg)
+    return NextResponse.json({ ok: false, error: msg, configError }, { status: 200 })
   }
 }

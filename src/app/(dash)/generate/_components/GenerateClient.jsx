@@ -827,7 +827,7 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       const wardrobe = String(shot.raw.wardrobe || '').trim() || null
 
       // SHOT MEMORY — observed state from the previous shot's frame (set by
-      // continueStoryboard/linkFrameToNextShot). Prepended to the prompt so the
+      // continueStoryboard; linkFrameToNextShot does NOT set it yet). Prepended to the prompt so the
       // continuation image is generated from what was ACTUALLY on screen
       // (location, wardrobe, last action), overriding the script on conflict.
       const continuityBlock = buildContinuityBlock(shot.raw.prev_state)
@@ -1418,7 +1418,13 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
           })
           const ej = await er.json().catch(() => ({}))
           if (ej.ok && ej.state) prevState = ej.state
-        } catch { /* no memory — degrade to script-only continuity */ }
+          else if (ej.error) {
+            console.warn('[Continue] shot-memory extract failed:', ej.error)
+            // Surface a permanent config issue ONCE so the user knows memory is
+            // off (not silently "working"). Transient failures stay quiet.
+            if (ej.configError) onErr(`⚠ Shot Memory off (${ej.error.slice(0, 80)}) — Continue tetep lanjut pake naskah. Cek Gemini key di Settings.`)
+          }
+        } catch (e) { console.warn('[Continue] shot-memory extract error:', e?.message || e) }
       }
       // Compact continuity tag appended to the naskah so the next parse is
       // grounded in the observed state (empty string when no usable memory).
@@ -1621,7 +1627,8 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
               })
               const ej = await er.json().catch(() => ({}))
               lfState = (ej.ok && ej.state) ? ej.state : lfState
-            } catch { /* keep previous lfState */ }
+              if (ej.error) console.warn('[LongForm] shot-memory extract failed:', ej.error)
+            } catch (e) { console.warn('[LongForm] shot-memory extract error:', e?.message || e) }
           } catch { /* canvas failed → r2v from refs (soft seam, but never hangs) */ }
         }
         // MEMORY / CONTEXT: each segment must know the WHOLE video + what already

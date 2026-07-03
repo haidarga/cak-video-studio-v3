@@ -27,6 +27,12 @@ describe('normalizeState — coerce messy LLM output into the canonical shape', 
     const s = normalizeState({ location: 'x', wardrobe: { Bella: 'kaos', Rio: '' } })
     expect(s.wardrobe).toEqual({ Bella: 'kaos' })
   })
+  it('fails closed on array-shaped wardrobe (some models return a list, not a map)', () => {
+    // wardrobe as array → coerced to {} (safe, never crashes), state still usable via location
+    const s = normalizeState({ location: 'x', wardrobe: ['white shirt', 'jeans'] })
+    expect(s.wardrobe).toEqual({})
+    expect(s.location).toBe('x')
+  })
   it('returns null for unusable/empty input', () => {
     expect(normalizeState(null)).toBe(null)
     expect(normalizeState({})).toBe(null)
