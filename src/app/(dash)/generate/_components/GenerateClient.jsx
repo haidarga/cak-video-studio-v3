@@ -16,6 +16,7 @@ import { planToJobs, buildConcatProject } from '@/lib/long-form'
 import { isContentRefusal, nextVideoModel } from '@/lib/model-fallback'
 import { normalizeToGrid } from '@/lib/storyboard-grid'
 import { parseSceneTimestamps, packScenesIntoSegments } from '@/lib/script-segments'
+import { buildContinuityBlock, mergeContinuity, summarizeStateForParse } from '@/lib/shot-memory'
 import { cleanProductBg } from '@/lib/bg-removal'
 import { CAMERA_PRESETS, listAllPresets, DEFAULT_CAMERA, getCameraPreset } from '@/lib/camera-presets'
 
@@ -825,6 +826,12 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       // those throws "trim is not a function". String() forces a primitive first.
       const wardrobe = String(shot.raw.wardrobe || '').trim() || null
 
+      // SHOT MEMORY — observed state from the previous shot's frame (set by
+      // continueStoryboard/linkFrameToNextShot). Prepended to the prompt so the
+      // continuation image is generated from what was ACTUALLY on screen
+      // (location, wardrobe, last action), overriding the script on conflict.
+      const continuityBlock = buildContinuityBlock(shot.raw.prev_state)
+
       // IMAGE ROLES — bind each reference image to an explicit job. Multi-ref
       // image models (Nano-Banana / GPT-Image / Seedream) get a FLAT array of
       // image_urls with no idea which is the product vs the character — so they
@@ -876,7 +883,7 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       // models (Nano-Banana / Seedance / Happy Horse) re-gen consistently
       // instead of drifting to a new result every time. OFF = fresh each gen.
       const seed = globalConfig.seedLock ? globalConfig.seed : randomSeed()
-      const imgInput = applySeed(globalConfig.imgModel, buildImgInput(globalConfig.imgModel, { prompt: imageRoles + fullPrompt, refUrls, ar: globalConfig.ar }), seed)
+      const imgInput = applySeed(globalConfig.imgModel, buildImgInput(globalConfig.imgModel, { prompt: imageRoles + (continuityBlock ? `${continuityBlock}\n\n` : '') + fullPrompt, refUrls, ar: globalConfig.ar }), seed)
       const imgResult = await falRun(globalConfig.imgModel, imgInput, { onProgress: (p) => patchShot(idx, { image: { status: p } }), workspaceId })
       const imageUrl = imgResult.images?.[0]?.url
       if (!imageUrl) throw new Error('no image URL returned')
@@ -1076,6 +1083,10 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       // frame), tell the model the LAST ref is the final frame of the
       // previous segment and the new sequence should start where it ended.
       let finalMotion = motion
+      // SHOT MEMORY for video — observed state from the previous shot's frame.
+      // Prepended at prompt-build time (below) rather than here, because the
+      // IMAGE ROLES paths REASSIGN finalMotion and would otherwise drop it.
+      const vidContinuity = buildContinuityBlock(shot.raw.prev_state)
       // Opsi A (narrow, opted-in by user): append a short identity-anchor
       // note for SHOTS / DIRECT + r2v. WITHOUT this note, r2v models
       // (Grok / Seedance / Kling / Happy Horse) default to "animate the
@@ -1184,7 +1195,7 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
       }
       const vidSeed = globalConfig.seedLock ? globalConfig.seed : randomSeed()
       const vidInput = applySeed(vidModel, buildVidInput(vidModel, {
-        prompt: finalMotion,
+        prompt: (vidContinuity ? `${vidContinuity}\n\n` : '') + finalMotion,
         image_url: isDirect ? undefined : shot.image?.url,
         reference_urls: vidRefUrls,
         duration: shot.raw.duration || 5,
@@ -1390,6 +1401,29 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
           : (isPrevStoryboard && prev.image?.url && prev.image.url !== frameUrl)
             ? [prev.image.url, frameUrl]              // success storyboard: grid + last frame
             : [frameUrl]                              // success direct: last frame
+
+      // SHOT MEMORY — read the last frame with a vision model to capture the
+      // OBSERVED state (location, wardrobe-as-rendered, last action, props) so
+      // the next shot continues from what was actually on screen, not just the
+      // script. Best-effort: on any failure prevState stays null and we fall
+      // back to the old script-only continuity.
+      let prevState = null
+      if (frameUrl && !noAnchor) {
+        try {
+          patchShot(idx, { continuing: 'Baca frame terakhir (shot memory)...' })
+          const knownChars = [...selectedRefs.map((r) => r.label), ...(prev.raw.chars_in_shot || [])].filter(Boolean)
+          const er = await fetch('/api/shot-memory/extract', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image_url: frameUrl, characters: knownChars }),
+          })
+          const ej = await er.json().catch(() => ({}))
+          if (ej.ok && ej.state) prevState = ej.state
+        } catch { /* no memory — degrade to script-only continuity */ }
+      }
+      // Compact continuity tag appended to the naskah so the next parse is
+      // grounded in the observed state (empty string when no usable memory).
+      const stateTag = summarizeStateForParse(prevState)
+
       // AUTO-CONTINUE: pull the NEXT segment from the ORIGINAL naskah so the
       // continuation shot is pre-filled (story flows forward) instead of empty.
       // Capped to the chosen model's max clip length. Falls back to the manual
@@ -1411,7 +1445,7 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
           const r = await fetch('/api/parse', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              naskah: segTexts[nextSegIdx], lang: globalConfig.lang, mode: globalConfig.mode, ar: globalConfig.ar,
+              naskah: segTexts[nextSegIdx] + (stateTag ? `\n\n${stateTag}` : ''), lang: globalConfig.lang, mode: globalConfig.mode, ar: globalConfig.ar,
               refLabels: selectedRefs.map((rf) => rf.label).filter(Boolean),
               brand: activeBrand ? { notes: activeBrand.notes, config: activeBrand.config } : null,
               constraints: { continuousShot: !!globalConfig.continuousShot, skipDialog: !!globalConfig.skipDialog, skipOnscreen: !!globalConfig.skipOnscreen, skipProduct: !!globalConfig.skipProduct },
@@ -1433,7 +1467,7 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
           const r = await fetch('/api/parse', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              naskah: fullNaskah, lang: globalConfig.lang, mode: globalConfig.mode, ar: globalConfig.ar,
+              naskah: fullNaskah + (stateTag ? `\n\n${stateTag}` : ''), lang: globalConfig.lang, mode: globalConfig.mode, ar: globalConfig.ar,
               refLabels: selectedRefs.map((rf) => rf.label).filter(Boolean),
               brand: activeBrand ? { notes: activeBrand.notes, config: activeBrand.config } : null,
               constraints: { continuousShot: !!globalConfig.continuousShot, skipDialog: !!globalConfig.skipDialog, skipOnscreen: !!globalConfig.skipOnscreen, skipProduct: !!globalConfig.skipProduct },
@@ -1449,6 +1483,11 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
       // (4/6/9, never drop a beat); panels are already duration-clamped server-side.
       const contPanels = isPrevStoryboard ? normalizeToGrid(contSeg?.panels || []) : []
       const contDuration = contPanels.reduce((s, p) => s + (parseInt(p.seconds) || 2), 0) || Math.min(15, maxDur)
+      // OBSERVED render-state overrides the script's static env/wardrobe (this is
+      // what corrects visual drift). prevState is null when memory extraction was
+      // skipped/failed → merge just returns the parsed values.
+      const mergedStory = mergeContinuity({ environment: toStr(contSeg?.environment) || baseRaw.environment, wardrobe: toStr(contSeg?.wardrobe) || baseRaw.wardrobe }, prevState)
+      const mergedDirect = mergeContinuity({ environment: baseRaw.environment, wardrobe: baseRaw.wardrobe }, prevState)
       const newShot = {
         id: `${persona.id}-cont-${Date.now()}`,
         raw: isPrevStoryboard
@@ -1456,19 +1495,25 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
               ...baseRaw,
               panels: contPanels,
               concept: toStr(contSeg?.concept) || '',
-              environment: toStr(contSeg?.environment) || baseRaw.environment,
-              wardrobe: toStr(contSeg?.wardrobe) || baseRaw.wardrobe,
+              environment: mergedStory.environment,
+              wardrobe: mergedStory.wardrobe,
               video_motion: toStr(contSeg?.video_motion) || motionHint,
               duration: contDuration,
+              // SHOT MEMORY: observed state from the previous frame, injected into
+              // this shot's image + video prompts by genImageForShot/genVideoForShot.
+              ...(prevState ? { prev_state: prevState } : {}),
               // carry the deterministic segment cursor forward so a 3rd/4th
               // Continue keeps pulling the exact next chunk.
               ...(hasNextSeg ? { lf_segments: segTexts, lf_seg_index: nextSegIdx, lf_total: segTexts.length } : {}),
             }
           : {
               ...baseRaw,
+              environment: mergedDirect.environment,
+              wardrobe: mergedDirect.wardrobe,
               video_motion: toStr(directSeg?.video_motion) || motionHint,
               dialogue: toStr(directSeg?.dialogue) || '',
               duration: Math.min(maxDur, parseInt(directSeg?.duration) || prev.raw.duration || 5),
+              ...(prevState ? { prev_state: prevState } : {}),
             },
         label: hasNextSeg
           ? `${persona.name} — Storyboard (bagian ${nextSegIdx + 1}/${segTexts.length})`
@@ -1548,6 +1593,10 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
       const runSeed = globalConfig.seedLock ? globalConfig.seed : randomSeed()
       const clips = []
       let prevVideoUrl = null
+      // SHOT MEMORY across segments — observed state from the previous clip's
+      // last frame, refreshed each iteration and fed into the next segment's
+      // prompt so continuity tracks the RENDER, not just the planned beats.
+      let lfState = null
       for (let i = 0; i < jobs.length; i++) {
         const job = jobs[i]
         onPatch({ lfStatus: `Segmen ${i + 1}/${jobs.length} (${job.transition})...` })
@@ -1564,6 +1613,15 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
             const blob = await extractLastFrameViaCanvas(prevVideoUrl)
             const up = await uploadBlob(blob, `lf-handoff-${persona.id}-${i}.jpg`, 'longform')
             startImg = up.url
+            // Read the handoff frame → observed state for THIS segment's prompt.
+            try {
+              const er = await fetch('/api/shot-memory/extract', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image_url: startImg, characters: [persona.name, ...selectedRefs.map((r) => r.label)].filter(Boolean) }),
+              })
+              const ej = await er.json().catch(() => ({}))
+              lfState = (ej.ok && ej.state) ? ej.state : lfState
+            } catch { /* keep previous lfState */ }
           } catch { /* canvas failed → r2v from refs (soft seam, but never hangs) */ }
         }
         // MEMORY / CONTEXT: each segment must know the WHOLE video + what already
@@ -1579,12 +1637,13 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
         const contNote = (job.useHandoff && i > 0)
           ? ' Continue SEAMLESSLY from the previous shot — identical location, lighting, wardrobe and framing; start exactly where it ended, no jump.'
           : ''
-        const action = `${ctxNote}\n${job.dialog
+        const lfContinuity = buildContinuityBlock(lfState)
+        const action = `${ctxNote}\n${lfContinuity ? `${lfContinuity}\n` : ''}${job.dialog
           ? `${job.motion} The subject speaks in fluent native ${globalConfig.lang}: "${job.dialog}"`
           : job.motion}${contNote}`
         const motion = compileVideoPrompt({
           camera: globalConfig.cameraPreset || DEFAULT_CAMERA,
-          identity, environment: pj.parsed?.environment || null, action, brand,
+          identity, environment: mergeContinuity({ environment: pj.parsed?.environment || '' }, lfState).environment || null, action, brand,
           ar: globalConfig.ar, skipProduct: !!globalConfig.skipProduct, noText: !!globalConfig.skipOnscreen,
           refsCount: baseRefs.length, lang: globalConfig.lang, dialect: globalConfig.dialect || null,
           hasDialog: !globalConfig.skipDialog && !!job.dialog, audioOn: globalConfig.audio !== false,
