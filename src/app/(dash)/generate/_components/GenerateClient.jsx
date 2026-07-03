@@ -1767,12 +1767,38 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
       }
     }
 
+    // SHOT MEMORY — read the linked frame with vision → observed state, so the
+    // NEXT shot's image+video gen continues from what was actually on screen
+    // (mirrors continueStoryboard). Best-effort; non-destructive: we only attach
+    // prev_state (injected as a continuity block at gen time) and do NOT
+    // overwrite the existing next shot's user/parser-authored env/wardrobe.
+    let linkState = null
+    if (frameUrl) {
+      try {
+        patchShot(idx, { continuing: 'Baca frame (shot memory)...' })
+        const knownChars = [...selectedRefs.map((r) => r.label), ...(prev.raw.chars_in_shot || [])].filter(Boolean)
+        const er = await fetch('/api/shot-memory/extract', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image_url: frameUrl, characters: knownChars }),
+        })
+        const ej = await er.json().catch(() => ({}))
+        if (ej.ok && ej.state) linkState = ej.state
+        else if (ej.error) {
+          console.warn('[Link] shot-memory extract failed:', ej.error)
+          if (ej.configError) onErr(`⚠ Shot Memory off (${ej.error.slice(0, 80)}) — Link tetep jalan pake naskah. Cek Gemini key di Settings.`)
+        }
+      } catch (e) { console.warn('[Link] shot-memory extract error:', e?.message || e) }
+    }
+
     // Merge into next shot's additional_ref_urls. Dedupe so repeated
     // clicks don't pile up the same URL.
     const nextIdx = idx + 1
     patchShot(nextIdx, (prevNextState) => {
       const existing = prevNextState.additional_ref_urls || []
-      if (existing.includes(frameUrl)) return prevNextState
+      if (existing.includes(frameUrl)) {
+        // Same frame already linked — still refresh the memory if we got one.
+        return linkState ? { raw: { ...prevNextState.raw, prev_state: linkState } } : prevNextState
+      }
       return {
         additional_ref_urls: [...existing, frameUrl],
         linked_from_shot: prev.label || `Shot ${idx + 1}`,
@@ -1780,6 +1806,7 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
         // true  -> "this is the prev storyboard grid (style anchor)"
         // false -> "this is the final frame (start from this pose)"
         continuity_fallback: extractFailed,
+        ...(linkState ? { raw: { ...prevNextState.raw, prev_state: linkState } } : {}),
       }
     })
     patchShot(idx, { continuing: null })
