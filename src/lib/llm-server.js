@@ -207,6 +207,11 @@ function sanitizeConfig(cfg) {
 // when workspace has nothing saved. Uses admin client (server-side trust).
 async function loadConfig(workspaceId) {
   const keys = {
+    // Default to the env var; overridden below by the workspace's own key if
+    // set. BUG FIXED: this used to be process.env.GEMINI_KEY ONLY — the
+    // workspace's Settings-page `gemini_key` was saved to the DB but never
+    // actually read here, so rotating the key in Settings silently did
+    // nothing (still hit the old/flagged key from Vercel env).
     google: process.env.GEMINI_KEY,
     // openai key comes from workspace, NOT env (per-workspace customization).
   }
@@ -215,9 +220,10 @@ async function loadConfig(workspaceId) {
     try {
       const admin = createAdminClient()
       const { data } = await admin.from('workspaces')
-        .select('llm_config, openai_key').eq('id', workspaceId).maybeSingle()
+        .select('llm_config, openai_key, gemini_key').eq('id', workspaceId).maybeSingle()
       if (data?.llm_config?.default?.model) config = data.llm_config
       if (data?.openai_key) keys.openai = data.openai_key
+      if (data?.gemini_key) keys.google = data.gemini_key
     } catch { /* fall through to defaults */ }
   }
   return { config: sanitizeConfig(config), keys }
