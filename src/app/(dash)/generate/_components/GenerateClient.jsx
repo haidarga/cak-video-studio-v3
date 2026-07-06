@@ -1615,8 +1615,8 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
             // CANVAS-ONLY (no ffmpeg.wasm fallback) — the wasm path is 30MB +
             // full-decode and was HANGING long-form per segment. If the fast
             // canvas grab fails, we degrade to r2v from refs instead of hanging.
-            const { extractLastFrameViaCanvas } = await import('@/lib/ffmpeg-extract')
-            const blob = await extractLastFrameViaCanvas(prevVideoUrl)
+            const { extractLastFrameNoWasm } = await import('@/lib/ffmpeg-extract')
+            const blob = await extractLastFrameNoWasm(prevVideoUrl)
             const up = await uploadBlob(blob, `lf-handoff-${persona.id}-${i}.jpg`, 'longform')
             startImg = up.url
             // Read the handoff frame → observed state for THIS segment's prompt.

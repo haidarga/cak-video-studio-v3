@@ -8,6 +8,34 @@
 import { getFFmpeg, fetchToUint8 } from './editor-render'
 import { proxify } from './editor-proxy'
 
+// Server-side frame extraction on the v2 HF Space (has ffmpeg + a datacenter
+// network). This is the FAST path: v2 downloads the video and extracts the frame
+// server-side, returning a tiny JPEG. It avoids the client downloading the whole
+// video (fal mp4s lack faststart → the browser must fetch the entire file to
+// read metadata) AND avoids loading the 30MB ffmpeg.wasm — the #1 cause of
+// "stuck extracting" on slow networks (e.g. an ISP that throttles fal.media).
+const V2_BASE = (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_V2_BACKEND_URL) || 'https://cahmul2-cak-video-studio-v2.hf.space'
+export async function extractLastFrameServer(videoUrl, pos = 'end') {
+  const r = await fetch(`${V2_BASE}/api/extract-frame?url=${encodeURIComponent(videoUrl)}&pos=${pos}`)
+  if (!r.ok) throw new Error(`server extract-frame ${r.status}`)
+  const blob = await r.blob()
+  if (!blob || blob.size < 100) throw new Error('server extract-frame empty')
+  return blob
+}
+
+// Server → canvas, NO ffmpeg.wasm. For hot loops (long-form) where the 30MB wasm
+// download + full-decode was hanging per segment.
+export async function extractLastFrameNoWasm(videoUrl) {
+  try {
+    const blob = await extractLastFrameServer(videoUrl)
+    console.log('[extractLastFrame] server-side (no-wasm) succeeded', blob.size, 'bytes')
+    return blob
+  } catch (e) {
+    console.warn('[extractLastFrame] server-side failed, trying canvas:', e.message || e)
+  }
+  return extractLastFrameViaCanvas(videoUrl)
+}
+
 // Strategy 0 — browser-native video decoder + canvas snapshot. Bypasses
 // ffmpeg.wasm entirely. Browsers (Chrome, Firefox, Safari) support MANY
 // MORE codecs than ffmpeg.wasm does (H265/HEVC, AV1, etc), so this is
@@ -82,6 +110,16 @@ export async function extractLastFrameViaCanvas(videoUrl) {
 // approved image as a continuity anchor (better than nothing — character +
 // style still match even without exact-frame handoff).
 export async function extractLastFrame(videoUrl, { offsetEnd = 0.1 } = {}) {
+  // Strategy -1 (FASTEST) — server-side extract on v2. Skips downloading the
+  // whole video + the 30MB ffmpeg.wasm on the client, which is what stalls on
+  // slow networks. Falls through to the client paths if v2 is unreachable.
+  try {
+    const blob = await extractLastFrameServer(videoUrl)
+    console.log('[extractLastFrame] server-side succeeded', blob.size, 'bytes')
+    return blob
+  } catch (e) {
+    console.warn('[extractLastFrame] server-side failed, trying client canvas:', e.message || e)
+  }
   // Strategy 0 — browser-native video + canvas. Most reliable for fal.ai
   // outputs (browsers handle H265/AV1/etc that ffmpeg.wasm chokes on).
   // Try this FIRST; the ffmpeg.wasm path is now a fallback for the rare
