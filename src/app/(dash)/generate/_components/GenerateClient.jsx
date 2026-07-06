@@ -580,7 +580,16 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
   function patchShot(idx, patch) {
     onPatch((s) => {
       const next = [...s.shots]
-      next[idx] = { ...next[idx], ...(typeof patch === 'function' ? patch(next[idx]) : patch) }
+      // Long-running async ops (Continue/Link extract a frame + read shot
+      // memory, which can take many seconds) capture `idx` early, then patch
+      // by that index later. If the shots array shrinks/reorders meanwhile
+      // (user deletes a shot), `idx` goes stale and next[idx] is undefined —
+      // any functional-updater that dereferences it (e.g. prev.raw) crashed
+      // the WHOLE page (React render error, not just one shot). Guard here so
+      // every patchShot caller always gets a safe object, never undefined.
+      if (idx < 0 || idx >= next.length) return { shots: next } // stale index — no-op, don't create a hole
+      const prevShot = next[idx] || {}
+      next[idx] = { ...prevShot, ...(typeof patch === 'function' ? patch(prevShot) : patch) }
       return { shots: next }
     })
   }
@@ -2057,7 +2066,12 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
                 : 'Shots — edit text, gen image, approve, gen video'}
             </div>
             {state.shots.map((shot, i) => (
-              shot.raw.panels
+              // Defensive: a malformed shot (stale-index race, see patchShot)
+              // must never crash the WHOLE page. Skip rendering just that one
+              // card instead of throwing during render.
+              !shot?.raw
+                ? null
+                : shot.raw.panels
                 ? <StoryboardEditor key={shot.id} shot={shot} idx={i} ar={globalConfig.ar}
                     maxDuration={getVideoMaxDuration(globalConfig.vidModel)}
                     availableRefs={[...selectedRefs, ...styleRefs]}
