@@ -40,12 +40,12 @@ export async function GET(req) {
   function platformHintFromLabel(label) {
     const l = String(label || '').toLowerCase()
     if (l.includes('tiktok')) return 'tiktok'
-    if (l.includes('instagram') || l.includes('ig ')) return 'instagram'
-    if (l.includes('youtube') || l.includes('yt ')) return 'youtube'
-    if (l.includes('facebook') || l.includes('fb ')) return 'facebook'
+    if (l.includes('instagram') || l.match(/\big\b/)) return 'instagram'
+    if (l.includes('youtube') || l.match(/\byt\b/)) return 'youtube'
+    if (l.includes('facebook') || l.match(/\bfb\b/)) return 'facebook'
     if (l.includes('linkedin')) return 'linkedin'
     if (l.includes('thread')) return 'threads'
-    if (l === 'x' || l.includes('twitter')) return 'x'
+    if (l === 'x' || l.match(/\bx\b/) || l.includes('twitter')) return 'x'
     return ''
   }
 
