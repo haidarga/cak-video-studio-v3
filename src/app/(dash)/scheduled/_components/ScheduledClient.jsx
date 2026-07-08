@@ -799,13 +799,24 @@ function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubm
       let targets = []
       if (links.length > 0) {
         targets = links.map(l => {
-          const ch = channels.find(c => String(c.id) === String(l.channel_id))
+          let ch = channels.find(c => String(c.id) === String(l.channel_id))
+          // Heal drifted channel IDs using label
+          if (!ch && l.channel_label) {
+            const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, '')
+            const sl = norm(l.channel_label)
+            ch = channels.find(c => norm(c.name).includes(sl) || sl.includes(norm(c.name)))
+          }
           if (!ch) return null
           return { id: ch.id, platform: ch.platform, name: ch.name, account_id: ch.account_id || l.postiz_account_id || null }
         }).filter(Boolean)
       } else {
         const personaChId = r.personas?.postiz_channel_id
-        const ch = personaChId ? channels.find((c) => String(c.id) === String(personaChId)) : null
+        let ch = personaChId ? channels.find((c) => String(c.id) === String(personaChId)) : null
+        if (!ch && r.personas?.postiz_channel_label) {
+          const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, '')
+          const sl = norm(r.personas.postiz_channel_label)
+          ch = channels.find(c => norm(c.name).includes(sl) || sl.includes(norm(c.name)))
+        }
         if (ch) targets = [{ id: ch.id, platform: ch.platform, name: ch.name, account_id: ch.account_id || null }]
       }
       return targets.length > 0 ? targets : null
