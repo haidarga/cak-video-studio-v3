@@ -40,7 +40,22 @@ export function parseSceneTimestamps(naskah) {
       cur.text += '\n' + line
     }
   }
-  return scenes
+  
+  // Cleanup pass: remove "header" scenes that are just total duration summaries.
+  // e.g. "STORYBOARD (00:00 - 00:15)" followed by "Panel 1 (00:00 - 00:02)".
+  const validScenes = []
+  for (let i = 0; i < scenes.length; i++) {
+    const s = scenes[i]
+    const next = scenes[i + 1]
+    // If this scene completely envelops the next scene, it's a header/title.
+    if (next && s.start <= next.start && s.end >= next.end && s.dur > next.dur) {
+      // Merge its text into the next scene so we don't lose context, but drop it as an independent scene.
+      next.text = s.text + '\n' + next.text
+      continue
+    }
+    validScenes.push(s)
+  }
+  return validScenes
 }
 
 // The script's intended total = the last scene's end time.
