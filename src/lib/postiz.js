@@ -55,11 +55,13 @@ async function postizJsonFallback(creds, paths, init) {
 // ── Channels / integrations ─────────────────────────────────────────
 function pickPlatform(c) {
   const v =
+    c?.identifier ||
     c?.providerIdentifier ||
     c?.platform ||
     c?.provider ||
     c?.platform_type ||
     c?.type ||
+    c?.integration?.identifier ||
     c?.integration?.providerIdentifier ||
     c?.integration?.provider ||
     c?.profile?.platform ||
@@ -260,7 +262,8 @@ function defaultSettings(platform, opts = {}) {
     }
   }
   if (p.includes('instagram')) {
-    return { __type: 'instagram', post_type: 'post', collaborators: [] }
+    const type = p === 'instagram-standalone' ? 'instagram-standalone' : 'instagram'
+    return { __type: type, post_type: 'reel', collaborators: [] }
   }
   if (p.includes('youtube')) {
     return { __type: 'youtube', title: '', type: 'public' }
