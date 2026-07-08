@@ -796,16 +796,23 @@ function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubm
     if (!autoRoute || !channels) return null
     return results.map((r) => {
       const links = r.personas?.persona_channels || []
-      const defaultLink = links.find((l) => l.is_default) || links[0]
-      const personaChId = defaultLink?.channel_id || r.personas?.postiz_channel_id
-      if (!personaChId) return null
-      const ch = channels.find((c) => String(c.id) === String(personaChId))
-      if (!ch) return null
-      return { id: ch.id, platform: ch.platform, name: ch.name, account_id: ch.account_id || defaultLink?.postiz_account_id || null }
+      let targets = []
+      if (links.length > 0) {
+        targets = links.map(l => {
+          const ch = channels.find(c => String(c.id) === String(l.channel_id))
+          if (!ch) return null
+          return { id: ch.id, platform: ch.platform, name: ch.name, account_id: ch.account_id || l.postiz_account_id || null }
+        }).filter(Boolean)
+      } else {
+        const personaChId = r.personas?.postiz_channel_id
+        const ch = personaChId ? channels.find((c) => String(c.id) === String(personaChId)) : null
+        if (ch) targets = [{ id: ch.id, platform: ch.platform, name: ch.name, account_id: ch.account_id || null }]
+      }
+      return targets.length > 0 ? targets : null
     })
   }, [autoRoute, results, channels])
   const missingRoute = autoRoute ? (perResultTargets || []).map((t, i) => t ? null : results[i]).filter(Boolean) : []
-  const autoRouteCount = autoRoute ? (perResultTargets || []).filter(Boolean).length : 0
+  const autoRouteCount = autoRoute ? (perResultTargets || []).reduce((acc, targets) => acc + (targets ? targets.length : 0), 0) : 0
 
   const totalPosts = autoRoute ? autoRouteCount : plan.length * targets.length
   const canSubmit = autoRoute
@@ -816,11 +823,12 @@ function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubm
     if (!canSubmit) return
     setBusy(true)
     if (autoRoute) {
-      // Build a "per-result targets" plan: each item is plan[i] paired with
-      // its own single target. Pass through onSubmit as a flat list — parent
-      // detects the autoRoute shape via the targets arg being an Array of
-      // {result_id → target} entries (we use plan.map with embedded target).
-      const routedPlan = plan.map((item, i) => ({ ...item, target: perResultTargets[i] })).filter((p) => p.target)
+      // Build a "per-result targets" plan. A result can have multiple targets.
+      const routedPlan = plan.flatMap((item, i) => {
+        const targets = perResultTargets[i]
+        if (!targets) return []
+        return targets.map(t => ({ ...item, target: t }))
+      })
       await onSubmit(routedPlan, null, sharedCaption || null, true)
     } else {
       await onSubmit(plan, targets, sharedCaption || null, false)
@@ -947,7 +955,7 @@ function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubm
                 {autoRoute && (
                   <div className="mt-2 space-y-0.5 max-h-32 overflow-auto bg-[var(--surface)] rounded p-2">
                     {results.map((r, i) => {
-                      const t = perResultTargets?.[i]
+                      const targets = perResultTargets?.[i]
                       const hasOverride = !!captionOverrides[r.id]
                       const isExpanded = overrideOpenFor === r.id
                       return (
@@ -959,8 +967,10 @@ function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubm
                               {r.personas?.username && <span className="text-[var(--muted2)]"> @{r.personas.username}</span>}
                             </span>
                             <div className="flex items-center gap-2">
-                              {t ? (
-                                <span className="text-green-300 font-semibold">→ {t.platform} · {t.name}</span>
+                              {targets ? (
+                                <div className="text-green-300 font-semibold text-right flex flex-col items-end">
+                                  {targets.map(t => <span key={t.id}>→ {t.platform} · {t.name}</span>)}
+                                </div>
                               ) : (
                                 <span className="text-red-400">⚠ gak ada channel</span>
                               )}
