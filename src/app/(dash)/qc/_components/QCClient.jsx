@@ -63,6 +63,39 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
     setBatchBusy(false)
   }
 
+  async function batchChangeVoice() {
+    const items = results.filter((r) => selectedIds.has(r.id) && isWebm(r))
+    if (items.length === 0) { setErr('Pilih minimal 1 video'); return }
+    setBatchBusy(true); setErr('')
+    for (const r of items) {
+      await changeVoice(r)
+    }
+    setSelectedIds(new Set())
+    setBatchBusy(false)
+  }
+
+  async function batchConvertToMp4() {
+    const items = results.filter((r) => selectedIds.has(r.id) && isWebm(r))
+    if (items.length === 0) return
+    setBatchBusy(true); setErr('')
+    for (const r of items) {
+      await convertToMp4(r)
+    }
+    setSelectedIds(new Set())
+    setBatchBusy(false)
+  }
+
+  async function batchStripAudio() {
+    const items = results.filter((r) => selectedIds.has(r.id) && isWebm(r))
+    if (items.length === 0) return
+    setBatchBusy(true); setErr('')
+    for (const r of items) {
+      await stripAudio(r)
+    }
+    setSelectedIds(new Set())
+    setBatchBusy(false)
+  }
+
   useEffect(() => {
     const ch = supabase.channel('qc-' + workspaceId)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'results', filter: `workspace_id=eq.${workspaceId}` }, async (p) => {
@@ -378,6 +411,21 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
           <button onClick={() => batchSetStatus('pending')} disabled={batchBusy}
             className="text-xs px-3 py-1 rounded bg-blue-500 hover:bg-blue-600 text-white font-bold disabled:opacity-50">
             ⏳ Re-review
+          </button>
+          <button onClick={batchChangeVoice} disabled={batchBusy}
+            title="Batch jalankan Voice Swap buat semua video terpilih sesuai voice_id tiap persona"
+            className="text-xs px-3 py-1 rounded bg-purple-500 hover:bg-purple-600 text-white font-bold disabled:opacity-50">
+            🎙 Bulk Voice
+          </button>
+          <button onClick={batchConvertToMp4} disabled={batchBusy}
+            title="Batch re-encode semua video terpilih ke 1080p MP4"
+            className="text-xs px-3 py-1 rounded bg-yellow-500 hover:bg-yellow-600 text-black font-bold disabled:opacity-50">
+            🔁 Bulk 1080p
+          </button>
+          <button onClick={batchStripAudio} disabled={batchBusy}
+            title="Batch mute semua video terpilih"
+            className="text-xs px-3 py-1 rounded bg-pink-500 hover:bg-pink-600 text-white font-bold disabled:opacity-50">
+            🔇 Bulk Mute
           </button>
           <button onClick={batchRemoveFromQC} disabled={batchBusy}
             className="text-xs px-3 py-1 rounded bg-[var(--surface2)] border border-[var(--border)] text-[var(--muted)] hover:bg-[var(--border)] disabled:opacity-50">
