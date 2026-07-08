@@ -799,12 +799,16 @@ function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubm
       let targets = []
       if (links.length > 0) {
         targets = links.map(l => {
+          // Strict ID match first
           let ch = channels.find(c => String(c.id) === String(l.channel_id))
-          // Heal drifted channel IDs using label
+          // Only fuzzy-heal if strict match failed AND we have a label
           if (!ch && l.channel_label) {
             const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, '')
             const sl = norm(l.channel_label)
-            ch = channels.find(c => norm(c.name).includes(sl) || sl.includes(norm(c.name)))
+            if (sl.length >= 4) { // min 4 chars to prevent false positives like 'ig', 'tt'
+              ch = channels.find(c => norm(c.name) === sl || sl === norm(c.username || ''))
+                || channels.find(c => norm(c.name).startsWith(sl) || sl.startsWith(norm(c.name || '').slice(0,6)))
+            }
           }
           if (!ch) return null
           return { id: ch.id, platform: ch.platform, name: ch.name, account_id: ch.account_id || l.postiz_account_id || null }
@@ -815,13 +819,18 @@ function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubm
         if (!ch && r.personas?.postiz_channel_label) {
           const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, '')
           const sl = norm(r.personas.postiz_channel_label)
-          ch = channels.find(c => norm(c.name).includes(sl) || sl.includes(norm(c.name)))
+          if (sl.length >= 4) ch = channels.find(c => norm(c.name) === sl)
         }
         if (ch) targets = [{ id: ch.id, platform: ch.platform, name: ch.name, account_id: ch.account_id || null }]
       }
+      // Deduplicate by channel ID — prevents same video going to same channel N times
+      // if persona_channels has duplicate rows (e.g. from backfill migration)
+      const seen = new Set()
+      targets = targets.filter(t => { if (seen.has(t.id)) return false; seen.add(t.id); return true })
       return targets.length > 0 ? targets : null
     })
   }, [autoRoute, results, channels])
+
   const missingRoute = autoRoute ? (perResultTargets || []).map((t, i) => t ? null : results[i]).filter(Boolean) : []
   const autoRouteCount = autoRoute ? (perResultTargets || []).reduce((acc, targets) => acc + (targets ? targets.length : 0), 0) : 0
 
