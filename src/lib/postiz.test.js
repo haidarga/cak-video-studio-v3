@@ -53,6 +53,25 @@ describe('resolveChannelBinding — channel drift / wrong-account / stale-platfo
     expect(out.channelId).toBe('ig-rio')
     expect(out.platform).toBe('instagram')
   })
+
+  it('fuzzy: heals when label is a SUBSTRING of channel name (display name drift)', () => {
+    const out = resolveChannelBinding({ channelId: 'old-dead', channelLabel: 'ben', platform: null, liveChannels: live })
+    expect(out.channelId).toBe('tt-ben')
+    expect(out.healed).toBe(true)
+  })
+
+  it('fuzzy: heals when channel username CONTAINS the label', () => {
+    const channels = [{ id: 'ch-1', name: 'Lyra Nala', username: 'lyranarll', platform: 'instagram' }]
+    const out = resolveChannelBinding({ channelId: 'dead-id', channelLabel: 'lyra', platform: null, liveChannels: channels })
+    expect(out.channelId).toBe('ch-1')
+    expect(out.healed).toBe(true)
+  })
+
+  it('fuzzy: does NOT match very short substrings (< 3 chars) to avoid false positives', () => {
+    // 'io' is too short to fuzzy match 'riocollagetech'
+    expect(() => resolveChannelBinding({ channelId: 'dead', channelLabel: 'io', platform: null, liveChannels: live }))
+      .toThrow(/gak ketemu di Postiz/)
+  })
 })
 
 // Build a minimal ftyp box: [size][ftyp][majorBrand][minorVer][...compatible]

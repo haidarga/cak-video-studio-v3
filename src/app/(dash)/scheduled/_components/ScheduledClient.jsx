@@ -122,6 +122,7 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
         caption: target.caption || caption || null,
         created_by: userId,
         target_channel_id: String(target.id),
+        target_channel_label: target.name || null,
         target_platform: target.platform || null,
         target_postiz_account_id: target.account_id || null,
       }).select('id').single()

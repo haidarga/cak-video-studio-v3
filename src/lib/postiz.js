@@ -288,7 +288,17 @@ function defaultSettings(platform, opts = {}) {
 //      ("gak mau upload"). The live channel's platform is AUTHORITATIVE.
 export function resolveChannelBinding({ channelId, channelLabel, platform, liveChannels }) {
   const norm = (v) => String(v || '').toLowerCase().replace(/^@/, '').trim()
-  const labelMatches = (c) => [c.username, c.name].some((v) => norm(v) === norm(channelLabel))
+  // Fuzzy label match: exact OR substring containment. Handles common drift
+  // scenarios like display name changes ('lyra.nala' → 'Lyra Nala') without
+  // breaking the strict id-first validation path. Only used as a HEAL fallback.
+  const labelMatches = (c) => {
+    const nl = norm(channelLabel)
+    if (!nl) return false
+    return [c.username, c.name].some((v) => {
+      const nv = norm(v)
+      return nv === nl || (nv.length >= 3 && nl.length >= 3 && (nv.includes(nl) || nl.includes(nv)))
+    })
+  }
   if (!liveChannels || !liveChannels.length) return { channelId, platform, healed: false } // can't validate — don't block
   let healed = false
   let match = liveChannels.find((c) => String(c.id) === String(channelId))

@@ -47,11 +47,14 @@ export async function POST(req) {
   const platform = sp.target_platform || defaultLink?.platform || sp.personas?.postiz_platform || null
   const accountId = sp.target_postiz_account_id || defaultLink?.postiz_account_id || sp.personas?.postiz_account_id
   // Channel label for the drift / wrong-account guards in createPostizPost.
-  // MUST come only from the actual channel binding (target override or the
-  // persona_channels link) — NOT the persona name. The persona name is not a
-  // Postiz channel handle, so using it would cause the strict wrong-account
-  // guard to false-positive and block legitimate posts.
-  const channelLabel = sp.target_channel_label || defaultLink?.channel_label || null
+  // When target_channel_id is set (mirror mode), ONLY use target_channel_label.
+  // Falling back to the persona's default link label would cross-contaminate:
+  // the persona's linked channel label ≠ the mirror target channel, causing
+  // resolveChannelBinding to false-positive WRONG_ACCOUNT and block the post.
+  // When no target override, fall back to persona_channels label (normal flow).
+  const channelLabel = sp.target_channel_id
+    ? (sp.target_channel_label || null)
+    : (defaultLink?.channel_label || null)
   if (!channelId) {
     return NextResponse.json({ ok: false, error: `Belum ada target channel. Pilih channel di Schedule modal atau link persona ke channel di /posting.` }, { status: 400 })
   }
