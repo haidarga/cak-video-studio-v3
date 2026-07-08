@@ -714,7 +714,18 @@ function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubm
   })
   const [dripGapMin, setDripGapMin] = useState(90)
   const [customTimes, setCustomTimes] = useState({}) // result.id -> ISO datetime-local
+  const [captionOverrides, setCaptionOverrides] = useState({}) // result.id -> custom caption
+  const [overrideOpenFor, setOverrideOpenFor] = useState(null)
   const [busy, setBusy] = useState(false)
+
+  function setOverride(id, text) {
+    setCaptionOverrides((s) => {
+      const n = { ...s }
+      if (text) n[id] = text
+      else delete n[id]
+      return n
+    })
+  }
 
   // Group channels by platform — same UI as single ScheduleModal.
   const grouped = useMemo(() => {
@@ -749,7 +760,7 @@ function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubm
   // Returns [{ result, scheduledFor }] in result order.
   const plan = useMemo(() => {
     if (mode === 'all_now') {
-      return results.map((r) => ({ result: r, scheduledFor: null }))
+      return results.map((r) => ({ result: r, scheduledFor: null, caption: captionOverrides[r.id] || null }))
     }
     if (mode === 'drip') {
       const startMs = dripStartNow ? Date.now() + 5_000 : new Date(dripStartAt).getTime()
@@ -757,16 +768,17 @@ function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubm
       return results.map((r, i) => ({
         result: r,
         scheduledFor: new Date(startMs + i * gapMs).toISOString(),
+        caption: captionOverrides[r.id] || null,
       }))
     }
     if (mode === 'custom') {
       return results.map((r) => {
         const v = customTimes[r.id]
-        return { result: r, scheduledFor: v ? new Date(v).toISOString() : null }
+        return { result: r, scheduledFor: v ? new Date(v).toISOString() : null, caption: captionOverrides[r.id] || null }
       })
     }
     return []
-  }, [mode, results, dripStartNow, dripStartAt, dripGapMin, customTimes])
+  }, [mode, results, dripStartNow, dripStartAt, dripGapMin, customTimes, captionOverrides])
 
   const targets = useMemo(() => {
     if (!channels) return []
@@ -920,7 +932,7 @@ function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubm
           <div>
             <div className="text-[10px] uppercase text-[var(--muted)] font-semibold mb-2">📝 Caption (shared)</div>
             <textarea value={sharedCaption} onChange={(e) => setSharedCaption(e.target.value)} rows={2}
-              placeholder="Caption yang dipakai semua post (per-channel override gak available di bulk mode)"
+              placeholder="Caption default untuk semua post (akan di-skip kalau ada override khusus per persona)"
               className="w-full text-xs px-3 py-2 rounded bg-[var(--surface2)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] resize-y" />
           </div>
 
@@ -936,17 +948,34 @@ function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubm
                   <div className="mt-2 space-y-0.5 max-h-32 overflow-auto bg-[var(--surface)] rounded p-2">
                     {results.map((r, i) => {
                       const t = perResultTargets?.[i]
+                      const hasOverride = !!captionOverrides[r.id]
+                      const isExpanded = overrideOpenFor === r.id
                       return (
-                        <div key={r.id} className="flex items-center justify-between text-[10px]">
-                          <span className="truncate flex-1">
-                            <span className="text-[var(--muted)]">#{i + 1}</span>{' '}
-                            <span className="font-semibold">{r.personas?.name || r.label}</span>
-                            {r.personas?.username && <span className="text-[var(--muted2)]"> @{r.personas.username}</span>}
-                          </span>
-                          {t ? (
-                            <span className="text-green-300 font-semibold">→ {t.platform} · {t.name}</span>
-                          ) : (
-                            <span className="text-red-400">⚠ gak ada channel</span>
+                        <div key={r.id} className="flex flex-col mb-1 border-b border-[var(--surface2)] pb-1 last:border-0 last:pb-0 last:mb-0">
+                          <div className="flex items-center justify-between text-[10px]">
+                            <span className="truncate flex-1">
+                              <span className="text-[var(--muted)]">#{i + 1}</span>{' '}
+                              <span className="font-semibold">{r.personas?.name || r.label}</span>
+                              {r.personas?.username && <span className="text-[var(--muted2)]"> @{r.personas.username}</span>}
+                            </span>
+                            <div className="flex items-center gap-2">
+                              {t ? (
+                                <span className="text-green-300 font-semibold">→ {t.platform} · {t.name}</span>
+                              ) : (
+                                <span className="text-red-400">⚠ gak ada channel</span>
+                              )}
+                              <button onClick={(e) => { e.preventDefault(); setOverrideOpenFor(isExpanded ? null : r.id) }} type="button"
+                                className={`text-[9px] px-1.5 py-0.5 rounded ${hasOverride ? 'bg-yellow-500/40 text-yellow-200' : 'bg-[var(--surface2)] text-[var(--muted)] hover:text-white'}`}>
+                                {hasOverride ? '✓ caption' : '✎ caption'}
+                              </button>
+                            </div>
+                          </div>
+                          {isExpanded && (
+                            <div className="mt-1.5">
+                              <textarea value={captionOverrides[r.id] || ''} onChange={(e) => setOverride(r.id, e.target.value)} rows={2}
+                                placeholder={`Override caption khusus buat ${r.personas?.name || 'ini'} (kosongin buat pakai shared caption)`}
+                                className="w-full text-[10px] px-2 py-1 rounded bg-[var(--surface3)] border border-[var(--border)] focus:outline-none focus:border-[var(--accent)] resize-y" />
+                            </div>
                           )}
                         </div>
                       )
