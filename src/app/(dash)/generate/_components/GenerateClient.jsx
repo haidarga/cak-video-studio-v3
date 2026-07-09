@@ -114,6 +114,14 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
     // that many shots. Storyboard mode always 9 panels regardless.
     shotCount: null,
   })
+
+  // Determine if the current setup strictly REQUIRES a generated image (grid or shot).
+  // Direct mode skips image. Ref-to-video models (in any mode) can also skip image 
+  // because they rely on the explicitly provided reference character/product URLs.
+  const isRefMode = globalConfig.vidModel?.includes('ref-to-video') || globalConfig.vidModel?.includes('reference-to-video')
+  const requiresImageForVideo = globalConfig.mode !== 'direct' && !isRefMode
+  // Helper to check if a shot is "ready" to be approved/video-genned.
+  const isApprovable = (s) => requiresImageForVideo ? !!s.image?.url : true
   // Workspace custom camera presets (user-defined). Built-ins are imported.
   const [userCameraPresets, setUserCameraPresets] = useState([])
   // "Variant generation": ON = each persona gets its own config override strip;
@@ -949,7 +957,10 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
     // Direct mode skips image gen entirely — refs are the visual anchor, motion
     // is the only text signal. Other modes require an approved image first.
     const isDirect = globalConfig.mode === 'direct'
-    if (!isDirect && !shot.image?.url) return
+    let vidModel = globalConfig.vidModel
+    let isRefModel = vidModel?.includes('ref-to-video') || vidModel?.includes('reference-to-video')
+    
+    if (!isDirect && !isRefModel && !shot.image?.url) return
     // Determine if this shot is a storyboard grid (panel layout) — important
     // because the 3x3 grid given to an image-to-video model causes the
     // "9 panels rocking around" glitch (model animates the grid frame, not
@@ -960,14 +971,14 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
     //   - storyboard mode: grid must be treated as sequence map, not source
     // If user manually picked an i2v model in these modes, override silently
     // instead of letting fal.ai 422 us or producing glitched output.
-    let vidModel = globalConfig.vidModel
-    const isRefModel = vidModel.includes('ref-to-video') || vidModel.includes('reference-to-video')
+    
     // Storyboard grid + direct mode need a ref-to-video model. If the user
     // picked a non-ref model, switch to the SAME FAMILY's ref variant (Grok→
     // Grok ref, Seedance→Seedance ref) instead of silently forcing Seedance —
     // respects the model the user actually chose.
     if ((isDirect || isGridShot) && !isRefModel) {
       vidModel = toRefToVideoModel(vidModel)
+      isRefModel = true
     }
     patchShot(idx, { video: { status: 'generating' } })
     try {
@@ -1830,7 +1841,7 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
 
   async function genVideosFromApproved() {
     const approvedIdx = state.shots
-      .map((s, i) => (s.approved && s.image?.url && s.video?.status !== 'done' ? i : -1))
+      .map((s, i) => (s.approved && isApprovable(s) && s.video?.status !== 'done' ? i : -1))
       .filter((i) => i >= 0)
     if (!approvedIdx.length) { onErr(`${persona.name}: gak ada shot ter-approve yang udah ada image`); return }
     const estCost = approvedIdx.reduce((sum, i) => sum + videoCost(globalConfig.vidModel, state.shots[i].raw.duration || 5), 0)
@@ -1910,7 +1921,7 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
     patchShot(idx, { video: { status: 'idle' } })
   }
 
-  const approvedCount = state.shots.filter((s) => s.approved && s.image?.url && s.video?.status !== 'done').length
+  const approvedCount = state.shots.filter((s) => s.approved && isApprovable(s) && s.video?.status !== 'done').length
   const imageDoneCount = state.shots.filter((s) => s.image?.status === 'done').length
 
   return (
@@ -2062,7 +2073,7 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
             )
           })()}
           {imageDoneCount > 0 && globalConfig.mode !== 'direct' && (() => {
-            const approvedShots = state.shots.filter((s) => s.approved && s.image?.url && s.video?.status !== 'done')
+            const approvedShots = state.shots.filter((s) => s.approved && isApprovable(s) && s.video?.status !== 'done')
             const estVid = approvedShots.reduce((sum, s) => sum + videoCost(globalConfig.vidModel, s.raw.duration || 5), 0)
             return (
               <button onClick={genVideosFromApproved} disabled={state.busy || !approvedCount}
@@ -2094,7 +2105,7 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
               !shot?.raw
                 ? null
                 : shot.raw.panels
-                ? <StoryboardEditor key={shot.id} shot={shot} idx={i} ar={globalConfig.ar}
+                ? <StoryboardEditor key={shot.id} shot={shot} idx={i} ar={globalConfig.ar} requiresImageForVideo={requiresImageForVideo}
                     maxDuration={getVideoMaxDuration(globalConfig.vidModel)}
                     availableRefs={[...selectedRefs, ...styleRefs]}
                     onToggleRef={(refId) => patchShot(i, (prev) => {
@@ -2116,7 +2127,7 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
                     onContinue={() => continueStoryboard(i)}
                     onLinkNext={i + 1 < state.shots.length ? () => linkFrameToNextShot(i) : null}
                     onDelete={() => deleteResult(i, shot.video?.result_id)} />
-                : <ShotEditor key={shot.id} shot={shot} idx={i}
+                : <ShotEditor key={shot.id} shot={shot} idx={i} requiresImageForVideo={requiresImageForVideo}
                     mode={globalConfig.mode}
                     maxDuration={getVideoMaxDuration(globalConfig.vidModel)}
                     vidModelLabel={(VIDEO_MODELS.find((m) => m.v === globalConfig.vidModel)?.l || globalConfig.vidModel).split('—')[0].trim()}
@@ -2147,7 +2158,7 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
   )
 }
 
-function ShotEditor({ shot, idx, mode = 'shots', maxDuration = 15, vidModelLabel = '', availableRefs = [], onToggleRef, onResetRefs, onChangeRaw, onSetMediaView, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onContinue, onLinkNext, onDelete }) {
+function ShotEditor({ shot, idx, mode = 'shots', maxDuration = 15, requiresImageForVideo = true, vidModelLabel = '', availableRefs = [], onToggleRef, onResetRefs, onChangeRaw, onSetMediaView, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onContinue, onLinkNext, onDelete }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(shot.label || '')
   const imgStatus = shot.image?.status || 'idle'
@@ -2216,11 +2227,11 @@ function ShotEditor({ shot, idx, mode = 'shots', maxDuration = 15, vidModelLabel
                   {shot.image?.url ? '🔁 Re-img' : '🖼 Img'}
                 </button>
                 <label className={`flex items-center gap-1 px-2 py-1 rounded cursor-pointer text-[10px] font-semibold ${shot.approved ? 'bg-green-500/30 text-green-300 border border-green-500/50' : 'bg-[var(--surface)] border border-[var(--border)] text-[var(--muted)]'}`}>
-                  <input type="checkbox" checked={shot.approved} disabled={!shot.image?.url} onChange={(e) => onApprove(e.target.checked)} className="w-3 h-3" />
+                  <input type="checkbox" checked={shot.approved} disabled={requiresImageForVideo && !shot.image?.url} onChange={(e) => onApprove(e.target.checked)} className="w-3 h-3" />
                   OK
                 </label>
               </div>
-              {shot.image?.url && (
+              {(!requiresImageForVideo || shot.image?.url) && (
                 <button onClick={onGenVideo} disabled={vidStatus === 'generating' || imgStatus === 'generating'}
                   className="w-full mt-1 text-[10px] px-1.5 py-1 rounded bg-[var(--accent)] text-white font-semibold disabled:opacity-50">
                   {shot.video?.url ? '🔁 Re-vid' : '🎬 Vid this one'}
@@ -2475,7 +2486,7 @@ function MediaGallery({ shot, onPickImage, onPickVideo, onSetMediaView }) {
   )
 }
 
-function StoryboardEditor({ shot, idx, ar, maxDuration = 15, availableRefs = [], onToggleRef, onResetRefs, onChangeRaw, onSetMediaView, onChangePanel, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onContinue, onLinkNext, onDelete }) {
+function StoryboardEditor({ shot, idx, ar, maxDuration = 15, requiresImageForVideo = true, availableRefs = [], onToggleRef, onResetRefs, onChangeRaw, onSetMediaView, onChangePanel, onGenImage, onGenVideo, onPickImage, onPickVideo, onApprove, onRename, onSendQC, onContinue, onLinkNext, onDelete }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(shot.label || '')
   const [showPanels, setShowPanels] = useState(true)
@@ -2564,11 +2575,11 @@ function StoryboardEditor({ shot, idx, ar, maxDuration = 15, availableRefs = [],
               {shot.image?.url ? '🔁 Re-gen Grid' : '🖼 Gen Grid'}
             </button>
             <label className={`flex items-center gap-1 px-2 py-1.5 rounded cursor-pointer text-xs font-semibold ${shot.approved ? 'bg-green-500/30 text-green-300 border border-green-500/50' : 'bg-[var(--surface)] border border-[var(--border)] text-[var(--muted)]'}`}>
-              <input type="checkbox" checked={shot.approved} disabled={!shot.image?.url} onChange={(e) => onApprove(e.target.checked)} className="w-3 h-3" />
+              <input type="checkbox" checked={shot.approved} disabled={requiresImageForVideo && !shot.image?.url} onChange={(e) => onApprove(e.target.checked)} className="w-3 h-3" />
               OK
             </label>
           </div>
-          {shot.image?.url && (() => {
+          {(!requiresImageForVideo || shot.image?.url) && (() => {
             // Label honesty: 1 gen = ONE clip capped at the model's max length,
             // NOT the storyboard's planned total. When the plan exceeds the cap
             // we say "seg 1 · max Ns" + a hint to chain via Continue, so users
