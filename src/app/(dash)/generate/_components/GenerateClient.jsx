@@ -660,77 +660,90 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
         ? packScenesIntoSegments(parseSceneTimestamps(state.naskah), segMaxSeg)
         : []
       const isSegmented = lfSegments.length > 1
-      const naskahToSend = isSegmented ? lfSegments[0].text : state.naskah
-      const res = await fetch('/api/parse', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          naskah: naskahToSend, lang: globalConfig.lang, mode: globalConfig.mode, ar: globalConfig.ar,
-          refLabels, brand: activeBrand ? { notes: activeBrand.notes, config: activeBrand.config } : null,
-          // Tell the parser the chosen model's per-clip cap so storyboard total
-          // never exceeds it (was making 20s panels for a 15s-cap model).
-          maxSegmentDuration: getVideoMaxDuration(globalConfig.vidModel),
-          // Honor output constraints — parser respects these instead of forcing
-          // dialog/onscreen/product into every panel.
-          constraints: {
-            continuousShot: !!globalConfig.continuousShot,
-            skipDialog: !!globalConfig.skipDialog,
-            skipOnscreen: !!globalConfig.skipOnscreen,
-            skipProduct: !!globalConfig.skipProduct,
-          },
-          shotCount: globalConfig.shotCount || null,
-        }),
-      })
-      const data = await res.json()
-      if (!data.ok) throw new Error(data.error)
+      const naskahsToSend = (isSegmented && globalConfig.mode === 'storyboard') ? lfSegments.map(s => s.text) : [state.naskah]
+      
+      let parsedDataArray = []
+      let lastParsed = null
+      for (let i = 0; i < naskahsToSend.length; i++) {
+        if (naskahsToSend.length > 1) {
+          onPatch({ busy: true, lfStatus: `Parsing bagian ${i + 1}/${naskahsToSend.length}...` })
+        }
+        const res = await fetch('/api/parse', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            naskah: naskahsToSend[i], lang: globalConfig.lang, mode: globalConfig.mode, ar: globalConfig.ar,
+            refLabels, brand: activeBrand ? { notes: activeBrand.notes, config: activeBrand.config } : null,
+            // Tell the parser the chosen model's per-clip cap so storyboard total
+            // never exceeds it (was making 20s panels for a 15s-cap model).
+            maxSegmentDuration: getVideoMaxDuration(globalConfig.vidModel),
+            // Honor output constraints — parser respects these instead of forcing
+            // dialog/onscreen/product into every panel.
+            constraints: {
+              continuousShot: !!globalConfig.continuousShot,
+              skipDialog: !!globalConfig.skipDialog,
+              skipOnscreen: !!globalConfig.skipOnscreen,
+              skipProduct: !!globalConfig.skipProduct,
+            },
+            shotCount: globalConfig.shotCount || null,
+          }),
+        })
+        const data = await res.json()
+        if (!data.ok) throw new Error(data.error)
+        parsedDataArray.push(data.parsed)
+        lastParsed = data.parsed
+      }
 
-      // Storyboard mode = ONE shot containing all 9 panels (single grid image
-      // + single 15s video). Per-shot mode = N separate shots.
-      let shotsInit
+      // Storyboard mode = ONE OR MORE shots containing up to 9 panels each.
+      // Per-shot mode = N separate shots from a single parse.
+      let shotsInit = []
       if (globalConfig.mode === 'storyboard') {
-        const rawPanels = data.parsed.panels || []
-        // Snap to a clean grid (4/6/9) WITHOUT dropping any beat — see
-        // normalizeToGrid(). Old code sliced DOWN (5→4) and silently deleted the
-        // final CTA panel; this rounds UP and splits the longest beat instead.
-        const panels = normalizeToGrid(rawPanels)
-        shotsInit = [{
-          id: `${persona.id}-storyboard-${Date.now()}`,
-          raw: {
-            concept: toStr(data.parsed.concept),
-            // NEW: parser now extracts shared environment + wardrobe (auto-
-            // detected from naskah) + sequence motion. Compiler picks parsed
-            // wardrobe first, falls back to globalConfig.wardrobeOverride only
-            // if parser didn't extract any.
-            // toStr() coerces array/object responses from LLM into a string —
-            // some Gemini responses return wardrobe as ["formal", "pastel"]
-            // instead of "formal outfit, pastel" which broke .trim() downstream.
-            environment: toStr(data.parsed.environment),
-            wardrobe: toStr(data.parsed.wardrobe),
-            video_motion: toStr(data.parsed.video_motion),
-            panels: panels.map((p) => ({
-              n: p.n, title: p.title || '', visual: p.visual || p.scene || '',
-              dialog: p.dialog || '', onscreen: p.onscreen || p.purpose || '',
-              seconds: p.seconds || 2, shot_type: p.shot_type || '',
-              chars_in_shot: p.chars_in_shot || [],
-            })),
-            chars_in_shot: data.parsed.characters || [],
-            duration: panels.reduce((sum, p) => sum + (parseInt(p.seconds) || 2), 0) || 15,
-            shot_label: 'Storyboard 3×3',
-            // Deterministic continuation: full ordered segment texts + which one
-            // this storyboard IS. "Continue" reads these to gen the exact next
-            // segment (no LLM guessing / no repeat). Absent when not segmented.
-            ...(isSegmented ? { lf_segments: lfSegments.map((s) => s.text), lf_seg_index: 0, lf_total: lfSegments.length } : {}),
-          },
-          label: isSegmented
-            ? `${persona.name} — Storyboard (bagian 1/${lfSegments.length})`
-            : `${persona.name} — Storyboard`,
-          image: { status: 'idle' },
-          video: { status: 'idle' },
-          approved: false,
-        }]
+        shotsInit = parsedDataArray.map((parsed, i) => {
+          const rawPanels = parsed.panels || []
+          // Snap to a clean grid (4/6/9) WITHOUT dropping any beat — see
+          // normalizeToGrid(). Old code sliced DOWN (5→4) and silently deleted the
+          // final CTA panel; this rounds UP and splits the longest beat instead.
+          const panels = normalizeToGrid(rawPanels)
+          return {
+            id: `${persona.id}-storyboard-${Date.now()}-${i}`,
+            raw: {
+              concept: toStr(parsed.concept),
+              // NEW: parser now extracts shared environment + wardrobe (auto-
+              // detected from naskah) + sequence motion. Compiler picks parsed
+              // wardrobe first, falls back to globalConfig.wardrobeOverride only
+              // if parser didn't extract any.
+              // toStr() coerces array/object responses from LLM into a string —
+              // some Gemini responses return wardrobe as ["formal", "pastel"]
+              // instead of "formal outfit, pastel" which broke .trim() downstream.
+              environment: toStr(parsed.environment),
+              wardrobe: toStr(parsed.wardrobe),
+              video_motion: toStr(parsed.video_motion),
+              panels: panels.map((p) => ({
+                n: p.n, title: p.title || '', visual: p.visual || p.scene || '',
+                dialog: p.dialog || '', onscreen: p.onscreen || p.purpose || '',
+                seconds: p.seconds || 2, shot_type: p.shot_type || '',
+                chars_in_shot: p.chars_in_shot || [],
+              })),
+              chars_in_shot: parsed.characters || [],
+              duration: panels.reduce((sum, p) => sum + (parseInt(p.seconds) || 2), 0) || 15,
+              shot_label: isSegmented ? `Storyboard 3×3 (Bagian ${i + 1})` : 'Storyboard 3×3',
+              // Deterministic continuation: full ordered segment texts + which one
+              // this storyboard IS. "Continue" reads these to gen the exact next
+              // segment (no LLM guessing / no repeat). Absent when not segmented.
+              ...(isSegmented ? { lf_segments: lfSegments.map((s) => s.text), lf_seg_index: i, lf_total: lfSegments.length } : {}),
+            },
+            label: isSegmented
+              ? `${persona.name} — Storyboard (bagian ${i + 1}/${lfSegments.length})`
+              : `${persona.name} — Storyboard`,
+            image: { status: 'idle' },
+            video: { status: 'idle' },
+            approved: false,
+          }
+        })
       } else {
-        const items = data.parsed.shots || []
-        const sharedEnv = toStr(data.parsed.environment)
-        const sharedWardrobe = toStr(data.parsed.wardrobe)
+        const parsed = parsedDataArray[0] || {}
+        const items = parsed.shots || []
+        const sharedEnv = toStr(parsed.environment)
+        const sharedWardrobe = toStr(parsed.wardrobe)
         shotsInit = items.map((it, i) => ({
           id: `${persona.id}-${i}-${Date.now()}`,
           raw: {
@@ -764,7 +777,7 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
           },
         }))
       }
-      onPatch({ parsed: data.parsed, shots: shotsInit })
+      onPatch({ parsed: lastParsed, shots: shotsInit, lfStatus: null })
     } catch (e) { onErr(`${persona.name}: ${e.message}`) }
     onPatch({ busy: false })
   }
