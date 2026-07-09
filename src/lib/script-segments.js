@@ -132,18 +132,19 @@ export function clampPanelsToMaxSeg(panels, maxSeg) {
 // Fallback for scripts that lack timestamps but have explicit "STORYBOARD X:" headers.
 // Returns an array of segment objects matching the shape returned by packScenesIntoSegments: { text, index }
 export function splitByStoryboardHeaders(naskah) {
-  const sbRegex = /(?:^|\n)(?=\s*STORYBOARD\s+\d+)/i
+  // Matches STORYBOARD 1, Bagian 1, Part 1, Segmen 1
+  const sbRegex = /(?:^|\n)(?=\s*(?:STORYBOARD|BAGIAN|PART|SEGMEN)\s+\d+)/i
   const blocks = String(naskah || '').split(sbRegex).map(s => s.trim()).filter(Boolean)
   
   const segments = []
   let currentText = ''
   
   for (const block of blocks) {
-    if (/^STORYBOARD\s+\d+/i.test(block)) {
+    if (/^(?:STORYBOARD|BAGIAN|PART|SEGMEN)\s+\d+/i.test(block)) {
       if (currentText) segments.push({ text: currentText.trim(), index: segments.length })
       currentText = block
     } else {
-      // If there's preamble before the first STORYBOARD header, attach it to the first segment
+      // If there's preamble before the first header, attach it to the first segment
       currentText += (currentText ? '\n\n' : '') + block
     }
   }
