@@ -1034,7 +1034,7 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       const action = isGrid
         ? defaultMotion
         : (dialogs
-          ? `${defaultMotion} The subject speaks in fluent native ${globalConfig.lang}: "${dialogs}"`
+          ? `${defaultMotion} ${dialogSpeaker ? dialogSpeaker : 'The subject'} speaks in fluent native ${globalConfig.lang}: "${dialogs}"`
           : defaultMotion)
       const identity = persona.character_prompt
         ? `${persona.name} (${persona.character_prompt.slice(0, 200)})`
