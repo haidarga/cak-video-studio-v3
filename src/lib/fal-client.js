@@ -614,6 +614,7 @@ export const VIDEO_MODELS = [
   { v: 'fal-ai/kling-video/v2.5-turbo/pro/ref-to-video', l: '🎭 Kling 2.5 Pro Ref-to-Video — ~$0.12/dtk (NO morphing dari grid)' },
   { v: 'fal-ai/kling-video/v3/standard/text-to-video', l: '📝 Kling 3 T2V — ~$0.13/dtk (audio, multi-shot)' },
   { v: 'alibaba/happy-horse/image-to-video', l: 'Happy Horse 1.0 — ~$0.14/dtk' },
+  { v: 'alibaba/happy-horse/v1.1/image-to-video', l: 'Happy Horse 1.1 — ~$0.14/dtk (lip-sync, audio)' },
   { v: 'alibaba/happy-horse/reference-to-video', l: '🎭 Happy Horse Ref-to-Video — ~$0.14/dtk' },
   { v: 'alibaba/happy-horse/text-to-video', l: '📝 Happy Horse T2V — ~$0.14/dtk 720p (native audio, 1080p $0.28)' },
   { v: 'xai/grok-imagine-video/v1.5/image-to-video', l: 'Grok 1.5 i2v — ~$0.14/dtk 720p (audio, higher quality)' },
