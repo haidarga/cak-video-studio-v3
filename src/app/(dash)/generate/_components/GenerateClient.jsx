@@ -115,13 +115,6 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
     shotCount: null,
   })
 
-  // Determine if the current setup strictly REQUIRES a generated image (grid or shot).
-  // Direct mode skips image. Ref-to-video models (in any mode) can also skip image 
-  // because they rely on the explicitly provided reference character/product URLs.
-  const isRefMode = globalConfig.vidModel?.includes('ref-to-video') || globalConfig.vidModel?.includes('reference-to-video')
-  const requiresImageForVideo = globalConfig.mode !== 'direct' && !isRefMode
-  // Helper to check if a shot is "ready" to be approved/video-genned.
-  const isApprovable = (s) => requiresImageForVideo ? !!s.image?.url : true
   // Workspace custom camera presets (user-defined). Built-ins are imported.
   const [userCameraPresets, setUserCameraPresets] = useState([])
   // "Variant generation": ON = each persona gets its own config override strip;
@@ -572,6 +565,15 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
     () => (cfgOverride ? { ...rawGlobalConfig, ...cfgOverride } : rawGlobalConfig),
     [rawGlobalConfig, cfgOverride],
   )
+
+  // Determine if the current setup strictly REQUIRES a generated image (grid or shot).
+  // Direct mode skips image. Ref-to-video models (in any mode) can also skip image 
+  // because they rely on the explicitly provided reference character/product URLs.
+  const isRefMode = globalConfig.vidModel?.includes('ref-to-video') || globalConfig.vidModel?.includes('reference-to-video')
+  const requiresImageForVideo = globalConfig.mode !== 'direct' && !isRefMode
+  // Helper to check if a shot is "ready" to be approved/video-genned.
+  const isApprovable = (s) => requiresImageForVideo ? !!s.image?.url : true
+
   function setOverride(patch) {
     onPatch((s) => ({ configOverride: { ...(s.configOverride || {}), ...patch } }))
   }
