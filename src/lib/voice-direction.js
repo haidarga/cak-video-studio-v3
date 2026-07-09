@@ -33,3 +33,26 @@ export function buildVoiceDirection({ lang = 'Indonesian', dialect = null, hasDi
   }
   return `Spoken audio: the character ${speak}, in a warm casual conversational tone at a natural UNHURRIED pace — relaxed, with natural pauses; do NOT rush, speed up, or compress the speech.`
 }
+
+// Parses storyboard dialogue text for speaker labels.
+// e.g., "[VO Bella] Ada yang manis" -> { speaker: "Bella", text: "Ada yang manis" }
+// e.g., "Bella: Ada yang manis" -> { speaker: "Bella", text: "Ada yang manis" }
+export function extractSpeakerFromDialog(dialog) {
+  if (!dialog) return { speaker: null, text: '' }
+  const raw = String(dialog).trim()
+  
+  // Format 1: [VO Speaker Name] Text
+  const bracketMatch = raw.match(/^\[(?:VO|Voice)?\s*([^\]]+)\]\s*(.*)$/i)
+  if (bracketMatch) {
+    return { speaker: bracketMatch[1].trim(), text: bracketMatch[2].trim() }
+  }
+  
+  // Format 2: Speaker Name: Text
+  // Careful not to match things like "00:00" or URLs, limit speaker length to 30 chars
+  const colonMatch = raw.match(/^([A-Za-z0-9 _-]{2,30}):\s*(.*)$/)
+  if (colonMatch) {
+    return { speaker: colonMatch[1].trim(), text: colonMatch[2].trim() }
+  }
+  
+  return { speaker: null, text: raw }
+}

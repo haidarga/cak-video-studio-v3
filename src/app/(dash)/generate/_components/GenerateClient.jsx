@@ -1006,11 +1006,17 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       // and per-mode hardcoded fallbacks. Sanitizer drops 'multi-scene / 9
       // panels' language when continuousShot=true (declarative, no regex).
       const isGrid = isGridShot
-      const dialogs = globalConfig.skipDialog
+      const { extractSpeakerFromDialog } = await import('@/lib/voice-direction')
+      const rawDialogs = globalConfig.skipDialog
         ? ''
         : (isGrid
           ? shot.raw.panels.map((p) => p.dialog).filter(Boolean).join(' ')
           : (shot.raw.dialogue || ''))
+      
+      // Parse out the speaker (e.g. "[VO Bella] text" -> "text") so the speaker tag
+      // doesn't bleed into the visual generation prompt.
+      const { speaker: dialogSpeaker, text: dialogs } = extractSpeakerFromDialog(rawDialogs)
+
       // ALWAYS use the user's video_motion from the parsed naskah. continuousShot
       // toggle = "single take, no cuts" — that's a CONSTRAINT we ADD to the
       // user's motion, NOT a replacement for it. Previously the toggle was
@@ -1733,9 +1739,9 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
   //   sequential shots already; gen Shot 1; then "link" its last frame
   //   into Shot 2's refs BEFORE genning Shot 2 → visual handoff without
   //   destroying the LLM-parsed motion text in Shot 2.
-  async function linkFrameToNextShot(idx) {
+  async function linkFrameToNextShot(idx, targetIdx = idx + 1) {
     const prev = state.shots[idx]
-    const next = state.shots[idx + 1]
+    const next = state.shots[targetIdx]
     if (!prev?.video?.url) { onErr('Link: video Shot ini belum jadi'); return }
     if (!next) { onErr('Link: gak ada shot berikutnya di list'); return }
     patchShot(idx, { continuing: 'Loading ffmpeg...' })
@@ -1770,7 +1776,7 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
         // throw — just tell the user the link couldn't be made but Shot
         // N+1 will still gen with its base refs.
         patchShot(idx, { continuing: null })
-        onErr(`Link gagal: ${extractErr.message?.slice(0, 80)}. Shot ${idx + 2} tetep bisa di-gen tapi tanpa visual handoff dari Shot ${idx + 1}. Karakter + style tetep locked dari persona refs.`)
+        onErr(`Link gagal: ${extractErr.message?.slice(0, 80)}. Shot ${targetIdx + 1} tetep bisa di-gen tapi tanpa visual handoff dari Shot ${idx + 1}. Karakter + style tetep locked dari persona refs.`)
         onPatch({ busy: false })
         return
       }
@@ -1801,8 +1807,7 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
 
     // Merge into next shot's additional_ref_urls. Dedupe so repeated
     // clicks don't pile up the same URL.
-    const nextIdx = idx + 1
-    patchShot(nextIdx, (prevNextState) => {
+    patchShot(targetIdx, (prevNextState) => {
       const existing = prevNextState.additional_ref_urls || []
       if (existing.includes(frameUrl)) {
         // Same frame already linked — still refresh the memory if we got one.
@@ -1838,7 +1843,24 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
       `Tap OK = jalanin, Cancel = batal.`
     )) return
     onPatch({ busy: true }); onErr('')
-    for (const i of approvedIdx) await genVideoForShot(i)
+    
+    for (let j = 0; j < approvedIdx.length; j++) {
+      const i = approvedIdx[j]
+      
+      // If continuousShot is enabled, link from the previously generated shot in this batch
+      if (globalConfig.continuousShot && j > 0) {
+        const prevI = approvedIdx[j - 1]
+        const prevShot = state.shots[prevI]
+        // Only link if the previous video generated successfully
+        if (prevShot?.video?.status === 'done' && prevShot.video.url) {
+          patchShot(i, { continuing: 'Menunggu frame dari shot sebelumnya (Continue Mode)...' })
+          await linkFrameToNextShot(prevI, i)
+        }
+      }
+      
+      await genVideoForShot(i)
+    }
+    
     onPatch({ busy: false })
   }
 
