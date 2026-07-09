@@ -13,6 +13,7 @@ describe('estimateFalCost', () => {
     expect(estimateFalCost('xai/grok-imagine-video/text-to-video', { duration: 5 })).toBeCloseTo(0.35, 5)
     expect(estimateFalCost('bytedance/seedance-2.0/fast/reference-to-video', { duration: 10 })).toBeCloseTo(2.4, 5)
     expect(estimateFalCost('fal-ai/veo3', { duration: 8 })).toBeCloseTo(4.0, 5)
+    expect(estimateFalCost('alibaba/happy-horse/v1.1/image-to-video', { duration: 10 })).toBeCloseTo(1.4, 5)
   })
 
   it('defaults video duration to 5s when the input has none (e.g. LTX uses num_frames)', () => {

@@ -20,6 +20,9 @@ describe('videoCost', () => {
   it('defaults duration to 5s', () => {
     expect(videoCost('xai/grok-imagine-video/text-to-video')).toBeCloseTo(0.35, 5)
   })
+  it('calculates cost for Happy Horse 1.1 correctly (default 720p 0.14)', () => {
+    expect(videoCost('alibaba/happy-horse/v1.1/image-to-video', 10)).toBeCloseTo(1.4, 5)
+  })
   it('uses _default rate (0.10/s) for unknown models', () => {
     expect(videoCost('weird/model', 5)).toBeCloseTo(0.5, 5)
   })

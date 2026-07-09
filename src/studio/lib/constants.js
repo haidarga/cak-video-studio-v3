@@ -29,6 +29,7 @@ export const VIDEO_MODELS = [
   { v: 'fal-ai/kling-video/o3/standard/reference-to-video', l: '🎭 Kling O3 Ref-to-Video — ~$0.11/dtk (multi-char)' },
   { v: 'fal-ai/kling-video/v3/standard/image-to-video', l: 'Kling v3 Standard — ~$0.08/dtk 💰 termurah' },
   { v: 'alibaba/happy-horse/image-to-video', l: 'Happy Horse 1.0 — ~$0.14/dtk' },
+  { v: 'alibaba/happy-horse/v1.1/image-to-video', l: 'Happy Horse 1.1 — ~$0.14/dtk (lip-sync, audio)' },
   { v: 'bytedance/seedance-2.0/mini/image-to-video', l: 'Seedance 2 Mini — ~$0.15/dtk 720p (faster, audio) 💰' },
   { v: 'bytedance/seedance-2.0/fast/image-to-video', l: 'Seedance 2 Fast — ~$0.24/dtk (audio included)' },
   { v: 'alibaba/happy-horse/reference-to-video', l: '🎭 Happy Horse Ref-to-Video — ~$0.14/dtk' },
@@ -39,7 +40,10 @@ export const VIDEO_MODELS = [
 // per-second USD rate (720p baseline) — used for cost estimates so users pick the cheap option
 export function videoRatePerSec(vidModel, res = '720p') {
   if (!vidModel) return 0.12
-  if (vidModel.includes('happy-horse')) return res === '1080p' ? 0.28 : 0.14
+  if (vidModel.includes('happy-horse')) {
+    if (vidModel.includes('v1.1')) return res === '1080p' ? 0.18 : 0.14
+    return res === '1080p' ? 0.28 : 0.14
+  }
   if (vidModel.includes('seedance')) return vidModel.includes('/fast/') ? 0.2419 : 0.3024
   if (vidModel.includes('kling-video')) return vidModel.includes('/o3/') ? 0.112 : 0.084  // o3 audio-on
   return 0.12

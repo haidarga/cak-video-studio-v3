@@ -43,6 +43,7 @@ export const VIDEO_COSTS_PER_SECOND = {
   'fal-ai/kling-video/o3/standard/image-to-video': 0.11,
   'fal-ai/kling-video/v2.5-turbo/pro/image-to-video': 0.12,
   'fal-ai/kling-video/v2.5-turbo/pro/ref-to-video': 0.12,
+  'alibaba/happy-horse/v1.1/image-to-video': 0.14,
   'alibaba/happy-horse/image-to-video': 0.14,
   'alibaba/happy-horse/reference-to-video': 0.14,
   'fal-ai/bytedance/seedance/v1/lite/reference-to-video': 0.16,
