@@ -15,7 +15,7 @@ import { compileImagePrompt, compileVideoPrompt } from '../_lib/prompt-compiler'
 import { planToJobs, buildConcatProject } from '@/lib/long-form'
 import { isContentRefusal, nextVideoModel } from '@/lib/model-fallback'
 import { normalizeToGrid } from '@/lib/storyboard-grid'
-import { parseSceneTimestamps, packScenesIntoSegments } from '@/lib/script-segments'
+import { parseSceneTimestamps, packScenesIntoSegments, splitByStoryboardHeaders } from '@/lib/script-segments'
 import { buildContinuityBlock, mergeContinuity, summarizeStateForParse } from '@/lib/shot-memory'
 import { cleanProductBg } from '@/lib/bg-removal'
 import { CAMERA_PRESETS, listAllPresets, DEFAULT_CAMERA, getCameraPreset } from '@/lib/camera-presets'
@@ -658,9 +658,15 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       // shot so "Continue" pulls the exact next segment. Empty when the script
       // has no timestamps or fits in one clip → normal single-parse behavior.
       const segMaxSeg = getVideoMaxDuration(globalConfig.vidModel)
-      const lfSegments = globalConfig.mode === 'storyboard'
-        ? packScenesIntoSegments(parseSceneTimestamps(state.naskah), segMaxSeg)
-        : []
+      let lfSegments = []
+      if (globalConfig.mode === 'storyboard') {
+        const parsedScenes = parseSceneTimestamps(state.naskah)
+        if (parsedScenes.length > 0) {
+          lfSegments = packScenesIntoSegments(parsedScenes, segMaxSeg)
+        } else {
+          lfSegments = splitByStoryboardHeaders(state.naskah)
+        }
+      }
       const isSegmented = lfSegments.length > 1
       const naskahsToSend = (isSegmented && globalConfig.mode === 'storyboard') ? lfSegments.map(s => s.text) : [state.naskah]
       
