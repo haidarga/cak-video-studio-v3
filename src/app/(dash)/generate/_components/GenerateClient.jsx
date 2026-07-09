@@ -661,10 +661,14 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       let lfSegments = []
       if (globalConfig.mode === 'storyboard') {
         const parsedScenes = parseSceneTimestamps(state.naskah)
-        if (parsedScenes.length > 0) {
-          lfSegments = packScenesIntoSegments(parsedScenes, segMaxSeg)
-        } else {
-          lfSegments = splitByStoryboardHeaders(state.naskah)
+        lfSegments = packScenesIntoSegments(parsedScenes, segMaxSeg)
+        // Fallback: if timestamps didn't yield multiple segments (maybe just one stray timestamp),
+        // try splitting by explicit STORYBOARD X headers.
+        if (lfSegments.length <= 1) {
+          const headerSegments = splitByStoryboardHeaders(state.naskah)
+          if (headerSegments.length > 1) {
+            lfSegments = headerSegments
+          }
         }
       }
       const isSegmented = lfSegments.length > 1
