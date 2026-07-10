@@ -137,14 +137,24 @@ export async function voiceChange(apiKey, voiceId, audioBuf, opts = {}) {
 // Self-contained on purpose — the voice path must not import god-mode builders
 // (keep god-mode / generate / voice surfaces decoupled).
 export async function rehostToFal(url, falKey) {
-  if (!falKey) throw new Error('FAL_KEY belum di-set — gak bisa re-host video buat extract audio')
+  if (!falKey || falKey.includes('<ISI-')) throw new Error('FAL_KEY belum di-set atau masih default di .env.local. Ganti pakai key asli dari fal.ai dulu biar bisa re-host video buat extract audio.')
   let res
   try { res = await fetch(url) } catch (e) { throw new Error(`re-host: gak bisa download video — ${e.message} (url: ${url.slice(0, 120)})`) }
   if (!res.ok) throw new Error(`re-host: download video ${res.status} (url: ${url.slice(0, 120)})`)
   const blob = await res.blob()
   const { fal } = await import('@fal-ai/client')
   fal.config({ credentials: falKey })
-  const falUrl = await fal.storage.upload(blob)
+  
+  let falUrl
+  try {
+    falUrl = await fal.storage.upload(blob)
+  } catch (e) {
+    if (e.message === 'Forbidden' || e?.status === 403) {
+      throw new Error('FAL_KEY invalid (Forbidden dari fal.ai). Cek FAL_KEY di .env.local atau Workspace Settings lu, pastiin key-nya bener.')
+    }
+    throw new Error(`re-host upload gagal: ${e.message}`)
+  }
+  
   if (!falUrl) throw new Error('re-host: fal.storage.upload balik URL kosong')
   return falUrl
 }
