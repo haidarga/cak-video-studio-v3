@@ -736,7 +736,10 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
                 chars_in_shot: p.chars_in_shot || [],
               })),
               chars_in_shot: parsed.characters || [],
-              duration: panels.reduce((sum, p) => sum + (parseInt(p.seconds) || 2), 0) || 15,
+              // Clamp to the model's cap — the parser is told the cap (maxSegmentDuration
+              // above) but LLM panel-second sums can still drift over it, and an uncapped
+              // value here sat unclamped in the editor until the user touched the field.
+              duration: Math.min(segMaxSeg, panels.reduce((sum, p) => sum + (parseInt(p.seconds) || 2), 0) || 15),
               shot_label: isSegmented ? `Storyboard 3×3 (Bagian ${i + 1})` : 'Storyboard 3×3',
               // Deterministic continuation: full ordered segment texts + which one
               // this storyboard IS. "Continue" reads these to gen the exact next
@@ -765,7 +768,7 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
             environment: sharedEnv,
             wardrobe: sharedWardrobe,
             chars_in_shot: it.chars_in_shot || [],
-            duration: it.duration || 5,
+            duration: Math.min(segMaxSeg, it.duration || 5),
             shot_label: `Shot ${it.shot}`,
           },
           label: `${persona.name} — Shot ${it.shot || i + 1}`,

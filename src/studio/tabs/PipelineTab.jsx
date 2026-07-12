@@ -53,7 +53,7 @@ export default function PipelineTab() {
           panels, image_prompt,
           video_motion: String(s.video_motion || '').trim(),
           dialogue: String(s.dialogue || ''),
-          duration: Math.max(2, Math.min(20, +s.duration || (isStoryParse ? 15 : 5))),
+          duration: Math.max(2, Math.min(15, +s.duration || (isStoryParse ? 15 : 5))),
           images: [], imageUrl: null, imgModel: '', videoUrl: null, status: 'idle', statusLabel: 'idle',
           chars_in_shot: Array.isArray(s.chars_in_shot) ? s.chars_in_shot : [],
           refIds: autoMapRefs(s.chars_in_shot || [], S.refImages),
@@ -412,8 +412,8 @@ export default function PipelineTab() {
                       <span style={{ fontWeight: 600, fontSize: 13 }}>{isStory ? 'Storyboard' : 'Shot'} {shot.shot}</span>
                     </div>
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                      <input type="number" min={2} max={20} value={shot.duration}
-                        onChange={(e) => patchShot(shot.id, { duration: Math.max(2, Math.min(20, +e.target.value || 5)) })}
+                      <input type="number" min={2} max={15} value={shot.duration}
+                        onChange={(e) => patchShot(shot.id, { duration: Math.max(2, Math.min(15, +e.target.value || 5)) })}
                         title="Durasi shot ini"
                         style={{ width: 50, padding: '3px 5px', fontSize: 12, textAlign: 'center' }} />
                       <span style={{ fontSize: 11, color: 'var(--muted)' }}>detik</span>

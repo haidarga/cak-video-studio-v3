@@ -51,7 +51,7 @@ export default function BulkTab() {
           : String(s.image_prompt || '').trim()
         return {
           ...s, id: job.id + '_s' + i, panels, image_prompt, imageUrl: null, videoUrl: null,
-          duration: Math.max(2, Math.min(20, +s.duration || (isStoryParse ? 15 : 5))),
+          duration: Math.max(2, Math.min(15, +s.duration || (isStoryParse ? 15 : 5))),
           chars_in_shot: Array.isArray(s.chars_in_shot) ? s.chars_in_shot : [],
           refIds: autoMapRefs(s.chars_in_shot || [], refsForJob),
         }
