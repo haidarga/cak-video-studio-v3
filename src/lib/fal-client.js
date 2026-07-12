@@ -568,7 +568,9 @@ export function getVideoMaxDuration(vidModel) {
   // v3 standard AND pro both take duration up to 15 per fal.ai's own
   // dashboard (user confirmed — dropdown goes to 15 on the standard tier too).
   if (m.includes('kling-video/v3')) return 15
-  if (m.includes('kling-video/o3')) return 10
+  // O3 (both image-to-video and reference-to-video) also goes to 15 per
+  // fal.ai's dashboard — dropdown shows Duration:15 selectable on both.
+  if (m.includes('kling-video/o3')) return 15
   if (m.includes('kling-video/v2.5')) return 15
   if (m.includes('veo3')) return 8        // conservative; some variants longer, verify per-call
   return 10
@@ -583,6 +585,11 @@ export function toRefToVideoModel(vidModel) {
   if (m.includes('reference-to-video') || m.includes('ref-to-video')) return vidModel // already ref
   if (m.includes('veo3')) return 'fal-ai/veo3.1/fast/reference-to-video'
   if (m.includes('grok')) return 'xai/grok-imagine-video/reference-to-video'
+  // O3 has its own reference-to-video (multi-char @Element tags) — stay in
+  // family instead of downgrading to the older v2.5-turbo model. v3/other
+  // kling variants have no confirmed ref-to-video endpoint yet, so they
+  // still fall back to v2.5-turbo/pro/ref-to-video.
+  if (m.includes('kling-video/o3')) return 'fal-ai/kling-video/o3/standard/reference-to-video'
   if (m.includes('kling')) return 'fal-ai/kling-video/v2.5-turbo/pro/ref-to-video'
   if (m.includes('happy-horse')) return 'alibaba/happy-horse/reference-to-video'
   if (m.includes('seedance-2.0/mini')) return 'bytedance/seedance-2.0/mini/reference-to-video'
@@ -612,6 +619,7 @@ export const VIDEO_MODELS = [
   { v: 'xai/grok-imagine-video/text-to-video', l: '📝 Grok T2V — ~$0.07/dtk (pure text, audio) 💰' },
   { v: 'fal-ai/kling-video/v3/standard/image-to-video', l: 'Kling v3 — ~$0.08/dtk 💰' },
   { v: 'fal-ai/kling-video/o3/standard/image-to-video', l: 'Kling O3 — ~$0.11/dtk (audio)' },
+  { v: 'fal-ai/kling-video/o3/standard/reference-to-video', l: '🎭 Kling O3 Ref-to-Video — ~$0.11/dtk (multi-char, audio)' },
   { v: 'fal-ai/kling-video/v2.5-turbo/pro/ref-to-video', l: '🎭 Kling 2.5 Pro Ref-to-Video — ~$0.12/dtk (NO morphing dari grid)' },
   { v: 'fal-ai/kling-video/v3/standard/text-to-video', l: '📝 Kling 3 T2V — ~$0.13/dtk (audio, multi-shot)' },
   { v: 'alibaba/happy-horse/image-to-video', l: 'Happy Horse 1.0 — ~$0.14/dtk' },

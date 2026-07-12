@@ -8,6 +8,9 @@ describe('toRefToVideoModel', () => {
     expect(toRefToVideoModel('alibaba/happy-horse/image-to-video')).toBe('alibaba/happy-horse/reference-to-video')
     expect(toRefToVideoModel('fal-ai/kling-video/v3/image-to-video')).toBe('fal-ai/kling-video/v2.5-turbo/pro/ref-to-video')
   })
+  it('routes Kling O3 to its OWN reference-to-video, not the older v2.5-turbo model', () => {
+    expect(toRefToVideoModel('fal-ai/kling-video/o3/standard/image-to-video')).toBe('fal-ai/kling-video/o3/standard/reference-to-video')
+  })
   it('preserves the Seedance 2 MINI tier (not coerced to Fast)', () => {
     expect(toRefToVideoModel('bytedance/seedance-2.0/mini/image-to-video')).toBe('bytedance/seedance-2.0/mini/reference-to-video')
   })
@@ -44,6 +47,8 @@ describe('getVideoMaxDuration', () => {
     expect(getVideoMaxDuration('xai/grok-imagine-video/reference-to-video')).toBe(10)
     expect(getVideoMaxDuration('fal-ai/kling-video/v3/image-to-video')).toBe(15)
     expect(getVideoMaxDuration('fal-ai/kling-video/v3/pro/image-to-video')).toBe(15)
+    expect(getVideoMaxDuration('fal-ai/kling-video/o3/standard/image-to-video')).toBe(15)
+    expect(getVideoMaxDuration('fal-ai/kling-video/o3/standard/reference-to-video')).toBe(15)
     expect(getVideoMaxDuration('bytedance/seedance-2.0/mini/image-to-video')).toBe(15)
   })
   it('caps veo3 at 8s', () => {

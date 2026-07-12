@@ -41,6 +41,7 @@ export const VIDEO_COSTS_PER_SECOND = {
   'alibaba/happy-horse/video-edit': 0.28,              // 720p $0.14 in + $0.14 out; 1080p $0.56
   'fal-ai/kling-video/v3/standard/image-to-video': 0.08,
   'fal-ai/kling-video/o3/standard/image-to-video': 0.11,
+  'fal-ai/kling-video/o3/standard/reference-to-video': 0.112, // $0.084 audio off / $0.112 audio on
   'fal-ai/kling-video/v2.5-turbo/pro/image-to-video': 0.12,
   'fal-ai/kling-video/v2.5-turbo/pro/ref-to-video': 0.12,
   'alibaba/happy-horse/v1.1/image-to-video': 0.14,
