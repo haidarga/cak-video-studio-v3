@@ -42,7 +42,7 @@ describe('getVideoMaxDuration', () => {
   it('returns per-family caps', () => {
     expect(getVideoMaxDuration('bytedance/seedance-2.0/fast/reference-to-video')).toBe(15)
     expect(getVideoMaxDuration('xai/grok-imagine-video/reference-to-video')).toBe(10)
-    expect(getVideoMaxDuration('fal-ai/kling-video/v3/image-to-video')).toBe(10)
+    expect(getVideoMaxDuration('fal-ai/kling-video/v3/image-to-video')).toBe(15)
     expect(getVideoMaxDuration('fal-ai/kling-video/v3/pro/image-to-video')).toBe(15)
     expect(getVideoMaxDuration('bytedance/seedance-2.0/mini/image-to-video')).toBe(15)
   })

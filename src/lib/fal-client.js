@@ -565,8 +565,9 @@ export function getVideoMaxDuration(vidModel) {
   if (m.includes('seedance-2.0/fast')) return 15        // both ref + i2v accept 4-15s per fal.ai dashboard
   if (m.includes('seedance')) return 15
   if (m.includes('happy-horse')) return 15
-  if (m.includes('kling-video/v3/pro')) return 15
-  if (m.includes('kling-video/v3')) return 10
+  // v3 standard AND pro both take duration up to 15 per fal.ai's own
+  // dashboard (user confirmed — dropdown goes to 15 on the standard tier too).
+  if (m.includes('kling-video/v3')) return 15
   if (m.includes('kling-video/o3')) return 10
   if (m.includes('kling-video/v2.5')) return 15
   if (m.includes('veo3')) return 8        // conservative; some variants longer, verify per-call
