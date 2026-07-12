@@ -120,9 +120,12 @@ export function buildVidInput(vidModel, opts) {
     const isO3 = vidModel.includes('/o3/')
     const dur = Math.max(5, Math.min(15, parseInt(duration) || 5))
     if (isRef) {
-      // O3 reference-to-video — one element per character (frontal_image_url) + @ElementN tags in prompt
+      // O3 reference-to-video — one element per character (frontal_image_url) + @ElementN tags in prompt.
+      // O3 rejects an element with ONLY frontal_image_url ("Either frontal_image_url
+      // and reference_image_urls or video_url must be provided") — mirror the same
+      // image into reference_image_urls since we only have one photo per character.
       const refs = (reference_urls || []).filter(Boolean).slice(0, 4)
-      const elements = refs.map((u) => ({ frontal_image_url: u }))
+      const elements = refs.map((u) => ({ frontal_image_url: u, reference_image_urls: [u] }))
       const tags = elements.map((_, i) => `@Element${i + 1}`).join(' and ')
       return {
         prompt: tags ? `${tags}. ${prompt}` : prompt,

@@ -124,7 +124,10 @@ export function buildVideoInputForModel(model, { motion_prompt, image_url, image
       return { prompt: motion_prompt, start_image_url: image_url || refsArr[0], duration: dur, aspect_ratio: ar }
     }
     if (isR2V) {
-      const elements = refsArr.slice(0, 4).map((u) => ({ frontal_image_url: u }))
+      // O3 rejects an element with ONLY frontal_image_url ("Either frontal_image_url
+      // and reference_image_urls or video_url must be provided") — mirror the same
+      // image into reference_image_urls since we only have one photo per character.
+      const elements = refsArr.slice(0, 4).map((u) => ({ frontal_image_url: u, reference_image_urls: [u] }))
       return { prompt: motion_prompt, ...(elements.length ? { elements } : {}), duration: dur, aspect_ratio: ar }
     }
     if (isT2V) {

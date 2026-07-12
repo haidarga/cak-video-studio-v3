@@ -384,7 +384,11 @@ export function buildVidInput(vidModel, { prompt, image_url, reference_urls, dur
     const dur = Math.max(5, Math.min(15, parseInt(duration) || 5))
     if (isRef) {
       const refs = (reference_urls || []).filter(Boolean).slice(0, 4)
-      const elements = refs.map((u) => ({ frontal_image_url: u }))
+      // O3 rejects an element with ONLY frontal_image_url ("Either
+      // frontal_image_url and reference_image_urls or video_url must be
+      // provided") — it wants both fields per element, not frontal alone.
+      // We only have one image per character, so mirror it into both.
+      const elements = refs.map((u) => ({ frontal_image_url: u, reference_image_urls: [u] }))
       const tags = elements.map((_, i) => `@Element${i + 1}`).join(' and ')
       return { prompt: tags ? `${tags}. ${prompt}` : prompt, ...(elements.length ? { elements } : {}), duration: dur, aspect_ratio, generate_audio: true }
     }

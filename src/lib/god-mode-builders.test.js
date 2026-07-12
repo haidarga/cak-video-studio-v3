@@ -8,7 +8,10 @@ describe('buildVideoInputForModel — per-model field-name routing (the 422 trap
     const i2v = buildVideoInputForModel('fal-ai/kling-video/v3/image-to-video', P)
     expect(i2v.start_image_url).toBe('https://x/a.jpg')
     const r2v = buildVideoInputForModel('fal-ai/kling-video/v2.5-turbo/pro/ref-to-video', { ...P, image_url: undefined })
-    expect(r2v.elements).toEqual([{ frontal_image_url: 'https://x/1.jpg' }, { frontal_image_url: 'https://x/2.jpg' }])
+    expect(r2v.elements).toEqual([
+      { frontal_image_url: 'https://x/1.jpg', reference_image_urls: ['https://x/1.jpg'] },
+      { frontal_image_url: 'https://x/2.jpg', reference_image_urls: ['https://x/2.jpg'] },
+    ])
   })
 
   it('grok r2v uses reference_image_urls (NOT image_urls)', () => {
