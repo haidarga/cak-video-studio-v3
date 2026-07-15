@@ -19,6 +19,7 @@ import { parseSceneTimestamps, packScenesIntoSegments, splitByStoryboardHeaders 
 import { buildContinuityBlock, mergeContinuity, summarizeStateForParse } from '@/lib/shot-memory'
 import { cleanProductBg } from '@/lib/bg-removal'
 import { CAMERA_PRESETS, listAllPresets, DEFAULT_CAMERA, getCameraPreset } from '@/lib/camera-presets'
+import { findOutOfBoundsRefs } from '@/lib/image-aspect-ratio'
 
 // Dialog languages — Indonesian + English + the regional languages. Shared by
 // the global config bar AND the per-persona override so they never drift.
@@ -1048,6 +1049,23 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       // Guard early with a clear error so user knows to upload refs first.
       if (isDirect && refUrls.length === 0) {
         throw new Error('Direct mode butuh minimal 1 reference image. Upload ref di persona dulu (atau enable di chip picker shot).')
+      }
+      // Seedance reference-to-video hard-rejects any ref image outside AR
+      // 0.40-2.50 with a 422 AFTER submission ("Error while downloading
+      // image, error: expected the aspect ratio to be between 0.40 and 2.50")
+      // — a wasted gen + an error the user can only see by opening the
+      // fal.ai dashboard directly. Catch it here with an in-app message
+      // naming the actual offending ref.
+      if (vidModel.includes('seedance') && isRefModel && refUrls.length) {
+        const badRefs = await findOutOfBoundsRefs(refUrls, 0.40, 2.50)
+        if (badRefs.length) {
+          const allRefs = [...filteredSelected, ...filteredStyle]
+          const names = badRefs.map((b) => {
+            const r = allRefs.find((x) => x.fal_url === b.url)
+            return `"${r?.label || 'ref'}" (rasio ${b.ratio.toFixed(2)})`
+          }).join(', ')
+          throw new Error(`Seedance nolak reference image ini — aspect ratio harus di antara 0.40-2.50: ${names}. Ganti fotonya atau crop dulu biar gak terlalu wide/tall.`)
+        }
       }
 
       // Visual Compiler for VIDEO prompt — same layered priority + sanitizer
