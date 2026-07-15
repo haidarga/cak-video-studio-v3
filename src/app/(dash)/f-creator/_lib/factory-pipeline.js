@@ -258,7 +258,7 @@ export async function stageVideo(shot, cfg, deps, { imageUrl, chainFrameUrl }, o
     for (const r of cfg.refs) {
       if (!r.fal_url) continue
       if (r.kind === 'product') {
-        roleLines.push(`- Image ${imgIdx} = THE PRODUCT (${r.label || 'product'}). It MUST physically appear in the video with accurate shape, colors, ports and label text. If this image shows multiple angles, they are views of ONE single product — NEVER show the multi-angle sheet layout itself in the output.`)
+        roleLines.push(`- Image ${imgIdx} = THE PRODUCT (${r.label || 'product'}). It MUST physically appear in the video with accurate shape, colors, proportions and surface details. Do NOT attempt to render or reproduce any text, labels, logos or writing on the product — let them stay naturally blurred or absent. If this image shows multiple angles, they are views of ONE single product — NEVER show the multi-angle sheet layout itself in the output.`)
       } else {
         roleLines.push(`- Image ${imgIdx} = character IDENTITY only (face, hair, body, skin tone${r.label ? ` — ${r.label}` : ''}). COMPLETELY IGNORE this image's background, room, location, pose, lighting and composition.`)
       }
@@ -285,7 +285,7 @@ ${motion}`
   if (!cfg.noProduct && brand) {
     finalMotion += `
 
-PRODUCT FIDELITY (critical): the product is a RIGID manufactured object — its shape, proportions, port/button layout, colors and label text must stay IDENTICAL to the first frame in EVERY frame. No warping, no morphing, no melting, no re-imagined details, no gibberish text on the label. Keep the product itself mostly static; movement comes from the camera and the person, never from the product deforming.`
+PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. It holds its EXACT same shape, proportions, port/button layout and colors in every single frame — rock-steady and identical to the first frame. Do NOT attempt to render, reproduce or maintain any text, labels, logos or writing on the product — let them stay naturally blurred or absent; sharp text on products is impossible for video and attempting it creates gibberish. The product stays still and stable; any movement comes only from the hand or the camera, gently and slowly. Treat the product as a fixed solid prop.`
   }
 
   const maxDur = getVideoMaxDuration(vidModel)

@@ -1175,7 +1175,7 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
         for (const r of filteredSelected) {
           if (!r.fal_url) continue
           if (r.kind === 'product') {
-            roleLines.push(`- Image ${imgIdx} = THE PRODUCT (${r.label || 'product'}). It MUST physically appear in the video with accurate shape, colors, ports and label text. If this image shows multiple angles, they are views of ONE single product — NEVER show the multi-angle sheet layout itself in the output.`)
+            roleLines.push(`- Image ${imgIdx} = THE PRODUCT (${r.label || 'product'}). It MUST physically appear in the video with accurate shape, colors, proportions and surface details. Do NOT attempt to render or reproduce any text, labels, logos or writing on the product — let them stay naturally blurred or absent. If this image shows multiple angles, they are views of ONE single product — NEVER show the multi-angle sheet layout itself in the output.`)
           } else {
             roleLines.push(`- Image ${imgIdx} = character IDENTITY only (face, hair, body, skin tone${r.label ? ` — ${r.label}` : ''}). COMPLETELY IGNORE this image's background, room, location, pose, lighting and composition.`)
           }
@@ -1252,10 +1252,13 @@ ${motion}`
       // LATCH onto those concepts and morph MORE (pink-elephant effect). So we
       // describe stability as a positive state + minimal product motion (the
       // real anti-morph lever is LESS movement, not "don't morph").
+      // CRITICAL: do NOT ask video models to render text/labels/logos — they
+      // can't do it and will produce gibberish. Explicit anti-text instruction
+      // prevents the model from even attempting it.
       if (!globalConfig.skipProduct && brand) {
         finalMotion += `
 
-PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. It holds its EXACT same shape, proportions, port/button layout, colors and label text in every single frame — rock-steady and identical to the first frame. The product stays still and stable; any movement comes only from the hand or the camera, gently and slowly. Treat the product as a fixed solid prop.`
+PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. It holds its EXACT same shape, proportions, port/button layout and colors in every single frame — rock-steady and identical to the first frame. Do NOT attempt to render, reproduce or maintain any text, labels, logos or writing on the product — let them stay naturally blurred or absent; sharp text on products is impossible for video and attempting it creates gibberish. The product stays still and stable; any movement comes only from the hand or the camera, gently and slowly. Treat the product as a fixed solid prop.`
       }
       const vidSeed = globalConfig.seedLock ? globalConfig.seed : randomSeed()
       const vidInput = applySeed(vidModel, buildVidInput(vidModel, {

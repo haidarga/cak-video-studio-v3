@@ -1,4 +1,4 @@
-﻿// Visual Prompt Compiler â€” the single source of truth for assembling image and
+// Visual Prompt Compiler â€” the single source of truth for assembling image and
 // video prompts from structured inputs.
 //
 // Why this exists: prior code concatenated style-preset + IMG_QUALITY +
@@ -190,7 +190,12 @@ function pickQuality(cam, media, skipProduct, environment = '') {
       ? `Natural handheld motion, real-person realism. ${phoneSkinClause(environment)} No over-processing.`
       : `Real-person realism. ${phoneSkinClause(environment)} No over-processing.`
   }
-  const product = skipProduct ? '' : ' Product label sharp and legible.'
+  // Image models (GPT Image 2, Nano Banana) CAN render text — keep label
+  // instruction for images. Video models CANNOT — asking for "label text
+  // sharp" causes gibberish. Split by media type.
+  const product = skipProduct ? '' : (media === 'video'
+    ? ' Consistent product appearance.'
+    : ' Product label sharp and legible.')
   return media === 'video'
     ? `Steady framing, consistent identity.${product}`
     : `Anatomically correct, well-composed.${product}`

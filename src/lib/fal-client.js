@@ -369,7 +369,7 @@ export function buildVidInput(vidModel, { prompt, image_url, reference_urls, dur
       return { prompt, duration: Math.max(5, Math.min(10, d)), aspect_ratio, generate_audio: true }
     }
     if (vidModel.includes('seedance')) {
-      return { prompt, duration: String(Math.max(4, Math.min(15, d))), resolution: '720p', aspect_ratio, generate_audio: true }
+      return { prompt, duration: String(Math.max(4, Math.min(15, d))), resolution: '720p', aspect_ratio, generate_audio: true, enable_safety_checker: false }
     }
     if (vidModel.includes('happy-horse')) {
       return { prompt: prompt + HH_STABILITY, duration: Math.max(3, Math.min(15, d)), aspect_ratio, resolution: '720p', enable_safety_checker: false }
@@ -390,9 +390,13 @@ export function buildVidInput(vidModel, { prompt, image_url, reference_urls, dur
       // We only have one image per character, so mirror it into both.
       const elements = refs.map((u) => ({ frontal_image_url: u, reference_image_urls: [u] }))
       const tags = elements.map((_, i) => `@Element${i + 1}`).join(' and ')
-      return { prompt: tags ? `${tags}. ${prompt}` : prompt, ...(elements.length ? { elements } : {}), duration: dur, aspect_ratio, generate_audio: true }
+      let finalPrompt = tags ? `${tags}. ${prompt}` : prompt
+      if (finalPrompt.length > 2450) finalPrompt = finalPrompt.slice(0, 2450)
+      return { prompt: finalPrompt, ...(elements.length ? { elements } : {}), duration: dur, aspect_ratio, generate_audio: true }
     }
-    const out = { prompt, image_url, duration: dur, aspect_ratio }
+    let finalPrompt = prompt
+    if (finalPrompt && finalPrompt.length > 2450) finalPrompt = finalPrompt.slice(0, 2450)
+    const out = { prompt: finalPrompt, image_url, duration: dur, aspect_ratio }
     if (reference_urls?.length) out.reference_image_urls = reference_urls.slice(0, 4)
     if (isO3) out.generate_audio = true
     return out
@@ -410,6 +414,7 @@ export function buildVidInput(vidModel, { prompt, image_url, reference_urls, dur
       duration: d ? String(Math.max(4, Math.min(15, d))) : 'auto',
       resolution: '720p',
       aspect_ratio: okAR.includes(aspect_ratio) ? aspect_ratio : 'auto',
+      enable_safety_checker: false,
     }
   }
   if (vidModel.includes('happy-horse')) {
@@ -542,7 +547,7 @@ export function buildStoryboardGridPrompt(panels = [], ar = '9:16', concept = ''
 export function productDirective(notes) {
   const n = (notes || '').trim()
   if (!n) return ''
-  return ' PRODUCT FIDELITY (critical): reproduce the product packaging EXACTLY as in the reference image — correct shape and proportions, product upright with its front label facing the camera, and ALL label text sharp, legible and correctly spelled. Strictly respect this product knowledge: ' + n
+  return ' PRODUCT FIDELITY (critical): reproduce the product packaging EXACTLY as in the reference image — correct shape, proportions and colors, product upright with its front label facing the camera. Do NOT attempt to render or reproduce any text, labels or logos — let them stay naturally blurred or absent. Strictly respect this product knowledge: ' + n
 }
 
 // @deprecated — was unconditionally appended at every image gen and contradicted

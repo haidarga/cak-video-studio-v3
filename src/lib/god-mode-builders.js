@@ -87,7 +87,9 @@ export function buildProductFidelityDirective(activeProduct) {
   // Mirrors v2's productDirective in fal-client.js (which was never wired
   // up in v3 — this replaces it). Phrasing chosen to survive diffusion
   // token-budget pressure: "CRITICAL" + "EXACTLY" anchors the model.
-  return `\n\nCRITICAL PRODUCT FIDELITY — render the product EXACTLY as specified, identical across every shot: ${parts.join('; ')}. Product label text must be sharp, legible, correctly spelled. Do NOT substitute, abstract, or vary the product between shots.`
+  // NOTE: do NOT ask for "label text sharp/legible" — video models can't
+  // render text and will produce gibberish trying. Shape + color only.
+  return `\n\nCRITICAL PRODUCT FIDELITY — render the product EXACTLY as specified, identical across every shot: ${parts.join('; ')}. Maintain exact shape, proportions, colors and surface details. Do NOT attempt to render or reproduce any text, labels or logos on the product — let them stay naturally blurred or absent. Do NOT substitute, abstract, or vary the product between shots.`
 }
 
 // ── Video input builder ──────────────────────────────────────────────
