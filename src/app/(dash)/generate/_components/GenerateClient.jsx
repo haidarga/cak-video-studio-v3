@@ -224,6 +224,7 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
           value={globalConfig.cameraPreset}
           onChange={(id) => setGlobalConfig({ ...globalConfig, cameraPreset: id })}
           userPresets={userCameraPresets}
+          imgModel={globalConfig.imgModel}
           onUserPresetsChanged={() => {
             fetch('/api/workspace/camera-presets').then((r) => r.json()).then((j) => {
               if (j.ok) setUserCameraPresets(j.presets || [])
@@ -1984,6 +1985,24 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
                 <Sel label="Camera Preset" value={globalConfig.cameraPreset} onChange={(v) => setOverride({ cameraPreset: v })}
                   groups={groupCameraPresets(userCameraPresets)} />
               </div>
+              {(() => {
+                // Visible version of the silent style-ref drop below (isPixelLockEdit
+                // guard in generateForShot). User reported building a whole mood-board
+                // preset that had ZERO visible effect — the drop was console.warn-only,
+                // invisible unless you had devtools open. Surface it here so the user
+                // knows BEFORE hitting generate, with the actual fix (switch to a
+                // non-edit model where refs are hints, not pixel-locked).
+                const cam = getCameraPreset(globalConfig.cameraPreset || DEFAULT_CAMERA, userCameraPresets)
+                const styleCount = Array.isArray(cam?.style_ref_urls) ? cam.style_ref_urls.length : 0
+                const isEdit = /edit/i.test(globalConfig.imgModel || '')
+                const hasCharRef = selectedRefs.some((r) => r?.kind !== 'product' && r?.fal_url)
+                if (!(styleCount > 0 && isEdit && hasCharRef)) return null
+                return (
+                  <div className="col-span-2 text-[10px] text-amber-400 bg-amber-400/10 border border-amber-400/30 rounded px-2 py-1.5 leading-relaxed">
+                    ⚠ {styleCount} foto mood-board di preset "{cam.label}" TIDAK kepakai pas generate — image model "{globalConfig.imgModel.split('/').pop()}" pixel-lock SEMUA ref (termasuk mood board), jadi buat lindungin wajah persona, mood board-nya di-skip otomatis. Mau mood board-nya beneran kepake? Ganti Image Model ke "GPT Image 2 (generation mode)" — refs jadi hint gaya, bukan di-pixel-lock (tradeoff: fidelity wajah persona bisa sedikit lebih longgar).
+                  </div>
+                )
+              })()}
               <Sel label="Mode" value={globalConfig.mode} onChange={(v) => setOverride({ mode: v })}
                 options={[['shots', '🎬 Per-Shot'], ['storyboard', '🗂 Storyboard'], ['direct', '🎯 Direct Video']]} />
               <Sel label="Aspect Ratio" value={globalConfig.ar} onChange={(v) => setOverride({ ar: v })}
@@ -2979,7 +2998,7 @@ function RefsPicker({ personaOwnRefs, workspaceRefs, showWorkspace, onToggleShow
 // Camera Preset picker — dropdown + chip strip of recent presets + CRUD modal.
 // Built-in presets come from CAMERA_PRESETS const. User custom presets from
 // /api/workspace/camera-presets. Lu bisa Add / Edit / Clone / Delete custom.
-function CameraPresetPicker({ workspaceId, value, onChange, userPresets, onUserPresetsChanged }) {
+function CameraPresetPicker({ workspaceId, value, onChange, userPresets, onUserPresetsChanged, imgModel = '' }) {
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState(null) // null | { id?, _row_id?, preset_key, label, ... }
   const [err, setErr] = useState('')
@@ -3118,6 +3137,11 @@ function CameraPresetPicker({ workspaceId, value, onChange, userPresets, onUserP
       {current && (
         <div className="text-[10px] text-[var(--muted2)] mt-1 leading-relaxed">
           <strong className="text-[var(--muted)]">{current.tokens?.length || 0} tokens</strong>: {(current.tokens || []).slice(0, 6).join(', ')}{current.tokens?.length > 6 ? '...' : ''}
+        </div>
+      )}
+      {current && Array.isArray(current.style_ref_urls) && current.style_ref_urls.length > 0 && /edit/i.test(imgModel) && (
+        <div className="text-[10px] text-amber-400 bg-amber-400/10 border border-amber-400/30 rounded px-2 py-1.5 mt-1.5 leading-relaxed">
+          ⚠ Preset ini punya {current.style_ref_urls.length} foto mood-board, tapi Image Model "{imgModel.split('/').pop()}" pixel-lock SEMUA ref — kalau persona-nya punya character ref, mood board otomatis di-skip biar wajah gak ketuker. Buat mood board beneran kepake, ganti Image Model ke "GPT Image 2 (generation mode)" (refs jadi hint gaya, bukan pixel-lock).
         </div>
       )}
 
