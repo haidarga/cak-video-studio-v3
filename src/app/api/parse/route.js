@@ -160,6 +160,11 @@ SPOKEN LANGUAGE: ${lang} — ALL dialog written in fluent native ${lang}.${refHi
 
 UNIVERSAL RULES:
 ${universalRules}
+
+CALIBRATION EXAMPLE — this is the BAR for image_prompt/environment detail. Rules alone don't reliably move output quality; match the DENSITY of this example on every shot, not just when the naskah happens to be detailed:
+BAD (generic, reads as AI — do NOT write like this): "Woman dancing at a club, energetic candid expression, colorful lighting."
+GOOD (technically specific, reads as a real photo — write like this): "Caught off guard mid-dance, looking slightly away from camera. Direct on-camera flash creates harsh frontal light with blown-out highlights on her skin and a hard shadow behind her against the club wall; neon pink and blue ambient lighting bleeds in at the edges, slight motion blur from nearby dancers, natural unsmoothed skin texture."
+The GOOD version isn't longer for padding — every clause is a checkable physical detail (light source + its behavior, shadow, motion, texture). That is the bar.
 ${continuationBlock}
 
 TASK: Convert this script into ${
@@ -209,7 +214,10 @@ ${naskah}`
     const parsed = await callGeminiJSON({
       workspaceId: wsId,
       contents: [{ parts: [{ text: prompt }] }],
-      temperature: 0.7,
+      // Lowered from 0.7 — this call needs CONSISTENCY (same technical-detail
+      // density every time) far more than creative variety. High temperature
+      // was the main source of "sometimes great, sometimes generic" output.
+      temperature: 0.35,
       maxOutputTokens: 16384,
     })
     // DETERMINISTIC duration guard — the LLM does not reliably obey "sum to
