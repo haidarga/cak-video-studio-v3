@@ -4,6 +4,7 @@ import {
   scriptTotalSeconds,
   packScenesIntoSegments,
   clampPanelsToMaxSeg,
+  splitByStoryboardHeaders,
 } from './script-segments.js'
 
 // The EXACT naskah the user reported the 19s bug on (30s, 8 scenes).
@@ -160,5 +161,21 @@ describe('parseSceneTimestamps — extra timestamp shapes', () => {
   it('matches "(5s-10s)" style with a trailing s on the start bound too', () => {
     const s = parseSceneTimestamps('Scene X (5s-10s)\nbody line')
     expect(s.map((x) => [x.start, x.end])).toEqual([[5, 10]])
+  })
+  it('matches Indonesian "(0–10 DETIK)" style — regression: was silently un-detected, collapsing a 2-video naskah into one un-split parse', () => {
+    const s = parseSceneTimestamps('VIDEO 1 (0–10 DETIK)\nbody one\n\nVIDEO 2 (10–20 DETIK)\nbody two')
+    expect(s.map((x) => [x.start, x.end])).toEqual([[0, 10], [10, 20]])
+  })
+})
+
+describe('splitByStoryboardHeaders — VIDEO N headers', () => {
+  it('splits on "VIDEO 1" / "VIDEO 2" the same as STORYBOARD/BAGIAN/PART/SEGMEN', () => {
+    const naskah = 'VIDEO 1 (0–10 DETIK)\nTandy: halo\n\nVIDEO 2 (10–20 DETIK)\nTandy: sampai jumpa'
+    const segs = splitByStoryboardHeaders(naskah)
+    expect(segs.length).toBe(2)
+    expect(segs[0].text).toMatch(/VIDEO 1/)
+    expect(segs[0].text).toMatch(/halo/)
+    expect(segs[1].text).toMatch(/VIDEO 2/)
+    expect(segs[1].text).toMatch(/sampai jumpa/)
   })
 })

@@ -11,9 +11,12 @@
 // it; it never decides how long or how many. Panel durations are also clamped in
 // code so a single clip can never exceed the model's cap.
 
-// Matches a timestamp range in either "0-4s" / "15-18 s" form or "0:00-0:15"
-// mm:ss form, with hyphen / en-dash / em-dash separators.
-const TS = /(\d{1,2}):(\d{2})\s*[-–—]\s*(\d{1,2}):(\d{2})|(\d+)\s*s?\s*[-–—]\s*(\d+)\s*s\b/i
+// Matches a timestamp range in either "0-4s" / "15-18 s" form, "0:00-0:15"
+// mm:ss form, or Indonesian "0-10 DETIK" form, with hyphen / en-dash /
+// em-dash separators. Missing "detik" here meant any Indonesian naskah using
+// "VIDEO 1 (0-10 DETIK)" headers (instead of "...s") silently failed
+// deterministic segmentation and fell back to a single un-split parse.
+const TS = /(\d{1,2}):(\d{2})\s*[-–—]\s*(\d{1,2}):(\d{2})|(\d+)\s*(?:s|detik)?\s*[-–—]\s*(\d+)\s*(?:s\b|detik\b)/i
 
 function parseRange(line) {
   const m = String(line).match(TS)
@@ -132,15 +135,16 @@ export function clampPanelsToMaxSeg(panels, maxSeg) {
 // Fallback for scripts that lack timestamps but have explicit "STORYBOARD X:" headers.
 // Returns an array of segment objects matching the shape returned by packScenesIntoSegments: { text, index }
 export function splitByStoryboardHeaders(naskah) {
-  // Matches STORYBOARD 1, Bagian 1, Part 1, Segmen 1
-  const sbRegex = /(?:^|\n)(?=\s*(?:STORYBOARD|BAGIAN|PART|SEGMEN)\s+\d+)/i
+  // Matches STORYBOARD 1, Bagian 1, Part 1, Segmen 1, Video 1 (user naskah
+  // commonly labels each clip "VIDEO 1 (0-10 DETIK)" / "VIDEO 2 (...)").
+  const sbRegex = /(?:^|\n)(?=\s*(?:STORYBOARD|BAGIAN|PART|SEGMEN|VIDEO)\s+\d+)/i
   const blocks = String(naskah || '').split(sbRegex).map(s => s.trim()).filter(Boolean)
-  
+
   const segments = []
   let currentText = ''
-  
+
   for (const block of blocks) {
-    if (/^(?:STORYBOARD|BAGIAN|PART|SEGMEN)\s+\d+/i.test(block)) {
+    if (/^(?:STORYBOARD|BAGIAN|PART|SEGMEN|VIDEO)\s+\d+/i.test(block)) {
       if (currentText) segments.push({ text: currentText.trim(), index: segments.length })
       currentText = block
     } else {
