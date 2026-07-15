@@ -653,6 +653,14 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
     onPatch({ busy: true }); onErr('')
     try {
       const refLabels = selectedRefs.map((r) => r.label).filter(Boolean)
+      // Tell the parser WHICH camera preset is active so it writes image_prompt/
+      // environment with real technical specificity (flash physics for candid
+      // phone presets, lighting-setup detail for studio presets, etc.) instead
+      // of generic "candid" language — see detail_hint on each built-in preset.
+      const activeCam = getCameraPreset(globalConfig.cameraPreset || DEFAULT_CAMERA, userCameraPresets)
+      const cameraPresetHint = activeCam
+        ? { label: activeCam.label, category: activeCam.category, tokens: activeCam.tokens || [], detail_hint: activeCam.detail_hint || '' }
+        : null
       // DETERMINISTIC SEGMENTATION — if the naskah has explicit scene timestamps
       // and is longer than one clip, split it in CODE (not via the LLM, which
       // mis-counts) and storyboard ONLY segment 1. The rest is stashed on the
@@ -686,6 +694,7 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
           body: JSON.stringify({
             naskah: naskahsToSend[i], lang: globalConfig.lang, mode: globalConfig.mode, ar: globalConfig.ar,
             refLabels, brand: activeBrand ? { notes: activeBrand.notes, config: activeBrand.config } : null,
+            cameraPreset: cameraPresetHint,
             // Tell the parser the chosen model's per-clip cap so storyboard total
             // never exceeds it (was making 20s panels for a 15s-cap model).
             maxSegmentDuration: getVideoMaxDuration(globalConfig.vidModel),

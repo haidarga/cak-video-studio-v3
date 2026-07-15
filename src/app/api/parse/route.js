@@ -6,7 +6,7 @@ import { getActiveWorkspace } from '@/lib/workspace'
 import { clampPanelsToMaxSeg } from '@/lib/script-segments'
 
 export async function POST(req) {
-  const { naskah, lang = 'Indonesian', mode = 'shots', ar = '9:16', refLabels = [], brand = null, constraints = {}, shotCount = null, continuation = null, maxSegmentDuration = 8 } = await req.json()
+  const { naskah, lang = 'Indonesian', mode = 'shots', ar = '9:16', refLabels = [], brand = null, constraints = {}, shotCount = null, continuation = null, maxSegmentDuration = 8, cameraPreset = null } = await req.json()
   if (!naskah?.trim()) return NextResponse.json({ ok: false, error: 'naskah kosong' }, { status: 400 })
 
   const supabase = await createClient()
@@ -24,6 +24,18 @@ export async function POST(req) {
   // margarine shot). The naskah is authoritative for what appears on screen.
   const brandBlock = (brand?.notes && !constraints.skipProduct)
     ? `\nBRAND CONTEXT (for tone + factual accuracy ONLY — do NOT add any product, package, or brand item to the visuals unless the NASKAH itself explicitly calls for it):\n${brand.notes}`
+    : ''
+
+  // Camera preset context — tells the parser WHICH visual style is active so
+  // image_prompt/environment get written with real technical specificity
+  // (e.g. flash physics for a candid-nightlife phone preset, lighting-rig
+  // detail for a studio preset) instead of generic "candid"/"cinematic"
+  // labels. Without this the parser writes style-blind prose and the preset's
+  // own tokens (applied later, downstream in the compiler) are the ONLY
+  // technical detail in the final prompt — much thinner than a hand-written
+  // prompt from someone who knows the preset's specific look.
+  const cameraBlock = cameraPreset
+    ? `\nACTIVE VISUAL STYLE: "${cameraPreset.label}"${cameraPreset.category ? ` (${cameraPreset.category})` : ''}.${cameraPreset.tokens?.length ? ` Style tokens already applied downstream: ${cameraPreset.tokens.slice(0, 10).join(', ')}.` : ''}${cameraPreset.detail_hint ? `\nWrite image_prompt/environment consistent with THIS specific look: ${cameraPreset.detail_hint}` : ''}`
     : ''
 
   // Build constraint hint block — user-explicit overrides take precedence over
@@ -133,6 +145,7 @@ export async function POST(req) {
     'OUTPUT TYPE STRICTNESS: every string field in the schema must be a JSON STRING, not an array or object. If the naskah lists multiple outfits, JOIN them into one string ("parents wear formal outfit, kids wear casual pastel"). If multiple camera moves, join with commas. Never return [].',
     'MOTION-STATE EXCEPTION to the collage rule: descriptors of ONE moving instant are SAFE in image_prompt and must be KEPT, not stripped — "in motion", "mid-action", "hands reaching toward", "slight motion blur", "mid-gesture", "caught mid-movement". These describe a single frame that happens to be in motion, NOT a sequence. Only BAN true temporal chains (two+ separate events: "opens the door THEN aims"). Test: one moving condition = keep; two events in order = ban.',
     'LIGHTING DIRECTIONALITY (realism — critical): when the naskah names or implies a light source or time-of-day, PRESERVE its DIRECTION and HARDNESS in the environment field — e.g. "harsh direct sunlight from one side", "strong single window light, hard shadow", "late-afternoon directional sun". Do NOT flatten it into generic "natural light" / "bright lighting" / "well-lit". Hard directional light (single window / sun) is the single biggest realism lever: hard shadows give facial structure, specular highlights read as a real photo. Flat ambient light reads as AI.',
+    'TECHNICAL SPECIFICITY, NOT GENERIC LABELS (critical — the #1 gap between a prompt that reads as AI and one that reads as a real photo): write environment/image_prompt like a photographer describing an ACTUAL scene, not a mood-board caption. "harsh direct on-camera flash creating blown highlights and a hard shadow behind the subject" beats "flash photography". "large softbox 45° camera-left with low fill" beats "studio lighting". "specular highlights on sweaty skin, motion blur from nearby dancers" beats "energetic nightclub atmosphere". If ACTIVE VISUAL STYLE above includes a detail_hint, follow it closely and reuse its level of physical/technical detail — that is the bar for every shot, not just the first one.',
     'DIALOG PACING (CRITICAL — prevents rushed/sped-up speech): keep each shot\'s spoken line SHORT enough to be said UNHURRIED within its duration — budget ~2 words per second (2s shot = MAX ~4-5 words, 3s = ~6-7, 5s = ~10-12). If the natural line is longer, TRIM it to the essential message — fewer words is ALWAYS better than fast speech. NEVER cram a long sentence into a short clip; split across shots or cut words. A rushed unintelligible voiceover is a failure.',
     'SCENE TYPE: for each shot set scene_type to the dominant motion — talking_head (speaking to camera), beauty_application (applying product to face/skin), product_reveal (lifting/showing a product), walking_transition (walking/entering frame), broll (environment/pan, no main subject action), or default. It tunes the motion-realism baseline; pick the closest.',
     'REALISM OVER POLISH: this is candid real-person content, NOT a catalog shoot. Favor unstaged framing and natural moments over perfectly composed, symmetrical, magazine-style shots. Never add "professional", "studio", "perfect", "flawless", "8K", "cinematic" unless the naskah explicitly asks for a polished/cinematic look.',
@@ -143,7 +156,7 @@ export async function POST(req) {
 
   const prompt = `You are a cinematographer translating script into VISUAL TOKENS (not screenplay prose) for a diffusion image/video model.
 
-SPOKEN LANGUAGE: ${lang} — ALL dialog written in fluent native ${lang}.${refHint}${brandBlock}${constraintBlock}
+SPOKEN LANGUAGE: ${lang} — ALL dialog written in fluent native ${lang}.${refHint}${brandBlock}${cameraBlock}${constraintBlock}
 
 UNIVERSAL RULES:
 ${universalRules}

@@ -21,6 +21,12 @@ export const CAMERA_PRESETS = {
     label: 'Samsung A13 candid (UGC)',
     category: 'phone',
     use_case: 'TikTok UGC, real-person testimonial, handheld',
+    // detail_hint — fed to the naskah PARSER (not the sanitizer) so it writes
+    // image_prompt/environment with real photographic-physics vocabulary
+    // instead of generic "candid" language. This is what separates a hand-
+    // written pro prompt from a templated one: SPECIFIC light behavior, not
+    // just a style label.
+    detail_hint: 'If the scene is dim/low-light or nightlife (bar, club, party, dark room): describe REALISTIC ON-CAMERA FLASH PHYSICS explicitly — direct built-in LED flash firing straight at the subject creates harsh frontal lighting, blown-out bright highlights on skin and near-lens clothing, a hard-edged dark shadow cast directly behind the subject onto the wall/background, and a visible color mismatch between the cool white flash and warm/colorful ambient lighting behind. In bright/daylight scenes: describe mild overexposure and crushed shadows from auto-exposure instead. Always weave in: slight motion blur from an unsteady hand, natural unsmoothed skin texture, and an unposed, off-axis body angle.',
     tokens: [
       // Aggressive UGC anchors — concrete real-world references model recognizes
       'accidental smartphone snapshot uploaded to whatsapp',
@@ -59,6 +65,7 @@ export const CAMERA_PRESETS = {
     label: 'iPhone 15 clean',
     category: 'phone',
     use_case: 'Polished UGC, founder talking head, podcast clip',
+    detail_hint: 'Describe the SPECIFIC light source shaping the shot (a window to one side, an overhead kitchen light, overcast daylight through a car window) and how it falls on the face — direction and softness, not just "natural light". Mention the subject in a believable mid-motion state (adjusting hair, mid-sentence mouth shape, weight shifting) rather than a frozen pose, and skin that reads as real (visible pores/texture) without beauty-filter smoothing.',
     tokens: [
       'shot on iPhone 15 Pro',
       'smartphone video',
@@ -82,6 +89,7 @@ export const CAMERA_PRESETS = {
     label: 'Studio TVC',
     category: 'cinema',
     use_case: 'Premium brand spot, controlled lighting, locked-off',
+    detail_hint: 'Describe the ACTUAL lighting setup, not just the label "studio lighting": key light angle and size (e.g. large softbox 45° camera-left, low fill ratio for contrast, or high-key even fill for a beauty-brand look), how the background falls off (pure seamless white vs. subtly gradient-lit), and specular highlight behavior on skin/product surfaces. Name the mood the setup creates (crisp/punchy vs. soft/premium).',
     tokens: [
       'studio softbox lighting',
       '50mm prime lens',
@@ -99,6 +107,7 @@ export const CAMERA_PRESETS = {
     label: 'Cinematic anamorphic',
     category: 'cinema',
     use_case: 'Hero brand film, narrative ad, festival look',
+    detail_hint: 'Describe the SPECIFIC optical signature: the shape and color of the anamorphic flare (horizontal blue-ish streak off a hard highlight), the characteristic oval/stretched bokeh in the background, exact color-grade direction (teal shadows / warm skin, bleach-bypass, desaturated) and the quality + direction of the key light (low warm sun behind the subject, a single practical lamp, etc.) — not just "cinematic".',
     tokens: [
       'anamorphic 2.39 aspect',
       'shallow depth of field',
@@ -115,6 +124,7 @@ export const CAMERA_PRESETS = {
     label: 'Product macro',
     category: 'cinema',
     use_case: 'Product hero shot, e-commerce key visual',
+    detail_hint: 'Describe exactly how light shapes the product surface — a soft overhead light creating a gentle top-to-bottom gradient on a glossy surface, or a rim light separating a matte product from the background — and the material behavior (specular glossy reflections vs. diffuse matte, sharp focus-stacked edges front-to-back). Call out the exact label/text placement staying crisp and legible.',
     tokens: [
       '100mm macro lens',
       'product centered',
@@ -132,6 +142,7 @@ export const CAMERA_PRESETS = {
     label: 'Documentary handheld',
     category: 'cinema',
     use_case: 'Real-world story, observational style',
+    detail_hint: 'Name the ACTUAL light source that would exist in that real location (window light, overhead fluorescent, a single practical lamp, overcast sky) rather than "natural light" as a generic label, and describe camera movement as purposeful/observational (following the subject, reframing to catch a moment) rather than shaky-for-its-own-sake.',
     tokens: [
       'observational documentary handheld',
       '35mm lens',
@@ -148,6 +159,7 @@ export const CAMERA_PRESETS = {
     label: '2D animation',
     category: 'animation',
     use_case: 'Animated explainer, mascot ad, kid-friendly',
+    detail_hint: 'Describe line weight (thin clean outlines vs. bold cel-shading), flat color-fill blocking with no gradients, and how the expression reads through simplified shapes (exaggerated eyebrow/mouth shapes for emotion) rather than photographic facial detail.',
     tokens: [
       '2D cartoon animation',
       'flat colors',
@@ -164,6 +176,7 @@ export const CAMERA_PRESETS = {
     label: 'Pixar-style 3D',
     category: 'animation',
     use_case: 'Family / mascot 3D ad, character-driven CG',
+    detail_hint: 'Describe subsurface scattering visible on skin/ears when backlit, soft bounce/global-illumination fill light (no harsh single-source shadows), stylised proportions (slightly larger eyes/head, softened features), and material shading consistent with a Pixar-grade render (soft fabric, glossy eyes).',
     tokens: [
       'Pixar-style 3D render',
       'stylised character proportions',
