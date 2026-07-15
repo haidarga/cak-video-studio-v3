@@ -218,7 +218,13 @@ ${naskah}`
       // density every time) far more than creative variety. High temperature
       // was the main source of "sometimes great, sometimes generic" output.
       temperature: 0.35,
-      maxOutputTokens: 16384,
+      // Bumped from 16384 — the TECHNICAL SPECIFICITY rule + calibration
+      // example (added to fix generic output) make Gemini write meaningfully
+      // longer image_prompt/environment strings per shot. On a 9-panel
+      // storyboard that pushed total JSON output past 16384 and got cut off
+      // mid-string ("balik bukan JSON valid"). 24576 matches the headroom
+      // BulkTab already uses for the same storyboard parse shape.
+      maxOutputTokens: 24576,
     })
     // DETERMINISTIC duration guard — the LLM does not reliably obey "sum to
     // <=${maxSeg}s", so enforce it in code. A single clip physically cannot
