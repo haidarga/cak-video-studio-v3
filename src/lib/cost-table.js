@@ -57,6 +57,9 @@ export const VIDEO_COSTS_PER_SECOND = {
   'fal-ai/kling-video/v3/pro/image-to-video': 0.28,
   'fal-ai/veo3/fast': 0.20,
   'fal-ai/veo3': 0.50,
+  'google/gemini-omni-flash': 0.125,
+  'google/gemini-omni-flash/image-to-video': 0.13,
+  'google/gemini-omni-flash/reference-to-video': 0.13,
   _default: 0.10,
 }
 

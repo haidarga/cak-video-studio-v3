@@ -72,7 +72,7 @@ import { imageCost, videoCost } from '@/lib/cost-table'
 export function estimateFalCost(model, input = {}) {
   if (!model) return 0
   // Video models have duration in seconds (kling/seedance) or are fixed length
-  if (/video|veo3|kling|seedance|wan/i.test(model)) {
+  if (/video|veo3|kling|seedance|wan|gemini-omni/i.test(model)) {
     const duration = parseFloat(input.duration || input.duration_seconds || input.length_seconds || 5)
     return videoCost(model, duration)
   }

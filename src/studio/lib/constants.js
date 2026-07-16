@@ -36,6 +36,9 @@ export const VIDEO_MODELS = [
   { v: 'alibaba/happy-horse/v1.1/reference-to-video', l: '🎭 Happy Horse 1.1 Ref-to-Video — ~$0.14/dtk (audio, lip-sync)' },
   { v: 'bytedance/seedance-2.0/mini/reference-to-video', l: '🎭 Seedance 2 Mini Ref-to-Video — ~$0.15/dtk 720p (faster) 💰' },
   { v: 'bytedance/seedance-2.0/fast/reference-to-video', l: '🎭 Seedance 2 Fast Ref-to-Video — ~$0.24/dtk' },
+  { v: 'google/gemini-omni-flash', l: '📝 Gemini Omni Flash T2V — ~$0.125/dtk (audio)' },
+  { v: 'google/gemini-omni-flash/image-to-video', l: 'Gemini Omni Flash I2V — ~$0.13/dtk (audio)' },
+  { v: 'google/gemini-omni-flash/reference-to-video', l: '🎭 Gemini Omni Flash Ref-to-Video — ~$0.13/dtk (multi-ref)' },
 ]
 
 // per-second USD rate (720p baseline) — used for cost estimates so users pick the cheap option
@@ -47,6 +50,7 @@ export function videoRatePerSec(vidModel, res = '720p') {
   }
   if (vidModel.includes('seedance')) return vidModel.includes('/fast/') ? 0.2419 : 0.3024
   if (vidModel.includes('kling-video')) return vidModel.includes('/o3/') ? 0.112 : 0.084  // o3 audio-on
+  if (vidModel.includes('gemini-omni')) return vidModel.includes('image-to-video') || vidModel.includes('reference-to-video') ? 0.13 : 0.125
   return 0.12
 }
 

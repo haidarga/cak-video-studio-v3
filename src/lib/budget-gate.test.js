@@ -14,6 +14,8 @@ describe('estimateFalCost', () => {
     expect(estimateFalCost('bytedance/seedance-2.0/fast/reference-to-video', { duration: 10 })).toBeCloseTo(2.4, 5)
     expect(estimateFalCost('fal-ai/veo3', { duration: 8 })).toBeCloseTo(4.0, 5)
     expect(estimateFalCost('alibaba/happy-horse/v1.1/image-to-video', { duration: 10 })).toBeCloseTo(1.4, 5)
+    expect(estimateFalCost('google/gemini-omni-flash', { duration: 8 })).toBeCloseTo(1.0, 5) // 0.125 * 8
+    expect(estimateFalCost('google/gemini-omni-flash/image-to-video', { duration: 10 })).toBeCloseTo(1.3, 5) // 0.13 * 10
   })
 
   it('defaults video duration to 5s when the input has none (e.g. LTX uses num_frames)', () => {
@@ -29,8 +31,9 @@ describe('estimateFalCost', () => {
     expect(estimateFalCost('fal-ai/nano-banana/edit', {})).toBe(0.03)
   })
 
-  it('routes wan/kling/seedance/veo3 names to the video path', () => {
+  it('routes wan/kling/seedance/veo3/gemini-omni names to the video path', () => {
     expect(estimateFalCost('fal-ai/wan/v2.7/image-to-video', { duration: 5 })).toBeCloseTo(0.5, 5)
     expect(estimateFalCost('fal-ai/kling-video/v3/pro/image-to-video', { duration: 5 })).toBeCloseTo(1.4, 5)
+    expect(estimateFalCost('google/gemini-omni-flash/reference-to-video', { duration: 10 })).toBeCloseTo(1.3, 5)
   })
 })

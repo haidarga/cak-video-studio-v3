@@ -63,7 +63,7 @@ function isFlakyFalError(err) {
 // (webhook) takes 100s for the same model.
 function isVideoModel(model) {
   if (!model) return false
-  return /video|veo3|kling|seedance|wan|grok-imagine-video|happy-horse/i.test(model)
+  return /video|veo3|kling|seedance|wan|grok-imagine-video|happy-horse|gemini-omni/i.test(model)
 }
 
 // Some IMAGE models are too slow for the sync path. The /api/fal/sync route
@@ -124,7 +124,7 @@ async function falRunSync(model, input, { onProgress, workspaceId, duration, met
 // while webhook silently drops. 15 min keeps a real safety net.
 function defaultMaxWait(model) {
   if (!model) return 900000
-  if (/video|veo3|kling|seedance|wan|grok-imagine-video|happy-horse/i.test(model)) {
+  if (/video|veo3|kling|seedance|wan|grok-imagine-video|happy-horse|gemini-omni/i.test(model)) {
     return 1200000 // 20 min — video gen
   }
   return 900000 // 15 min — image gen (was 10, bumped after user hit timeout on stalled webhook)
@@ -377,6 +377,9 @@ export function buildVidInput(vidModel, { prompt, image_url, reference_urls, dur
     if (vidModel.includes('grok-imagine')) {
       return { prompt, duration: Math.max(5, Math.min(10, d)), resolution: '720p', aspect_ratio: aspect_ratio || 'auto' }
     }
+    if (vidModel.includes('gemini-omni')) {
+      return { prompt, duration: Math.max(5, Math.min(10, d)), aspect_ratio: aspect_ratio || '16:9' }
+    }
     return { prompt, duration: d, aspect_ratio }
   }
   if (vidModel.includes('kling-video')) {
@@ -478,6 +481,22 @@ export function buildVidInput(vidModel, { prompt, image_url, reference_urls, dur
       aspect_ratio: veoAR,
       generate_audio: true,
       safety_tolerance: '6',
+    }
+  }
+  if (vidModel.includes('gemini-omni')) {
+    if (isRef) {
+      return {
+        prompt,
+        image_urls: (reference_urls || []).filter(Boolean).slice(0, 3),
+        duration: Math.max(5, Math.min(10, parseInt(duration) || 5)),
+        aspect_ratio: aspect_ratio || '16:9',
+      }
+    }
+    return {
+      prompt,
+      image_url,
+      duration: Math.max(5, Math.min(10, parseInt(duration) || 5)),
+      aspect_ratio: aspect_ratio || '16:9',
     }
   }
   return { prompt, image_url, duration: parseInt(duration) || 5, aspect_ratio }
@@ -582,6 +601,7 @@ export function getVideoMaxDuration(vidModel) {
   if (m.includes('kling-video/o3')) return 15
   if (m.includes('kling-video/v2.5')) return 15
   if (m.includes('veo3')) return 8        // conservative; some variants longer, verify per-call
+  if (m.includes('gemini-omni')) return 10
   return 10
 }
 
@@ -604,6 +624,7 @@ export function toRefToVideoModel(vidModel) {
   if (m.includes('seedance-2.0/mini')) return 'bytedance/seedance-2.0/mini/reference-to-video'
   if (m.includes('seedance-2')) return 'bytedance/seedance-2.0/fast/reference-to-video'
   if (m.includes('seedance')) return 'fal-ai/bytedance/seedance/v1/lite/reference-to-video'
+  if (m.includes('gemini-omni')) return 'google/gemini-omni-flash/reference-to-video'
   return 'bytedance/seedance-2.0/fast/reference-to-video' // safe default for unknown families
 }
 
@@ -619,6 +640,7 @@ export function toImageToVideoModel(vidModel) {
   if (m.includes('happy-horse')) return 'alibaba/happy-horse/image-to-video'
   if (m.includes('seedance-2.0/mini')) return 'bytedance/seedance-2.0/mini/image-to-video'
   if (m.includes('seedance')) return 'bytedance/seedance-2.0/fast/image-to-video'
+  if (m.includes('gemini-omni')) return 'google/gemini-omni-flash/image-to-video'
   return 'bytedance/seedance-2.0/fast/image-to-video' // safe default
 }
 
@@ -647,6 +669,9 @@ export const VIDEO_MODELS = [
   { v: 'bytedance/seedance-2.0/fast/reference-to-video', l: '🎭 Seedance 2 Fast Ref-to-Video — ~$0.24/dtk' },
   { v: 'fal-ai/kling-video/v3/pro/image-to-video', l: 'Kling v3 Pro — ~$0.28/dtk (best quality)' },
   { v: 'bytedance/seedance-2.0/text-to-video', l: '📝 Seedance 2 T2V — ~$0.30/dtk 720p (cinematic, native audio, premium)' },
+  { v: 'google/gemini-omni-flash', l: '📝 Gemini Omni Flash T2V — ~$0.125/dtk (audio)' },
+  { v: 'google/gemini-omni-flash/image-to-video', l: 'Gemini Omni Flash I2V — ~$0.13/dtk (audio)' },
+  { v: 'google/gemini-omni-flash/reference-to-video', l: '🎭 Gemini Omni Flash Ref-to-Video — ~$0.13/dtk (multi-ref)' },
 ]
 
 // AI video EDIT models — transform an EXISTING video via text instruction.

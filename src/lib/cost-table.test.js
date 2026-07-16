@@ -16,6 +16,9 @@ describe('videoCost', () => {
     expect(videoCost('xai/grok-imagine-video/text-to-video', 5)).toBeCloseTo(0.35, 5)
     expect(videoCost('bytedance/seedance-2.0/fast/reference-to-video', 10)).toBeCloseTo(2.4, 5)
     expect(videoCost('bytedance/seedance-2.0/mini/image-to-video', 10)).toBeCloseTo(1.55, 5)
+    expect(videoCost('google/gemini-omni-flash', 10)).toBeCloseTo(1.25, 5) // 0.125 * 10
+    expect(videoCost('google/gemini-omni-flash/image-to-video', 10)).toBeCloseTo(1.3, 5) // 0.13 * 10
+    expect(videoCost('google/gemini-omni-flash/reference-to-video', 10)).toBeCloseTo(1.3, 5) // 0.13 * 10
   })
   it('defaults duration to 5s', () => {
     expect(videoCost('xai/grok-imagine-video/text-to-video')).toBeCloseTo(0.35, 5)

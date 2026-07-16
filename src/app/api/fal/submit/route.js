@@ -27,7 +27,7 @@ function extractDuration(input = {}) {
 }
 
 function classify(model = '') {
-  if (/video|veo3|kling|seedance|wan|grok-imagine/i.test(model)) return 'video'
+  if (/video|veo3|kling|seedance|wan|grok-imagine|gemini-omni/i.test(model)) return 'video'
   return 'image'
 }
 
