@@ -19,7 +19,7 @@ import { parseSceneTimestamps, packScenesIntoSegments, splitByStoryboardHeaders 
 import { buildContinuityBlock, mergeContinuity, summarizeStateForParse } from '@/lib/shot-memory'
 import { cleanProductBg } from '@/lib/bg-removal'
 import { CAMERA_PRESETS, listAllPresets, DEFAULT_CAMERA, getCameraPreset } from '@/lib/camera-presets'
-import { findOutOfBoundsRefs } from '@/lib/image-aspect-ratio'
+import { fitRefsToAspectRange, SEEDANCE_AR_MIN, SEEDANCE_AR_MAX } from '@/lib/image-aspect-ratio'
 
 // Dialog languages — Indonesian + English + the regional languages. Shared by
 // the global config bar AND the per-persona override so they never drift.
@@ -1044,16 +1044,21 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
         console.warn(`[gen] dropping ${styleUrls.length} style-ref image(s) for ref-to-video model "${vidModel}" to protect character identity`)
         styleUrls = []
       }
-      const refUrls = [...characterProductUrls, ...styleUrls]
+      let refUrls = [...characterProductUrls, ...styleUrls]
       // Direct mode REQUIRES refs (there's no source image to fall back on).
       // Guard early with a clear error so user knows to upload refs first.
       if (isDirect && refUrls.length === 0) {
         throw new Error('Direct mode butuh minimal 1 reference image. Upload ref di persona dulu (atau enable di chip picker shot).')
       }
-      // Seedance reference-to-video used to hard-reject any ref image outside AR
-      // 0.40-2.50. We used to block it client-side, but it caused false positives
-      // or frustration. Letting it pass through to fal.ai now; if it fails, it
-      // will fail with a 422 from the API.
+      // Seedance hard-rejects ref images outside AR 0.40-2.50 — and it does so at
+      // RUNTIME, not at submit, so the gen "succeeds" then dies with a 422 the user
+      // can only read on the fal dashboard ("expected aspect ratio between 0.40 and
+      // 2.50, but received 2.60"). Letterbox the offenders back into range instead
+      // of blocking: a 2.60 banner only needs ~4% extra height. Fail-safe — any
+      // ref that can't be padded passes through unchanged.
+      if (/seedance/i.test(vidModel || '')) {
+        refUrls = await fitRefsToAspectRange(refUrls, SEEDANCE_AR_MIN, SEEDANCE_AR_MAX, uploadBlob)
+      }
 
       // Visual Compiler for VIDEO prompt — same layered priority + sanitizer
       // as image gen. Replaces the regex-mutilated motion string (jsx:470)

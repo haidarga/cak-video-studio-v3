@@ -33,3 +33,60 @@ export async function findOutOfBoundsRefs(urls, min, max) {
   const results = await Promise.all(list.map(async (url) => ({ url, ratio: await probeImageAspectRatio(url) })))
   return results.filter((r) => isAspectRatioOutOfBounds(r.ratio, min, max))
 }
+
+// Seedance's hard bounds — anything outside 422s at RUNTIME (submit itself
+// always succeeds, so the failure only surfaces via webhook/dashboard).
+export const SEEDANCE_AR_MIN = 0.40
+export const SEEDANCE_AR_MAX = 2.50
+
+// Letterbox dims that bring w/h into [min, max]. ceil() guarantees we land
+// INSIDE the bound, never on the wrong side of a float rounding. Null = already ok.
+export function padDimsForAspectRange(width, height, min, max) {
+  const ratio = width / height
+  if (!Number.isFinite(ratio) || ratio === 0) return null
+  if (ratio > max) return { width, height: Math.ceil(width / max) }        // too wide -> grow height
+  if (ratio < min) return { width: Math.ceil(height * min), height }       // too tall -> grow width
+  return null
+}
+
+// Pads one ref into range and re-uploads it; returns the new url. Fail-safe:
+// any error (CORS taint, load fail, upload fail) keeps the ORIGINAL url so a
+// gen never breaks on this. Mirrors degradeRefUrl() in reference-degrader.js.
+const _arCache = new Map()
+export async function fitRefToAspectRange(url, min, max, uploadBlob) {
+  if (!url) return url
+  const key = `${min}|${max}|${url}`
+  if (_arCache.has(key)) return _arCache.get(key)
+  let out = url
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const el = new Image()
+      el.crossOrigin = 'anonymous'
+      el.onload = () => resolve(el)
+      el.onerror = reject
+      el.src = url
+    })
+    const dims = padDimsForAspectRange(img.width, img.height, min, max)
+    if (dims) {
+      const canvas = document.createElement('canvas')
+      canvas.width = dims.width
+      canvas.height = dims.height
+      const ctx = canvas.getContext('2d')
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, dims.width, dims.height)
+      ctx.drawImage(img, Math.floor((dims.width - img.width) / 2), Math.floor((dims.height - img.height) / 2))
+      const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.92))
+      if (blob) {
+        const up = await uploadBlob(blob, 'ref-arfit.jpg', 'ref-arfit')
+        if (up?.url) out = up.url
+      }
+    }
+  } catch { out = url }
+  _arCache.set(key, out)
+  return out
+}
+
+// Map fitRefToAspectRange over a ref list, preserving order.
+export async function fitRefsToAspectRange(urls, min, max, uploadBlob) {
+  return await Promise.all((urls || []).filter(Boolean).map((u) => fitRefToAspectRange(u, min, max, uploadBlob)))
+}
