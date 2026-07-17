@@ -133,7 +133,7 @@ export function buildVideoInputForModel(model, { motion_prompt, image_url, image
       return { prompt: motion_prompt, ...(elements.length ? { elements } : {}), duration: dur, aspect_ratio: ar }
     }
     if (isT2V) {
-      return { prompt: motion_prompt, duration: String(Math.min(10, parseInt(dur))), aspect_ratio: ar, generate_audio: true }
+      return { prompt: motion_prompt, duration: String(Math.min(15, parseInt(dur))), aspect_ratio: ar, generate_audio: true }
     }
     return { prompt: motion_prompt, duration: dur, aspect_ratio: ar }
   }
@@ -173,7 +173,7 @@ export function buildVideoInputForModel(model, { motion_prompt, image_url, image
       return { prompt: motion_prompt, reference_image_urls: refsArr.slice(0, 6), duration: parseInt(dur), aspect_ratio: ar }
     }
     if (isT2V) {
-      return { prompt: motion_prompt, duration: Math.min(10, parseInt(dur)), resolution: resolution || '720p', aspect_ratio: ar }
+      return { prompt: motion_prompt, duration: Math.min(15, parseInt(dur)), resolution: resolution || '720p', aspect_ratio: ar }
     }
     return { prompt: motion_prompt, duration: parseInt(dur), aspect_ratio: ar }
   }

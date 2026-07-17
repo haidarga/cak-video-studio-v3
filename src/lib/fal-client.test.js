@@ -42,23 +42,47 @@ describe('toImageToVideoModel (long-form hybrid handoff)', () => {
 })
 
 describe('getVideoMaxDuration', () => {
-  it('returns per-family caps', () => {
+  it('gives every family 15s — the house rule', () => {
     expect(getVideoMaxDuration('bytedance/seedance-2.0/fast/reference-to-video')).toBe(15)
-    expect(getVideoMaxDuration('xai/grok-imagine-video/reference-to-video')).toBe(10)
     expect(getVideoMaxDuration('fal-ai/kling-video/v3/image-to-video')).toBe(15)
     expect(getVideoMaxDuration('fal-ai/kling-video/v3/pro/image-to-video')).toBe(15)
     expect(getVideoMaxDuration('fal-ai/kling-video/o3/standard/image-to-video')).toBe(15)
     expect(getVideoMaxDuration('fal-ai/kling-video/o3/standard/reference-to-video')).toBe(15)
     expect(getVideoMaxDuration('bytedance/seedance-2.0/mini/image-to-video')).toBe(15)
+    expect(getVideoMaxDuration('alibaba/happy-horse/reference-to-video')).toBe(15)
   })
-  it('caps veo3 at 8s', () => {
+  it('does not shorten ref-to-video variants — they used to be capped at 10, which silently truncated 15s naskah', () => {
+    expect(getVideoMaxDuration('xai/grok-imagine-video/reference-to-video')).toBe(15)
+    expect(getVideoMaxDuration('xai/grok-imagine-video/image-to-video')).toBe(15)
+    expect(getVideoMaxDuration('xai/grok-imagine-video/text-to-video')).toBe(15)
+  })
+  it('only Google is shorter: veo3 8s, gemini-omni 10s', () => {
     expect(getVideoMaxDuration('fal-ai/veo3.1/fast/image-to-video')).toBe(8)
     expect(getVideoMaxDuration('fal-ai/veo3.1/fast/reference-to-video')).toBe(8)
+    expect(getVideoMaxDuration('google/gemini-omni-flash')).toBe(10)
+    expect(getVideoMaxDuration('google/gemini-omni-flash/reference-to-video')).toBe(10)
   })
-  it('defaults to 10 for unknown / empty', () => {
-    expect(getVideoMaxDuration('')).toBe(10)
-    expect(getVideoMaxDuration('weird/model')).toBe(10)
+  it('defaults to 15 for unknown / empty — no family we ship is shorter', () => {
+    expect(getVideoMaxDuration('')).toBe(15)
+    expect(getVideoMaxDuration('weird/model')).toBe(15)
   })
+})
+
+// The bug this locks down: the UI/parser planned to getVideoMaxDuration() while
+// buildVidInput() clamped lower, so a 15s shot silently generated as 10s.
+describe('buildVidInput duration clamp agrees with getVideoMaxDuration', () => {
+  const models = [
+    'xai/grok-imagine-video/reference-to-video',
+    'xai/grok-imagine-video/image-to-video',
+    'bytedance/seedance-2.0/mini/reference-to-video',
+    'fal-ai/kling-video/o3/standard/image-to-video',
+  ]
+  for (const m of models) {
+    it(`${m} passes 15s through`, () => {
+      const out = buildVidInput(m, { prompt: 'x', image_url: 'https://x/a.jpg', reference_urls: ['https://x/1.jpg'], duration: 15, aspect_ratio: '9:16' })
+      expect(parseInt(out.duration)).toBe(getVideoMaxDuration(m))
+    })
+  }
 })
 
 describe('buildVidInput — Veo 3.1 Fast', () => {

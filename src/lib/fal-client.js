@@ -366,7 +366,7 @@ export function buildVidInput(vidModel, { prompt, image_url, reference_urls, dur
   if (vidModel.includes('text-to-video')) {
     const d = parseInt(duration) || 5
     if (vidModel.includes('kling-video')) {
-      return { prompt, duration: Math.max(5, Math.min(10, d)), aspect_ratio, generate_audio: true }
+      return { prompt, duration: Math.max(5, Math.min(15, d)), aspect_ratio, generate_audio: true }
     }
     if (vidModel.includes('seedance')) {
       return { prompt, duration: String(Math.max(4, Math.min(15, d))), resolution: '720p', aspect_ratio, generate_audio: true, enable_safety_checker: false }
@@ -375,7 +375,7 @@ export function buildVidInput(vidModel, { prompt, image_url, reference_urls, dur
       return { prompt: prompt + HH_STABILITY, duration: Math.max(3, Math.min(15, d)), aspect_ratio, resolution: '720p', enable_safety_checker: false }
     }
     if (vidModel.includes('grok-imagine')) {
-      return { prompt, duration: Math.max(5, Math.min(10, d)), resolution: '720p', aspect_ratio: aspect_ratio || 'auto' }
+      return { prompt, duration: Math.max(5, Math.min(15, d)), resolution: '720p', aspect_ratio: aspect_ratio || 'auto' }
     }
     if (vidModel.includes('gemini-omni')) {
       return { prompt, duration: Math.max(5, Math.min(10, d)), aspect_ratio: aspect_ratio || '16:9' }
@@ -430,9 +430,12 @@ export function buildVidInput(vidModel, { prompt, image_url, reference_urls, dur
     //   reference-to-video : array of refs (reference_image_urls — not
     //     image_urls!), duration max 10. The model composes a fresh video
     //     that respects the references' identity + style.
-    // Two bugs that fal.ai 422'd us on:
-    //   - wrong field name (image_urls -> reference_image_urls)
-    //   - duration cap (was 15, model only accepts <= 10 for ref-to-video)
+    // Field-name bug fal.ai 422'd us on: image_urls -> reference_image_urls.
+    // Duration was ALSO capped at 10 here on the same assumption, which silently
+    // truncated 15s naskah. fal's schema documents no upper bound (integer,
+    // default 8) and every other family we ship takes 15 — so 15 it is, matching
+    // getVideoMaxDuration. If xAI does reject >10, it 422s at $0.00 (validation
+    // errors are never billed), so the downside is a free error, not a burnt gen.
     if (isRef) {
       const refs = (reference_urls || []).filter(Boolean).slice(0, 6)
       // Fall back to image_url as first reference if caller didn't pass refs
@@ -441,7 +444,7 @@ export function buildVidInput(vidModel, { prompt, image_url, reference_urls, dur
       return {
         prompt,
         reference_image_urls: finalRefs,
-        duration: Math.max(5, Math.min(10, parseInt(duration) || 5)),
+        duration: Math.max(5, Math.min(15, parseInt(duration) || 5)),
         resolution: '720p',
         aspect_ratio: aspect_ratio || 'auto',
       }
@@ -582,27 +585,17 @@ export const VID_STABILITY = ''
 // Per-model max duration cap, in seconds. Aligned with the caps enforced
 // inside buildVidInput so the UI can warn users BEFORE they hit the silent
 // truncation. Ref-to-video variants generally tighter than image-to-video.
+// 15s is the house rule — every family we ship takes it. Only Google's two are
+// genuinely shorter, so they're the only exceptions. This used to be a per-family
+// ladder with conservative guesses (grok ref at 10, unknown at 10), which meant the
+// UI/parser planned a 15s naskah while the gen-time clamp silently cut it to 10 —
+// the user typed 15 and got 10 with no error. One rule, so the cap the UI shows is
+// the cap the gen uses. Keep the clamps in buildVidInput() agreeing with this.
 export function getVideoMaxDuration(vidModel) {
-  if (!vidModel) return 10
-  const m = vidModel
-  const isRef = m.includes('reference-to-video') || m.includes('ref-to-video')
-  if (m.includes('grok-imagine')) {
-    if (m.includes('text-to-video')) return 10 // conservative — t2v form defaults to 6s
-    return isRef ? 10 : 15
-  }
-  if (m.includes('seedance-2.0/fast')) return 15        // both ref + i2v accept 4-15s per fal.ai dashboard
-  if (m.includes('seedance')) return 15
-  if (m.includes('happy-horse')) return 15
-  // v3 standard AND pro both take duration up to 15 per fal.ai's own
-  // dashboard (user confirmed — dropdown goes to 15 on the standard tier too).
-  if (m.includes('kling-video/v3')) return 15
-  // O3 (both image-to-video and reference-to-video) also goes to 15 per
-  // fal.ai's dashboard — dropdown shows Duration:15 selectable on both.
-  if (m.includes('kling-video/o3')) return 15
-  if (m.includes('kling-video/v2.5')) return 15
-  if (m.includes('veo3')) return 8        // conservative; some variants longer, verify per-call
-  if (m.includes('gemini-omni')) return 10
-  return 10
+  if (!vidModel) return 15
+  if (vidModel.includes('veo3')) return 8          // 4s/6s/8s buckets only
+  if (vidModel.includes('gemini-omni')) return 10
+  return 15
 }
 
 // Storyboard grids + direct mode REQUIRE a ref-to-video model (the 3x3 grid

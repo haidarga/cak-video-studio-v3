@@ -38,9 +38,9 @@ describe('buildVideoInputForModel — per-model field-name routing (the 422 trap
     expect(out.enable_safety_checker).toBe(false)
   })
 
-  it('kling t2v caps duration at 10 and enables audio', () => {
+  it('kling t2v passes 15s through (house rule) and enables audio', () => {
     const out = buildVideoInputForModel('fal-ai/kling-video/v3/standard/text-to-video', { ...P, duration: 15 })
-    expect(out.duration).toBe('10')
+    expect(out.duration).toBe('15')
     expect(out.generate_audio).toBe(true)
   })
 
