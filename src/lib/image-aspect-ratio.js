@@ -39,13 +39,21 @@ export async function findOutOfBoundsRefs(urls, min, max) {
 export const SEEDANCE_AR_MIN = 0.40
 export const SEEDANCE_AR_MAX = 2.50
 
-// Letterbox dims that bring w/h into [min, max]. ceil() guarantees we land
-// INSIDE the bound, never on the wrong side of a float rounding. Null = already ok.
+// Seedance's bound is EXCLUSIVE, not inclusive: padding 2.60 to exactly 2.50
+// still 422s ("received image with aspect ratio: 2.50"). It also reports the
+// ratio rounded to 2dp, so a value that merely LOOKS like the bound can trip it.
+// Aim 1% inside instead of at the edge — on a 2.60 banner that's ~5% extra
+// height instead of ~4%, i.e. nothing, and it can never land back on the line.
+const AR_MARGIN = 0.99
+
+// Letterbox dims that bring w/h strictly inside (min, max). Null = already safe.
 export function padDimsForAspectRange(width, height, min, max) {
   const ratio = width / height
-  if (!Number.isFinite(ratio) || ratio === 0) return null
-  if (ratio > max) return { width, height: Math.ceil(width / max) }        // too wide -> grow height
-  if (ratio < min) return { width: Math.ceil(height * min), height }       // too tall -> grow width
+  if (!Number.isFinite(ratio) || ratio <= 0) return null
+  const safeMax = max * AR_MARGIN
+  const safeMin = min / AR_MARGIN
+  if (ratio > safeMax) return { width, height: Math.ceil(width / safeMax) }   // too wide -> grow height
+  if (ratio < safeMin) return { width: Math.ceil(height * safeMin), height }  // too tall -> grow width
   return null
 }
 

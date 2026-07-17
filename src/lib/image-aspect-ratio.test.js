@@ -21,25 +21,32 @@ describe('isAspectRatioOutOfBounds', () => {
 })
 
 describe('padDimsForAspectRange', () => {
-  const inBounds = (d) => d.width / d.height >= 0.40 && d.width / d.height <= 2.50
+  // STRICTLY inside — fal rejected an image at exactly 2.50 ("expected the aspect
+  // ratio to be between 0.40 and 2.50, but received image with aspect ratio: 2.50"),
+  // so the bound is exclusive and landing on it is still a 422.
+  const safe = (d) => d.width / d.height > 0.40 && d.width / d.height < 2.50
 
-  it('pads the reported 2.60 case back inside the bound', () => {
-    const d = padDimsForAspectRange(2600, 1000, 0.40, 2.50)
-    expect(d).toEqual({ width: 2600, height: 1040 })
-    expect(inBounds(d)).toBe(true)
+  it('pads the reported 2.60 case to strictly inside the bound', () => {
+    expect(safe(padDimsForAspectRange(2600, 1000, 0.40, 2.50))).toBe(true)
   })
-  it('ceil() lands inside the bound on ratios that do not divide evenly', () => {
-    const d = padDimsForAspectRange(2601, 1000, 0.40, 2.50)
-    expect(inBounds(d)).toBe(true)
+  it('never lands ON the bound — the 2.50 case fal rejected', () => {
+    for (const [w, h] of [[2600, 1000], [2601, 1000], [1920, 738], [2500, 1000]]) {
+      const d = padDimsForAspectRange(w, h, 0.40, 2.50)
+      expect(d.width / d.height).not.toBe(2.50)
+      expect(safe(d)).toBe(true)
+    }
+  })
+  it('re-pads an image already sitting exactly on the bound', () => {
+    expect(padDimsForAspectRange(2500, 1000, 0.40, 2.50)).not.toBeNull()
+    expect(padDimsForAspectRange(400, 1000, 0.40, 2.50)).not.toBeNull()
   })
   it('grows width for too-tall images', () => {
-    const d = padDimsForAspectRange(300, 1000, 0.40, 2.50)
-    expect(d).toEqual({ width: 400, height: 1000 })
-    expect(inBounds(d)).toBe(true)
+    expect(safe(padDimsForAspectRange(300, 1000, 0.40, 2.50))).toBe(true)
   })
-  it('returns null when already in range (no re-encode, no re-upload)', () => {
-    expect(padDimsForAspectRange(1080, 1920, 0.40, 2.50)).toBeNull()
-    expect(padDimsForAspectRange(2500, 1000, 0.40, 2.50)).toBeNull()
+  it('returns null when comfortably in range (no re-encode, no re-upload)', () => {
+    expect(padDimsForAspectRange(1080, 1920, 0.40, 2.50)).toBeNull()  // 9:16
+    expect(padDimsForAspectRange(1920, 1080, 0.40, 2.50)).toBeNull()  // 16:9
+    expect(padDimsForAspectRange(1000, 1000, 0.40, 2.50)).toBeNull()  // 1:1
   })
   it('returns null on degenerate dims instead of throwing', () => {
     expect(padDimsForAspectRange(0, 1000, 0.40, 2.50)).toBeNull()
