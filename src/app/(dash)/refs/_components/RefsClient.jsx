@@ -47,7 +47,7 @@ export default function RefsClient({ workspaceId, userId, initialRefs }) {
   }
 
   const shown = refs.filter((r) => filter === 'all' || r.kind === filter)
-  const counts = { all: refs.length, character: refs.filter((r) => r.kind === 'character').length, product: refs.filter((r) => r.kind === 'product').length }
+  const counts = { all: refs.length, character: refs.filter((r) => r.kind === 'character').length, product: refs.filter((r) => r.kind === 'product').length, background: refs.filter((r) => r.kind === 'background').length }
 
   return (
     <div>
@@ -68,7 +68,7 @@ export default function RefsClient({ workspaceId, userId, initialRefs }) {
       {err && <div className="mb-3 text-xs text-red-400">⚠ {err}</div>}
 
       <div className="flex gap-2 mb-5">
-        {[['all', 'Semua'], ['character', '👤 Karakter'], ['product', '📦 Produk']].map(([v, l]) => (
+        {[['all', 'Semua'], ['character', '👤 Karakter'], ['product', '📦 Produk'], ['background', '🏞 Lokasi']].map(([v, l]) => (
           <button key={v} onClick={() => setFilter(v)}
             className={`px-3 py-1.5 rounded-full text-xs font-semibold ${filter === v ? 'bg-[var(--accent)] text-white' : 'bg-[var(--surface2)] text-[var(--muted)] hover:text-white'}`}>
             {l} <span className="opacity-60">{counts[v] || 0}</span>
@@ -116,6 +116,7 @@ function RefCard({ refData: r, onEdit, onDelete, onKindChange }) {
             className="text-[10px] bg-[var(--surface2)] border border-[var(--border)] rounded px-1 py-0.5">
             <option value="character">👤 Char</option>
             <option value="product">📦 Prod</option>
+            <option value="background">🏞 Lokasi</option>
           </select>
           <div className="flex gap-1">
             <button onClick={onEdit} className="p-1 text-xs hover:bg-[var(--surface2)] rounded">✏️</button>
@@ -158,7 +159,7 @@ function RefEditor({ refData, onClose, onSave }) {
               <div>
                 <label className="block text-[10px] uppercase text-[var(--muted)] font-semibold mb-1">Tipe</label>
                 <div className="flex gap-2">
-                  {[['character', '👤 Karakter'], ['product', '📦 Produk']].map(([v, l]) => (
+                  {[['character', '👤 Karakter'], ['product', '📦 Produk'], ['background', '🏞 Lokasi/Set']].map(([v, l]) => (
                     <button key={v} onClick={() => setKind(v)}
                       className={`px-3 py-1.5 rounded text-xs ${kind === v ? 'bg-[var(--accent)] text-white' : 'bg-[var(--surface2)] text-[var(--muted)]'}`}>{l}</button>
                   ))}

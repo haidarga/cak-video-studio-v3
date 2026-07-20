@@ -84,3 +84,18 @@ export function inferCategoryFromText(text) {
   if (/cinematic|anamorphic|arri|film look|movie still|studio (lighting|softbox)|tvc|commercial spot|hollywood/.test(t)) return 'cinema'
   return 'phone'
 }
+
+// User-authored camera presets carry category 'custom', which every realism
+// guard above treats as "not animation / not cinema" → the phone-path
+// injections (window light, handheld blur, "same real person", anatomically-
+// correct quality line) leak into stylised custom presets and fight their own
+// tokens. Resolve 'custom' to the realism category the preset's TOKENS
+// describe. Tokens only — negatives typically NAME the styles they forbid
+// ("Studio Ghibli style", "photorealistic") and would false-positive here.
+// Built-in categories pass through untouched, so existing presets don't move.
+export function effectiveRealismCategory(cam) {
+  const cat = typeof cam === 'string' ? cam : cam?.category
+  if (cat && cat !== 'custom') return cat
+  const tokens = Array.isArray(cam?.tokens) ? cam.tokens.join(' ') : ''
+  return inferCategoryFromText(tokens)
+}

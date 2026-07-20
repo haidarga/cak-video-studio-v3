@@ -159,8 +159,16 @@ export async function stageParse(item, cfg) {
 }
 
 // ── shared prompt context ──────────────────────────────────────────────
+// Character-first ref ordering (same rule as Generate): multi-ref models
+// weight EARLIER images more, so the character leads or its identity dilutes
+// across product refs. orderedRefs feeds BOTH the url array and the IMAGE
+// ROLES lines in stageVideo so "Image N" numbering matches what's sent.
+const REF_KIND_ORDER = { product: 1, background: 2 }
+const sortRefsCharacterFirst = (refs) => [...refs].sort((a, b) => (REF_KIND_ORDER[a?.kind] || 0) - (REF_KIND_ORDER[b?.kind] || 0))
+
 function promptCtx(cfg) {
-  const characterProductUrls = cfg.refs.map((r) => r.fal_url).filter(Boolean)
+  const orderedRefs = sortRefsCharacterFirst(cfg.refs || [])
+  const characterProductUrls = orderedRefs.map((r) => r.fal_url).filter(Boolean)
   const productKnowledge = cfg.refs.map((r) => String(r.knowledge || '').trim()).filter(Boolean).join('\n')
   const identity = cfg.persona?.character_prompt
     ? `${cfg.persona.name} (${cfg.persona.character_prompt.slice(0, 200)})`
@@ -173,7 +181,7 @@ function promptCtx(cfg) {
   const userPresets = cfg.userPresets || []
   const cam = getCameraPreset(camera, userPresets)
   const styleUrls = Array.isArray(cam?.style_ref_urls) ? cam.style_ref_urls.filter(Boolean) : []
-  return { characterProductUrls, identity, brand, camera, userPresets, styleUrls }
+  return { orderedRefs, characterProductUrls, identity, brand, camera, userPresets, styleUrls }
 }
 
 // ── Stage 2a: gen image for one shot ──────────────────────────────────
@@ -216,7 +224,7 @@ export async function stageImage(shot, cfg, deps, onProgress) {
 // reference). Carries the same IMAGE ROLES + rigid-product directives that
 // fixed Generate's r2v drift.
 export async function stageVideo(shot, cfg, deps, { imageUrl, chainFrameUrl }, onProgress) {
-  const { characterProductUrls, identity, brand, camera, userPresets, styleUrls } = promptCtx(cfg)
+  const { orderedRefs, characterProductUrls, identity, brand, camera, userPresets, styleUrls } = promptCtx(cfg)
   const vidModel = effectiveVidModel(cfg.vidModel, cfg.mode)
   const isRefVid = vidModel.includes('reference-to-video') || vidModel.includes('ref-to-video')
   const isGrid = !!shot.raw.panels
@@ -255,12 +263,14 @@ export async function stageVideo(shot, cfg, deps, { imageUrl, chainFrameUrl }, o
     // "animate the ref background" / "drop the product" / "ignore no-cuts").
     const roleLines = []
     let imgIdx = 1
-    for (const r of cfg.refs) {
+    for (const r of orderedRefs) {
       if (!r.fal_url) continue
       if (r.kind === 'product') {
         roleLines.push(`- Image ${imgIdx} = THE PRODUCT (${r.label || 'product'}). It MUST physically appear in the video with accurate shape, colors, proportions and surface details. Do NOT attempt to render or reproduce any text, labels, logos or writing on the product — let them stay naturally blurred or absent. If this image shows multiple angles, they are views of ONE single product — NEVER show the multi-angle sheet layout itself in the output.`)
+      } else if (r.kind === 'background') {
+        roleLines.push(`- Image ${imgIdx} = LOCATION / SET reference${r.label ? ` (${r.label})` : ''}: use it ONLY for the setting — place, architecture, layout, props and mood. It contains NO character and NO product to copy.`)
       } else {
-        roleLines.push(`- Image ${imgIdx} = character IDENTITY only (face, hair, body, skin tone${r.label ? ` — ${r.label}` : ''}). COMPLETELY IGNORE this image's background, room, location, pose, lighting and composition.`)
+        roleLines.push(`- Image ${imgIdx} = character IDENTITY only (face, hair, body, skin tone${r.label ? ` — ${r.label}` : ''}). COMPLETELY IGNORE this image's background, room, location, pose, lighting and composition. If this image shows multiple views or poses, they are all the SAME ONE character — render the character once, never the sheet layout.`)
       }
       imgIdx++
     }

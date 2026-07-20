@@ -38,6 +38,15 @@ import { uploadFile, uploadBlob } from '@/lib/upload-client'
 import { degradeRefUrl } from '@/lib/reference-degrader'
 import { LazyVideo } from '@/lib/use-lazy-video'
 
+// Multi-ref models weight EARLIER reference images more, so the character must
+// come first or its identity dilutes across product refs (user-hit case: 1
+// character vs 3 product refs → off-model mascot). Stable order: character →
+// product → background(location). Style refs are appended separately, always
+// last. MUST be applied to the ref list BEFORE both the url array and the
+// IMAGE ROLES lines are built, so "Image N" numbering matches what's sent.
+const REF_KIND_ORDER = { product: 1, background: 2 }
+const sortRefsCharacterFirst = (refs) => [...refs].sort((a, b) => (REF_KIND_ORDER[a?.kind] || 0) - (REF_KIND_ORDER[b?.kind] || 0))
+
 export default function GenerateClient({ workspaceId, userId, activeBrand, personas: initialPersonas, workspaceRefs: initialRefs, incomingPreset = null }) {
   const supabase = createClient()
   // Mirror server-fetched data to local state so realtime can keep it fresh.
@@ -819,7 +828,11 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       // anchors clean output regardless of "cheap Samsung A13" tokens — degrading
       // the ref is what actually delivers the lo-fi look). Both fail-safe + cached.
       const _presetId = globalConfig.cameraPreset || DEFAULT_CAMERA
-      const characterProductUrls = (await Promise.all(selectedRefs.map((r) => {
+      // Character-first ordering — see sortRefsCharacterFirst. orderedSelected
+      // feeds BOTH the url array and the IMAGE ROLES lines so numbering stays
+      // in sync.
+      const orderedSelected = sortRefsCharacterFirst(selectedRefs)
+      const characterProductUrls = (await Promise.all(orderedSelected.map((r) => {
         if (r.kind === 'product' && !globalConfig.skipProduct && globalConfig.cleanProductBg !== false) {
           return cleanProductBg(r.fal_url, null, (m, i) => falRun(m, i, { workspaceId }))
         }
@@ -845,7 +858,7 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       // DROP the style-ref IMAGES entirely — the preset's aesthetic still rides
       // in via the L1 camera tokens (device/lighting/look), just without faces.
       const isPixelLockEdit = /edit/i.test(globalConfig.imgModel || '')
-      const hasCharacterRef = selectedRefs.some((r) => r?.kind !== 'product' && r?.fal_url)
+      const hasCharacterRef = selectedRefs.some((r) => r?.kind !== 'product' && r?.kind !== 'background' && r?.fal_url)
       if (isPixelLockEdit && hasCharacterRef && styleUrls.length) {
         console.warn(`[gen] dropping ${styleUrls.length} style-ref image(s) for edit model "${globalConfig.imgModel}" to protect character identity (style still applied via camera preset tokens)`)
         styleUrls = []
@@ -897,15 +910,20 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       // specific product. Order matches refUrls = [selectedRefs..., styleUrls...].
       const imgRoleLines = []
       let rIdx = 1
-      for (const r of selectedRefs) {
+      for (const r of orderedSelected) {
         if (!r.fal_url) continue
         if (r.kind === 'product') {
           // When product is skipped, don't instruct the model to feature it.
           if (!globalConfig.skipProduct) {
             imgRoleLines.push(`- Image ${rIdx} = THE PRODUCT (${r.label || 'product'}): reproduce its EXACT shape, proportions, button/port/plug layout, materials, colors and ALL label text (correctly spelled). Do NOT redesign, distort, recolor, melt, or invent details such as extra holes, ports or plugs. If it shows multiple angles, they are ONE single product — never render the multi-angle sheet itself.`)
           }
+        } else if (r.kind === 'background') {
+          // Location/set ref — WITHOUT this branch a farm/room photo gets the
+          // character role line ("face, hair, skin tone — PERTERNAKAN") and the
+          // model hunts for a face in a landscape → identity blending.
+          imgRoleLines.push(`- Image ${rIdx} = LOCATION / SET reference${r.label ? ` (${r.label})` : ''}: use it ONLY for the setting — place, architecture, layout, props and mood. It contains NO character and NO product to copy.`)
         } else {
-          imgRoleLines.push(`- Image ${rIdx} = character IDENTITY only (face, hair, body, skin tone${r.label ? ` — ${r.label}` : ''}). Ignore its background, location, pose and lighting.`)
+          imgRoleLines.push(`- Image ${rIdx} = character IDENTITY only (face, hair, body, skin tone${r.label ? ` — ${r.label}` : ''}). Ignore its background, location, pose and lighting. If this image shows multiple views or poses, they are all the SAME ONE character — render the character once, never the sheet layout.`)
         }
         rIdx++
       }
@@ -1025,7 +1043,9 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       // via the chip picker in ShotEditor. `shot.disabledRefIds` is the array
       // of ref IDs explicitly excluded; empty = use all globally selected.
       const disabledSet = new Set(shot.disabledRefIds || [])
-      const filteredSelected = selectedRefs.filter((r) => !disabledSet.has(r.id))
+      // Character-first ordering (see sortRefsCharacterFirst) — feeds BOTH the
+      // url array and the IMAGE ROLES lines so "Image N" numbering stays true.
+      const filteredSelected = sortRefsCharacterFirst(selectedRefs.filter((r) => !disabledSet.has(r.id)))
       const filteredStyle = styleRefs.filter((r) => !disabledSet.has(r.id))
       // Product-kind refs → clean background first (L4), same as the image path.
       const characterProductUrls = (await Promise.all(filteredSelected.map((r) =>
@@ -1038,7 +1058,7 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       // every ref image, so a style ref containing a person bleeds that face into
       // the video. Drop style-ref images when a character ref is present + this is
       // a ref-to-video gen — keep only the real character/product refs.
-      const hasCharacterRefVid = filteredSelected.some((r) => r?.kind !== 'product' && r?.fal_url)
+      const hasCharacterRefVid = filteredSelected.some((r) => r?.kind !== 'product' && r?.kind !== 'background' && r?.fal_url)
       const isRefToVideoFinal = /reference-to-video|ref-to-video/.test(vidModel || '')
       if (isRefToVideoFinal && hasCharacterRefVid && styleUrls.length) {
         console.warn(`[gen] dropping ${styleUrls.length} style-ref image(s) for ref-to-video model "${vidModel}" to protect character identity`)
@@ -1186,8 +1206,10 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
           if (!r.fal_url) continue
           if (r.kind === 'product') {
             roleLines.push(`- Image ${imgIdx} = THE PRODUCT (${r.label || 'product'}). It MUST physically appear in the video with accurate shape, colors, proportions and surface details. Do NOT attempt to render or reproduce any text, labels, logos or writing on the product — let them stay naturally blurred or absent. If this image shows multiple angles, they are views of ONE single product — NEVER show the multi-angle sheet layout itself in the output.`)
+          } else if (r.kind === 'background') {
+            roleLines.push(`- Image ${imgIdx} = LOCATION / SET reference${r.label ? ` (${r.label})` : ''}: use it ONLY for the setting — place, architecture, layout, props and mood. It contains NO character and NO product to copy.`)
           } else {
-            roleLines.push(`- Image ${imgIdx} = character IDENTITY only (face, hair, body, skin tone${r.label ? ` — ${r.label}` : ''}). COMPLETELY IGNORE this image's background, room, location, pose, lighting and composition.`)
+            roleLines.push(`- Image ${imgIdx} = character IDENTITY only (face, hair, body, skin tone${r.label ? ` — ${r.label}` : ''}). COMPLETELY IGNORE this image's background, room, location, pose, lighting and composition. If this image shows multiple views or poses, they are all the SAME ONE character — render the character once, never the sheet layout.`)
           }
           imgIdx++
         }
@@ -2922,7 +2944,7 @@ function RefsPicker({ personaOwnRefs, workspaceRefs, showWorkspace, onToggleShow
         <div className="px-1 py-1">
           <div className="text-[10px] font-semibold truncate text-left">{r.label || 'unlabeled'}</div>
           <div className="flex justify-between text-[9px]">
-            <span className="text-[var(--muted)]">{r.kind === 'product' ? '📦' : '👤'}</span>
+            <span className="text-[var(--muted)]">{r.kind === 'product' ? '📦' : r.kind === 'background' ? '🏞' : '👤'}</span>
             {r.knowledge && <span title={r.knowledge} className="text-[var(--accent)]">📋</span>}
           </div>
         </div>

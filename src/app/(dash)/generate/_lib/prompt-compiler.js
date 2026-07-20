@@ -20,7 +20,7 @@
 
 import { getCameraPreset } from '@/lib/camera-presets'
 // Realism helpers are shared with God Mode — single source in src/lib/realism.js.
-import { phoneSkinClause, enrichLighting, inferSceneType, motionRealismFor } from '@/lib/realism'
+import { phoneSkinClause, enrichLighting, inferSceneType, motionRealismFor, effectiveRealismCategory } from '@/lib/realism'
 import { buildVoiceDirection } from '@/lib/voice-direction'
 export { enrichLighting, inferSceneType, motionRealismFor }
 
@@ -29,10 +29,13 @@ export { enrichLighting, inferSceneType, motionRealismFor }
 // layer separately so we can drop tokens regardless of where they appeared.
 export const CONTRADICTION_RULES = [
   // Pro-photo language can't coexist with phone-cam or animation presets.
+  // 'category:animation' extends the same rule to CUSTOM presets whose tokens
+  // read as animation (built-ins animation_2d/pixar_3d already listed, so
+  // built-in behavior is unchanged).
   {
     name: 'pro-quality vs casual/animation',
     match: /(Professional high-detail photography|sharp focus|well-balanced composition|high-detail|crisp detail|anatomically correct hands)/gi,
-    conflicts_with: ['camera:samsung_a13_candid', 'camera:documentary_handheld', 'camera:animation_2d', 'camera:pixar_3d'],
+    conflicts_with: ['camera:samsung_a13_candid', 'camera:documentary_handheld', 'camera:animation_2d', 'camera:pixar_3d', 'category:animation'],
   },
   // Cinematic language can't coexist with phone-cam or animation.
   {
@@ -58,11 +61,11 @@ export const CONTRADICTION_RULES = [
     match: /vertical 9:16( phone aesthetic)?/gi,
     conflicts_with: ['ar:16:9'],
   },
-  // Photographic skin-detail tokens kill animation presets.
+  // Photographic skin-detail tokens kill animation presets (custom included).
   {
     name: 'photographic skin vs animation',
     match: /(realistic skin texture|photographic still|natural realistic skin|authentic skin pores)/gi,
-    conflicts_with: ['camera:animation_2d', 'camera:pixar_3d'],
+    conflicts_with: ['camera:animation_2d', 'camera:pixar_3d', 'category:animation'],
   },
   // Wasted tokens â€” sound buzzwords that don't change pixels at all.
   // Dropped unconditionally regardless of camera preset.
@@ -121,6 +124,7 @@ function ruleTriggered(rule, ctx) {
     if (c === 'refs:empty') return !ctx.refsCount
     if (c === 'frontFacing=true') return ctx.frontFacing
     if (c.startsWith('camera:')) return ctx.cameraId === c.slice(7)
+    if (c.startsWith('category:')) return ctx.cameraCategory === c.slice(9)
     if (c.startsWith('ar:')) return ctx.ar === c.slice(3)
     return false
   })
@@ -176,16 +180,42 @@ export function sanitizeLayers(parts, ctx) {
   return { cleaned, injects: [...injects] }
 }
 
+// Wardrobe field values that MEAN "keep the reference outfit" rather than
+// describing actual clothing. Passing them through is actively harmful: L11
+// becomes "CHANGE the subjects' outfit to: SAME APPARANCE NOTHING CHANGE" —
+// a literal command to replace the outfit with nonsense (user-reported: mascot
+// lost its lab coat/neckerchief). Empty wardrobe is the correct signal — the
+// ignore-outfit sanitizer rule + the refs then keep the outfit as-is.
+const WARDROBE_CLOTHING_WORDS = /\b(shirt|t-?shirt|tee|jacket|coat|blazer|dress|hoodie|sweater|cardigan|uniform|apron|suit|gaun|kaos|kemeja|jas|baju|celana|rok|hijab|jilbab|kerudung|neckerchief|bandana|topi|hat|cap|scarf|syal|dasi|tie|sepatu|shoes|jeans|skirt|blouse|vest|robe|kimono|batik|seragam|outfit change|stethoscope)\b/i
+const WARDROBE_NO_CHANGE = /\b(same|sama|no ?change|nothing ?chang\w*|unchanged|apparance|appearance|jangan (di)?ubah|tidak (di)?ubah|ga[kx]? (usah )?(di)?ubah|ikut(in)? ref\w*|as (is|ref\w*)|follow (the )?ref\w*|keep|default|n\/?a|none|kosong)\b/i
+export function isNoChangeWardrobe(w) {
+  const s = String(w || '').trim()
+  if (!s) return false
+  if (/^[\W_]+$/.test(s)) return true // "-", "—", "..." etc
+  if (WARDROBE_CLOTHING_WORDS.test(s)) return false // names real clothing → keep it
+  return WARDROBE_NO_CHANGE.test(s)
+}
+
+// Diegetic-text intent: the shot EXPLICITLY asks for a physical prop that
+// carries writing (a sign the mascot holds, an ear tag, a banner). Banning
+// "letters / written words / signage" in the same prompt makes the model
+// fight itself — it garbles or drops the prop. Overlay text (captions,
+// subtitles, watermarks) stays banned regardless.
+export function wantsDiegeticText(action) {
+  return /\b(sign|placard|banner|poster|flyer|whiteboard|chalkboard|papan|spanduk|tulisan di|label|tag|kartu|card)\b/i.test(String(action || ''))
+}
+
 // Style-aware quality line. Skin/lighting/motion realism now live in the shared
 // src/lib/realism.js (single source, also used by God Mode). pickQuality stays
 // here because it also handles cinema product-label + the Generate categories.
-function pickQuality(cam, media, skipProduct, environment = '') {
-  if (cam.category === 'animation') {
+// Takes the EFFECTIVE realism category (custom presets resolve via tokens).
+function pickQuality(category, media, skipProduct, environment = '') {
+  if (category === 'animation') {
     return media === 'video'
       ? 'Smooth animated motion, consistent character design across frames.'
       : 'Clean stylised render, consistent character design.'
   }
-  if (cam.category === 'phone') {
+  if (category === 'phone') {
     return media === 'video'
       ? `Natural handheld motion, real-person realism. ${phoneSkinClause(environment)} No over-processing.`
       : `Real-person realism. ${phoneSkinClause(environment)} No over-processing.`
@@ -259,17 +289,25 @@ export function compileImagePrompt(spec) {
     refsCount = 0,
     styleRefsCount = 0,
     gridHeader = null,
-    wardrobe = null,
+    wardrobe: rawWardrobe = null,
     userPresets = [],
   } = spec
+  // "SAME APPEARANCE / jangan diubah" typed into the wardrobe field is a
+  // no-change DIRECTIVE, not an outfit — drop it so L3/L11 don't command an
+  // outfit swap to nonsense text.
+  const wardrobe = isNoChangeWardrobe(rawWardrobe) ? null : rawWardrobe
 
   const cam = getCameraPreset(camera, userPresets)
+  // Effective realism category — custom presets resolve from their tokens so a
+  // 2D/chibi custom preset stops receiving photoreal injections (window light,
+  // "anatomically correct", skin pores) that fight its own style tokens.
+  const camCat = effectiveRealismCategory(cam)
   // Front-facing intent: the naskah asked the subject to face the camera / be
   // shown front-on. This must override the candid "off-center" preset bias AND
   // the "Avoid: posed/centered/symmetrical" negatives (which otherwise force the
   // model to turn the subject sideways). Detected from the action/image_prompt.
   const frontFacing = /\bfacing (the |straight )?camer|front[-\s]?view|front[-\s]?facing|looking (up |straight |directly )?(in|at|to|into) (the )?camera|eye contact|menghadap (ke )?kamera|hadap (ke )?depan|tampak depan|madep depan|straight-on view/i.test(String(action || ''))
-  const ctx = { cameraId: cam.id, ar, skipProduct, continuousShot, refsCount, wardrobe: !!wardrobe, media: 'image', frontFacing }
+  const ctx = { cameraId: cam.id, cameraCategory: camCat, ar, skipProduct, continuousShot, refsCount, wardrobe: !!wardrobe, media: 'image', frontFacing }
 
   const L1_camera = cam.tokens?.join(', ') || ''
   const L5b_camera_echo = cam.tokens?.length
@@ -282,7 +320,7 @@ export function compileImagePrompt(spec) {
   const L4_environment = environment ? `Setting: ${environment}.` : ''
   // L4b — directional-lighting enrichment (harsh sun / single window) when the
   // naskah didn't name a light source. Biggest realism lever after the camera.
-  const L4b_lighting = enrichLighting(environment, cam)
+  const L4b_lighting = enrichLighting(environment, camCat)
   const L5_action = action || ''
   // L6_brand â€” strong product fidelity directive when a product brief is
   // attached. Previously this was just `Product: ${brand}` which the model
@@ -303,7 +341,7 @@ export function compileImagePrompt(spec) {
   const L8b_style = styleN > 0
     ? `STYLE REFERENCE: the last ${styleN === 1 ? 'image is a style reference' : `${styleN} images are style references`} â€” match their color palette, lighting, rendering style, and overall aesthetic. Do NOT copy characters, faces, or specific objects from them. Use them ONLY as visual mood/style guide.`
     : ''
-  const L9_quality = pickQuality(cam, 'image', skipProduct, environment)
+  const L9_quality = pickQuality(camCat, 'image', skipProduct, environment)
   // Anti-text terms appended when "No text" is on — stops the FIRST FRAME from
   // carrying gibberish text/signage that image-to-video would then animate.
   let negTerms = cam.negatives?.length ? cam.negatives.slice() : []
@@ -313,7 +351,13 @@ export function compileImagePrompt(spec) {
   // even though the prompt says "front view". (Negatives bypass the sanitizer,
   // so they have to be filtered here directly.)
   if (frontFacing) negTerms = negTerms.filter((t) => !/perfectly centered|symmetric|(^|\s)posed(\s|$)|off-cent(er|re)|centered framing/i.test(t))
-  if (skipOnscreen) negTerms.push('on-screen text', 'captions', 'subtitles', 'watermark', 'logos', 'letters', 'written words', 'gibberish text', 'signage')
+  if (skipOnscreen) {
+    negTerms.push('on-screen text', 'captions', 'subtitles', 'watermark')
+    // When the shot EXPLICITLY features a text prop (sign/tag/banner the
+    // character holds or wears), banning "letters / written words / signage"
+    // contradicts the action and garbles the prop. Overlay text stays banned.
+    if (!wantsDiegeticText(action)) negTerms.push('logos', 'letters', 'written words', 'gibberish text', 'signage')
+  }
   const L10_negatives = negTerms.length ? `Avoid: ${negTerms.join(', ')}.` : ''
 
   // L11 â€” trailing imperative for edit endpoints (recency bias).
@@ -352,7 +396,7 @@ export function compileVideoPrompt(spec) {
     identity = null,
     environment = null,
     action = null,
-    wardrobe = null,
+    wardrobe: rawWardrobe = null,
     ar = '9:16',
     refsCount = 0,
     noText = false,
@@ -367,6 +411,8 @@ export function compileVideoPrompt(spec) {
     continuousShot = false, // ON = one unbroken take; OFF (default) = montage / cut between panels
     userPresets = [],
   } = spec
+  // Same no-change wardrobe guard as the image path (see isNoChangeWardrobe).
+  const wardrobe = isNoChangeWardrobe(rawWardrobe) ? null : rawWardrobe
 
   // ── STORYBOARD MODE ──
   // The 3x3 grid already encodes scene composition, the beat sequence, camera
@@ -383,12 +429,15 @@ export function compileVideoPrompt(spec) {
   // dialog/accent/pace only. The grid carries everything else.
   if (storyboard) {
     const sbCam = camera ? getCameraPreset(camera, userPresets) : null
+    // Effective category so a CUSTOM 2D/stylised preset gets its tokens pushed
+    // (previously category 'custom' matched no branch → style lost entirely).
+    const sbCat = sbCam ? effectiveRealismCategory(sbCam) : null
     const sb = []
-    if (sbCam?.category === 'phone') {
+    if (sbCat === 'phone') {
       sb.push('Casual handheld phone-video look — natural skin texture, no color grade, no filter, no beautify.')
-    } else if (sbCam?.category === 'cinema') {
+    } else if (sbCat === 'cinema') {
       sb.push('Cinematic look — controlled exposure, filmic color, smooth controlled motion.')
-    } else if (sbCam?.category === 'animation' && sbCam?.tokens?.length) {
+    } else if (sbCat === 'animation' && sbCam?.tokens?.length) {
       sb.push(`${sbCam.tokens.join(', ')}.`)
     }
     if (identity) sb.push(`Subject: ${identity}.`)
@@ -414,7 +463,7 @@ export function compileVideoPrompt(spec) {
     }
     sb.push(`${ar} composition.`)
     if (refsCount) sb.push('Keep the SAME character identity, outfit and art style as the references throughout — no mid-video morphing.')
-    if (noText) sb.push('Absolutely no on-screen text, captions, subtitles, watermarks, logos, letters, numbers, or any written words anywhere in the frame.')
+    if (noText) sb.push(noTextLine(action))
     return sb.filter(Boolean).join('\n')
   }
 
@@ -430,8 +479,13 @@ export function compileVideoPrompt(spec) {
   // add an explicit locked-tripod override at the end (recency).
   const wantsStaticCam = /\b(static|fixed|locked|tripod|kamera diam|tidak bergerak|no camera movement|minimal camera|still camera)\b/i.test(String(action || ''))
   let cam = null
+  let camCat = 'phone' // matches the old `cam?.category || 'phone'` default
   if (camera) {
     cam = getCameraPreset(camera, userPresets)
+    // Effective category — custom presets resolve from tokens, so a 2D/chibi
+    // custom preset stops getting phone-path motion ("arm swing, secondary
+    // motion in hair", handheld blur) + the "same real person" clause.
+    camCat = effectiveRealismCategory(cam)
     let camTokens = cam?.tokens?.length ? [...cam.tokens] : []
     if (wantsStaticCam) {
       camTokens = camTokens.filter((t) => !/handheld|motion blur from handheld|camera shake|mid-natural-motion|panning|\bpan\b|push-in|dolly|tracking/i.test(t))
@@ -446,7 +500,7 @@ export function compileVideoPrompt(spec) {
   // cinema, nothing for animation) so we never contradict the preset's own
   // negatives. Adds secondary motion + grounding + breathing + easing. SKIP when
   // a static camera was requested — its handheld-blur phrasing fights "locked".
-  const motionLine = wantsStaticCam ? '' : motionRealismFor(action, cam?.category || 'phone', sceneType)
+  const motionLine = wantsStaticCam ? '' : motionRealismFor(action, camCat, sceneType)
   if (motionLine) lines.push(motionLine)
   // Strong locked-camera override (recency bias beats the leading preset tokens).
   if (wantsStaticCam) {
@@ -455,8 +509,12 @@ export function compileVideoPrompt(spec) {
   // Anti-drift baseline, stated POSITIVELY. Video models don't parse negation —
   // words like "no morphing/warping/melting" make them latch onto those concepts
   // and morph MORE. So we ask for the desired STATE (steady, solid, consistent)
-  // + the real lever: gentle controlled motion. Skipped for animation.
-  if (cam?.category !== 'animation') {
+  // + the real lever: gentle controlled motion. Animation gets its OWN on-model
+  // clause instead (the "real person" wording pulls stylised characters toward
+  // photoreal rendering = the user-reported style drift).
+  if (camCat === 'animation') {
+    lines.push('Consistent stylised animation — the character stays ON-MODEL in every frame: identical proportions, identical outline weight, identical colors and art style throughout, as if drawn by the same animator from first frame to last. The rendering keeps the exact same art style for the entire clip.')
+  } else {
     lines.push('Motion stays gentle, smooth and physically grounded — slow deliberate movement, steady pacing. The subject keeps a solid, consistent shape and identity in every frame, looking like the same real person/object throughout.')
   }
   // Spoken-audio direction: language + regional accent/dialect + relaxed pace,
@@ -475,8 +533,18 @@ export function compileVideoPrompt(spec) {
   // Actively forbid hallucinated on-screen text. AI video models love to render
   // gibberish captions/signage/watermarks; "No text" must FORBID it, not just
   // omit a text instruction — that's why text kept showing up.
-  if (noText) lines.push('Absolutely no on-screen text, captions, subtitles, watermarks, logos, letters, numbers, or any written words anywhere in the frame.')
+  if (noText) lines.push(noTextLine(action))
   return lines.filter(Boolean).join('\n')
+}
+
+// The no-text clause, diegetic-aware: when the action explicitly features a
+// text prop (sign/tag/banner the character holds or wears), a blanket ban on
+// "letters, numbers, written words" contradicts the action in the same prompt
+// and the model garbles or drops the prop. Overlay text stays banned always.
+function noTextLine(action) {
+  return wantsDiegeticText(action)
+    ? 'No overlay text: absolutely no captions, subtitles, watermarks, floating UI text or graphics anywhere in the frame. Text may exist ONLY on the physical props described in the scene (signs, tags or labels the character holds or wears).'
+    : 'Absolutely no on-screen text, captions, subtitles, watermarks, logos, letters, numbers, or any written words anywhere in the frame.'
 }
 
 // @deprecated â€” use compileImagePrompt / compileVideoPrompt directly.

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { sanitize, sanitizeLayers, compileImagePrompt, compileVideoPrompt, enrichLighting, inferSceneType, motionRealismFor } from './prompt-compiler.js'
+import { sanitize, sanitizeLayers, compileImagePrompt, compileVideoPrompt, enrichLighting, inferSceneType, motionRealismFor, isNoChangeWardrobe, wantsDiegeticText } from './prompt-compiler.js'
 
 describe('sanitize — contradiction engine', () => {
   it('drops cinematic language on phone presets', () => {
@@ -301,6 +301,107 @@ describe('enrichLighting', () => {
   })
   it('never enriches animation', () => {
     expect(enrichLighting('bedroom', { category: 'animation' })).toBe('')
+  })
+})
+
+// ── CUSTOM preset with animation-looking tokens (user bug: category 'custom'
+// fell through every 'animation' guard → window light, "anatomically correct",
+// phone motion + "same real person" leaked into a 2D chibi preset and dragged
+// the output off-style/off-model) ─────────────────────────────────────────
+const CUSTOM_2D_PRESET = {
+  id: 'acekid_storyboard_2d',
+  label: 'AceKid chibi 2D storybook',
+  category: 'custom',
+  tokens: ['2D cartoon illustration', 'chibi super-deformed proportions', 'thick black outlines on EVERYTHING', 'flat cel-shaded coloring'],
+  negatives: ['photorealistic backgrounds', 'Studio Ghibli style detailed landscapes'],
+}
+
+describe('custom preset with animation tokens → treated as animation', () => {
+  const img = { identity: 'Prof Tandy the cow mascot', action: 'waving at the camera', camera: 'acekid_storyboard_2d', environment: 'modern milk factory', userPresets: [CUSTOM_2D_PRESET] }
+
+  it('image: no photoreal window-light injection', () => {
+    expect(compileImagePrompt(img)).not.toMatch(/window casting a directional shadow/i)
+  })
+  it('image: animation quality line instead of "Anatomically correct"', () => {
+    const out = compileImagePrompt(img)
+    expect(out).not.toMatch(/Anatomically correct/i)
+    expect(out).toMatch(/Clean stylised render/i)
+  })
+  it('video: no phone-path motion realism (arm swing / handheld blur) and no "real person"', () => {
+    const out = compileVideoPrompt({ camera: 'acekid_storyboard_2d', action: 'walks into frame holding a jar', ar: '9:16', userPresets: [CUSTOM_2D_PRESET] })
+    expect(out).not.toMatch(/motion blur/i)
+    expect(out).not.toMatch(/same real person/i)
+  })
+  it('video: gets the ON-MODEL animation stability clause', () => {
+    const out = compileVideoPrompt({ camera: 'acekid_storyboard_2d', action: 'waving', ar: '9:16', userPresets: [CUSTOM_2D_PRESET] })
+    expect(out).toMatch(/ON-MODEL/i)
+    expect(out).toMatch(/same art style/i)
+  })
+  it('video: built-in animation_2d ALSO gets the ON-MODEL clause', () => {
+    const out = compileVideoPrompt({ camera: 'animation_2d', action: 'waving', ar: '9:16' })
+    expect(out).toMatch(/ON-MODEL/i)
+  })
+  it('video: phone presets keep the real-person anti-drift line (unchanged behavior)', () => {
+    const out = compileVideoPrompt({ camera: 'iphone_15_clean', action: 'she speaks', ar: '9:16' })
+    expect(out).toMatch(/same real person/i)
+    expect(out).not.toMatch(/ON-MODEL/i)
+  })
+  it('storyboard: custom animation preset pushes its style tokens', () => {
+    const out = compileVideoPrompt({ storyboard: true, camera: 'acekid_storyboard_2d', action: 'panel beats', ar: '9:16', userPresets: [CUSTOM_2D_PRESET] })
+    expect(out).toMatch(/chibi super-deformed proportions/i)
+  })
+})
+
+describe('isNoChangeWardrobe — "SAME APPARANCE" landmine', () => {
+  it('detects no-change directives (EN + ID + typo)', () => {
+    expect(isNoChangeWardrobe('SAME APPARANCE NOTHING CHANGE')).toBe(true)
+    expect(isNoChangeWardrobe('same as reference')).toBe(true)
+    expect(isNoChangeWardrobe('jangan diubah')).toBe(true)
+    expect(isNoChangeWardrobe('ikutin ref')).toBe(true)
+    expect(isNoChangeWardrobe('-')).toBe(true)
+  })
+  it('keeps real outfit descriptions', () => {
+    expect(isNoChangeWardrobe('black hoodie')).toBe(false)
+    expect(isNoChangeWardrobe('white lab coat and stethoscope')).toBe(false)
+    expect(isNoChangeWardrobe('keep the same lab coat but add a red scarf')).toBe(false)
+    expect(isNoChangeWardrobe('')).toBe(false)
+  })
+  it('compileImagePrompt drops the L11 outfit-swap imperative for no-change wardrobe', () => {
+    const out = compileImagePrompt({ identity: 'a mascot', action: 'waving', camera: 'iphone_15_clean', wardrobe: 'SAME APPARANCE NOTHING CHANGE' })
+    expect(out).not.toMatch(/CHANGE the subjects' outfit/i)
+    expect(out).not.toMatch(/Wardrobe: SAME/i)
+  })
+  it('compileImagePrompt keeps L11 for a real wardrobe (unchanged behavior)', () => {
+    const out = compileImagePrompt({ identity: 'a woman', action: 'smiling', camera: 'iphone_15_clean', wardrobe: 'black hoodie' })
+    expect(out).toMatch(/CHANGE the subjects' outfit to: black hoodie/)
+  })
+  it('compileVideoPrompt drops the Wardrobe line for no-change wardrobe', () => {
+    const out = compileVideoPrompt({ action: 'waving', ar: '9:16', wardrobe: 'SAME APPARANCE NOTHING CHANGE' })
+    expect(out).not.toMatch(/Wardrobe:/)
+  })
+})
+
+describe('diegetic text props vs overlay-text ban', () => {
+  it('wantsDiegeticText detects text props', () => {
+    expect(wantsDiegeticText("holds a 'TRACEABLE' sign")).toBe(true)
+    expect(wantsDiegeticText("with '47°N' on his ear tag")).toBe(true)
+    expect(wantsDiegeticText('she walks through the park')).toBe(false)
+  })
+  it('video noText: prop shot bans ONLY overlay text, allows the prop writing', () => {
+    const out = compileVideoPrompt({ action: "jumps while holding a 'TRACEABLE' sign", ar: '9:16', noText: true })
+    expect(out).toMatch(/No overlay text/i)
+    expect(out).toMatch(/ONLY on the physical props/i)
+    expect(out).not.toMatch(/letters, numbers/i)
+  })
+  it('video noText: non-prop shot keeps the full ban (unchanged behavior)', () => {
+    const out = compileVideoPrompt({ action: 'she walks through the park', ar: '9:16', noText: true })
+    expect(out).toMatch(/no on-screen text.*letters, numbers/i)
+  })
+  it('image skipOnscreen: prop shot drops letters/signage negatives, keeps captions ban', () => {
+    const out = compileImagePrompt({ identity: 'a mascot', action: "holding a 'TRACEABLE' sign", camera: 'iphone_15_clean', skipOnscreen: true })
+    expect(out).toMatch(/captions/i)
+    expect(out).not.toMatch(/written words/i)
+    expect(out).not.toMatch(/signage/i)
   })
 })
 
