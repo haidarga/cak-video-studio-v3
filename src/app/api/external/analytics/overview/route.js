@@ -17,6 +17,7 @@ import {
   RangeError,
 } from '@/lib/analytics-aggregate'
 import { aggregateContent } from '@/lib/analytics-content'
+import { aggregateAccounts, aggregateKpi } from '@/lib/analytics-accounts'
 import { fetchAllRows } from '@/lib/analytics-fetch'
 
 export const runtime = 'nodejs'
@@ -109,6 +110,35 @@ export async function GET(req) {
       supabase.from('personas').select('id, name').order('name'),
     ])
 
+  const [accountRes, warmupRes, kpiRes] = await Promise.all([
+    fetchAllRows(() => {
+      const q = supabase
+        .from('accounts')
+        .select('platform, warmup_phase, status, follower_count, brand_id')
+        .order('created_at', { ascending: true })
+      return brandId ? q.eq('brand_id', brandId) : q
+    }),
+    fetchAllRows(() =>
+      supabase
+        .from('warmup_runs')
+        .select('phase, status, actions_planned, actions_done, created_at')
+        .gte('created_at', range.from)
+        .lte('created_at', range.to)
+        .order('created_at', { ascending: true })
+    ),
+    fetchAllRows(() => {
+      const q = supabase
+        .from('kpi_metrics')
+        .select(
+          'brand_id, date, total_views, total_likes, total_comments, total_shares, total_saves, followers_gained, posts_published, engagement_rate'
+        )
+        .gte('date', range.from.slice(0, 10))
+        .lte('date', range.to.slice(0, 10))
+        .order('date', { ascending: true })
+      return brandId ? q.eq('brand_id', brandId) : q
+    }),
+  ])
+
   const failed =
     agentRes.error ||
     pipelineRes.error ||
@@ -116,7 +146,10 @@ export async function GET(req) {
     genJobRes.error ||
     qcRes.error ||
     brandRes.error ||
-    personaRes.error
+    personaRes.error ||
+    accountRes.error ||
+    warmupRes.error ||
+    kpiRes.error
   if (failed) {
     return NextResponse.json(
       { ok: false, error: `Analytics query failed (500) — ${failed.message}` },
@@ -144,6 +177,8 @@ export async function GET(req) {
       genJobsByStatus: brandScopable ? content.genJobsByStatus : null,
       qcFlags: brandScopable ? content.qcFlags : null,
     },
+    accounts: aggregateAccounts(accountRes.data, warmupRes.data),
+    kpi: aggregateKpi(kpiRes.data, brandRes.data),
     dimensions: buildDimensions(brandRes.data, personaRes.data),
   })
 }
