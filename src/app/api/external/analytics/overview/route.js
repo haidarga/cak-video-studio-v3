@@ -16,25 +16,12 @@ import {
   buildDimensions,
   RangeError,
 } from '@/lib/analytics-aggregate'
+import { aggregateContent } from '@/lib/analytics-content'
+import { fetchAllRows } from '@/lib/analytics-fetch'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-// PostgREST caps a single response at db-max-rows (1000 here), so a plain
-// .limit() silently truncates and every total comes out wrong. Page instead.
-const PAGE_SIZE = 1000
-const MAX_ROWS = 20000
-
-async function fetchAllRows(buildQuery) {
-  const rows = []
-  for (let offset = 0; offset < MAX_ROWS; offset += PAGE_SIZE) {
-    const { data, error } = await buildQuery().range(offset, offset + PAGE_SIZE - 1)
-    if (error) return { data: null, error }
-    rows.push(...data)
-    if (data.length < PAGE_SIZE) break
-  }
-  return { data: rows, error: null }
-}
 
 export async function GET(req) {
   const denied = requireAnalyticsKey(req)
@@ -68,13 +55,68 @@ export async function GET(req) {
     return brandId ? q.eq('brand_id', brandId) : q
   }
 
-  const [agentRes, brandRes, personaRes] = await Promise.all([
-    fetchAllRows(buildAgentQuery),
-    supabase.from('brands').select('id, name').order('name'),
-    supabase.from('personas').select('id, name').order('name'),
-  ])
+  const buildPipelineQuery = () => {
+    const q = supabase
+      .from('content_pipeline')
+      .select('stage, content_type, content_format, production_url, performance_score, posted_at, created_at')
+      .gte('created_at', range.from)
+      .lte('created_at', range.to)
+      .order('created_at', { ascending: true })
+    return brandId ? q.eq('brand_id', brandId) : q
+  }
 
-  const failed = agentRes.error || brandRes.error || personaRes.error
+  // sw_naskah / sw_gen_jobs / sw_qc_flags carry no brand column, and the
+  // brief_id -> brand chain is broken (sw_briefs is empty), so they cannot be
+  // scoped to a brand. Skip them entirely rather than pass off global counts
+  // as brand-specific.
+  const brandScopable = !brandId
+
+  const [agentRes, pipelineRes, naskahRes, genJobRes, qcRes, brandRes, personaRes] =
+    await Promise.all([
+      fetchAllRows(buildAgentQuery),
+      fetchAllRows(buildPipelineQuery),
+      brandScopable
+        ? fetchAllRows(() =>
+            supabase
+              .from('sw_naskah')
+              .select('status, created_at')
+              .gte('created_at', range.from)
+              .lte('created_at', range.to)
+              .order('created_at', { ascending: true })
+          )
+        : { data: [], error: null },
+      brandScopable
+        ? fetchAllRows(() =>
+            supabase
+              .from('sw_gen_jobs')
+              .select('status, created_at')
+              .gte('created_at', range.from)
+              .lte('created_at', range.to)
+              .order('created_at', { ascending: true })
+          )
+        : { data: [], error: null },
+      brandScopable
+        ? fetchAllRows(() =>
+            supabase
+              .from('sw_qc_flags')
+              .select('severity, created_at')
+              .gte('created_at', range.from)
+              .lte('created_at', range.to)
+              .order('created_at', { ascending: true })
+          )
+        : { data: [], error: null },
+      supabase.from('brands').select('id, name').order('name'),
+      supabase.from('personas').select('id, name').order('name'),
+    ])
+
+  const failed =
+    agentRes.error ||
+    pipelineRes.error ||
+    naskahRes.error ||
+    genJobRes.error ||
+    qcRes.error ||
+    brandRes.error ||
+    personaRes.error
   if (failed) {
     return NextResponse.json(
       { ok: false, error: `Analytics query failed (500) — ${failed.message}` },
@@ -82,11 +124,26 @@ export async function GET(req) {
     )
   }
 
+  const content = aggregateContent({
+    pipeline: pipelineRes.data,
+    naskah: naskahRes.data,
+    genJobs: genJobRes.data,
+    qcFlags: qcRes.data,
+  })
+
   return NextResponse.json({
     ok: true,
     range,
     brandId,
     cost: aggregateCost(agentRes.data, brandRes.data),
+    content: {
+      ...content,
+      // Null (not zero) so the dashboard can say "not available per brand"
+      // instead of drawing an empty chart that reads as "nothing happened".
+      naskahByStatus: brandScopable ? content.naskahByStatus : null,
+      genJobsByStatus: brandScopable ? content.genJobsByStatus : null,
+      qcFlags: brandScopable ? content.qcFlags : null,
+    },
     dimensions: buildDimensions(brandRes.data, personaRes.data),
   })
 }
