@@ -58,55 +58,85 @@ export function aggregateCost(rows = []) {
 /** Which result type each spend kind produced, so the split uses a like-for-like basis. */
 const KIND_TO_RESULT_TYPE = { video_gen: 'video', image_gen: 'image' }
 
-/** Spread spend across brands by their share of the output it produced.
+const dayOf = (v) => String(v).slice(0, 10)
+
+/** Core allocation: split every day's spend by THAT day's output share.
  *
  * usage_log records no persona or brand, and neither does gen_jobs — the only
  * link from output back to a brand is results.persona_id -> personas.brand_id.
- * So per-brand cost is an ALLOCATION, never a measurement, and every row says so.
- * Spend whose output type has no attributable results lands on the null brand
- * rather than being silently dropped, keeping the allocated total honest. */
+ * So per-brand cost is an ALLOCATION, never a measurement.
+ *
+ * Allocating day by day rather than across the whole window keeps the headline
+ * total and the daily chart telling the same story, and stops a brand that was
+ * idle on a busy spending day from being charged for it. Spend whose output type
+ * produced nothing that day lands on the null brand instead of being dropped, so
+ * the allocated total always equals the real total. */
+function allocateByDay(usageRows = [], results = [], personas = []) {
+  const brandByPersona = personaBrandIndex(personas)
+
+  // day -> result type -> brandId -> count
+  const outputByDay = new Map()
+  const basisByBrand = new Map()
+  for (const r of results) {
+    const day = dayOf(r.created_at)
+    const perType = outputByDay.get(day) ?? new Map()
+    const perBrand = perType.get(r.type) ?? new Map()
+    const brandId = brandByPersona.get(r.persona_id) ?? null
+    perBrand.set(brandId, (perBrand.get(brandId) ?? 0) + 1)
+    perType.set(r.type, perBrand)
+    outputByDay.set(day, perType)
+    basisByBrand.set(brandId, (basisByBrand.get(brandId) ?? 0) + 1)
+  }
+
+  // brandId -> { total, daily: Map<date, amount> }
+  const allocated = new Map()
+  const add = (brandId, day, amount) => {
+    const entry = allocated.get(brandId) ?? { total: 0, daily: new Map() }
+    entry.total += amount
+    entry.daily.set(day, (entry.daily.get(day) ?? 0) + amount)
+    allocated.set(brandId, entry)
+  }
+
+  for (const row of usageRows) {
+    const day = dayOf(row.created_at)
+    const spend = usd(row.cost_usd)
+    const perBrand = outputByDay.get(day)?.get(KIND_TO_RESULT_TYPE[row.kind])
+    const total = perBrand ? [...perBrand.values()].reduce((s, n) => s + n, 0) : 0
+    if (!total) {
+      add(null, day, spend)
+      continue
+    }
+    for (const [brandId, count] of perBrand) add(brandId, day, (spend * count) / total)
+  }
+
+  return { allocated, basisByBrand }
+}
+
 export function allocateCostByBrand(usageRows = [], results = [], personas = [], brands = []) {
   if (!usageRows.length) return []
 
   const brandNameById = new Map(brands.map((b) => [b.id, b.name]))
-  const brandByPersona = personaBrandIndex(personas)
-
-  const countsByType = new Map()
-  const basisByBrand = new Map()
-  for (const r of results) {
-    const brandId = brandByPersona.get(r.persona_id) ?? null
-    const perType = countsByType.get(r.type) ?? new Map()
-    perType.set(brandId, (perType.get(brandId) ?? 0) + 1)
-    countsByType.set(r.type, perType)
-    basisByBrand.set(brandId, (basisByBrand.get(brandId) ?? 0) + 1)
-  }
-
-  const spendByKind = new Map()
-  for (const row of usageRows) {
-    spendByKind.set(row.kind, (spendByKind.get(row.kind) ?? 0) + usd(row.cost_usd))
-  }
-
-  const allocated = new Map()
-  const add = (brandId, amount) =>
-    allocated.set(brandId, (allocated.get(brandId) ?? 0) + amount)
-
-  for (const [kind, spend] of spendByKind) {
-    const perType = countsByType.get(KIND_TO_RESULT_TYPE[kind]) ?? new Map()
-    const total = [...perType.values()].reduce((s, n) => s + n, 0)
-    if (!total) {
-      add(null, spend)
-      continue
-    }
-    for (const [brandId, count] of perType) add(brandId, (spend * count) / total)
-  }
+  const { allocated, basisByBrand } = allocateByDay(usageRows, results, personas)
 
   return [...allocated]
-    .map(([brandId, costUsd]) => ({
+    .map(([brandId, entry]) => ({
       brandId,
       brandName: brandId ? (brandNameById.get(brandId) ?? null) : null,
-      costUsd: round(costUsd),
+      costUsd: round(entry.total),
       basisResults: basisByBrand.get(brandId) ?? 0,
       allocated: true,
     }))
     .sort((a, b) => b.costUsd - a.costUsd)
+}
+
+/** One brand's day-by-day slice, consistent with its total in allocateCostByBrand. */
+export function allocateBrandDaily(usageRows = [], results = [], personas = [], brandId = null) {
+  if (!brandId || !usageRows.length) return []
+
+  const { allocated } = allocateByDay(usageRows, results, personas)
+  const daily = allocated.get(brandId)?.daily ?? new Map()
+
+  // Days with spend but nothing from this brand must read zero, not go missing.
+  const days = [...new Set(usageRows.map((r) => dayOf(r.created_at)))].sort()
+  return days.map((date) => ({ date, costUsd: round(daily.get(date) ?? 0) }))
 }

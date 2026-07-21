@@ -11,7 +11,11 @@ import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { requireAnalyticsKey } from '@/lib/analytics-auth'
 import { parseRange, buildDimensions, RangeError } from '@/lib/analytics-aggregate'
-import { aggregateCost, allocateCostByBrand } from '@/lib/analytics-cost'
+import {
+  aggregateCost,
+  allocateCostByBrand,
+  allocateBrandDaily,
+} from '@/lib/analytics-cost'
 import {
   aggregateVideo,
   aggregatePublishing,
@@ -124,20 +128,45 @@ export async function GET(req) {
     )
   }
 
+  const fullResults = basisRes.data ?? resultRes.data
+  const byBrand = allocateCostByBrand(
+    usageRes.data,
+    fullResults,
+    personaRes.data,
+    brandRes.data
+  )
+  const selected = brandId ? byBrand.find((b) => b.brandId === brandId) : null
+  const cost = aggregateCost(usageRes.data)
+
   return NextResponse.json({
     ok: true,
     range,
     brandId,
     cost: {
-      ...aggregateCost(usageRes.data),
+      ...cost,
       // Derived, not measured — usage_log has no brand column. Always computed
       // over every brand so the shares stay comparable under a brand filter.
-      byBrand: allocateCostByBrand(
-        usageRes.data,
-        basisRes.data ?? resultRes.data,
-        personaRes.data,
-        brandRes.data
-      ),
+      byBrand,
+      // The selected brand's slice, so the headline figures react to the filter
+      // instead of sitting on an unchanging workspace total.
+      brandAllocation: brandId
+        ? {
+            brandId,
+            brandName: selected?.brandName ?? null,
+            costUsd: selected?.costUsd ?? 0,
+            basisResults: selected?.basisResults ?? 0,
+            shareOfTotal: cost.totalUsd
+              ? (selected?.costUsd ?? 0) / cost.totalUsd
+              : 0,
+            daily: allocateBrandDaily(
+              usageRes.data,
+              fullResults,
+              personaRes.data,
+              brandId
+            ),
+            allocated: true,
+          }
+        : null,
     },
     video: aggregateVideo({
       results: resultRes.data,
