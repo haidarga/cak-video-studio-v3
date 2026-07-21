@@ -18,6 +18,7 @@ import {
 } from '@/lib/analytics-aggregate'
 import { aggregateContent } from '@/lib/analytics-content'
 import { aggregateAccounts, aggregateKpi } from '@/lib/analytics-accounts'
+import { aggregateOps } from '@/lib/analytics-ops'
 import { fetchAllRows } from '@/lib/analytics-fetch'
 
 export const runtime = 'nodejs'
@@ -49,7 +50,7 @@ export async function GET(req) {
   const buildAgentQuery = () => {
     const q = supabase
       .from('agent_logs')
-      .select('agent_name, run_type, status, tokens_used, duration_ms, brand_id, created_at')
+      .select('agent_name, run_type, status, tokens_used, duration_ms, brand_id, error_message, created_at')
       .gte('created_at', range.from)
       .lte('created_at', range.to)
       .order('created_at', { ascending: true })
@@ -139,6 +140,28 @@ export async function GET(req) {
     }),
   ])
 
+  const [taskRes, devIssueRes, integrationRes, notificationRes] = await Promise.all([
+    fetchAllRows(() => {
+      const q = supabase
+        .from('tasks')
+        .select('status, type, brand_id, created_at')
+        .order('created_at', { ascending: true })
+      return brandId ? q.eq('brand_id', brandId) : q
+    }),
+    fetchAllRows(() =>
+      supabase.from('dev_issues').select('id').order('created_at', { ascending: true })
+    ),
+    fetchAllRows(() =>
+      supabase
+        .from('integration_connections')
+        .select('provider, status, last_synced_at, last_error')
+        .order('created_at', { ascending: true })
+    ),
+    fetchAllRows(() =>
+      supabase.from('notifications').select('read').order('created_at', { ascending: true })
+    ),
+  ])
+
   const failed =
     agentRes.error ||
     pipelineRes.error ||
@@ -149,7 +172,11 @@ export async function GET(req) {
     personaRes.error ||
     accountRes.error ||
     warmupRes.error ||
-    kpiRes.error
+    kpiRes.error ||
+    taskRes.error ||
+    devIssueRes.error ||
+    integrationRes.error ||
+    notificationRes.error
   if (failed) {
     return NextResponse.json(
       { ok: false, error: `Analytics query failed (500) — ${failed.message}` },
@@ -179,6 +206,13 @@ export async function GET(req) {
     },
     accounts: aggregateAccounts(accountRes.data, warmupRes.data),
     kpi: aggregateKpi(kpiRes.data, brandRes.data),
+    ops: aggregateOps({
+      agentRows: agentRes.data,
+      tasks: taskRes.data,
+      devIssues: devIssueRes.data,
+      integrations: integrationRes.data,
+      notifications: notificationRes.data,
+    }),
     dimensions: buildDimensions(brandRes.data, personaRes.data),
   })
 }
