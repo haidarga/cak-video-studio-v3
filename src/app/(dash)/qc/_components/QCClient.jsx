@@ -67,9 +67,7 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
     const items = results.filter((r) => selectedIds.has(r.id) && isWebm(r))
     if (items.length === 0) { setErr('Pilih minimal 1 video'); return }
     setBatchBusy(true); setErr('')
-    for (const r of items) {
-      await changeVoice(r)
-    }
+    await Promise.all(items.map((r) => changeVoice(r)))
     setSelectedIds(new Set())
     setBatchBusy(false)
   }
@@ -78,9 +76,7 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
     const items = results.filter((r) => selectedIds.has(r.id) && isWebm(r))
     if (items.length === 0) return
     setBatchBusy(true); setErr('')
-    for (const r of items) {
-      await convertToMp4(r)
-    }
+    await Promise.all(items.map((r) => convertToMp4(r)))
     setSelectedIds(new Set())
     setBatchBusy(false)
   }
@@ -89,9 +85,7 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
     const items = results.filter((r) => selectedIds.has(r.id) && isWebm(r))
     if (items.length === 0) return
     setBatchBusy(true); setErr('')
-    for (const r of items) {
-      await stripAudio(r)
-    }
+    await Promise.all(items.map((r) => stripAudio(r)))
     setSelectedIds(new Set())
     setBatchBusy(false)
   }
@@ -140,64 +134,72 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
   // ffmpeg, no external tools. Real-time speed (5s clip ≈ 5s convert).
   // Updates result.url in DB to the new .mp4 path. Old .webm in storage
   // stays around for safety; user can clean up later if they want.
-  const [converting, setConverting] = useState(null) // { id, stage }
+  // Lock for client-side WASM ffmpeg operations (muxing/converting).
+  // Serverless API calls (ElevenLabs S2S) run concurrently; WASM operations queue cleanly.
+  const ffLockRef = useRef(Promise.resolve())
+  function withFfmpegLock(fn) {
+    const run = ffLockRef.current.then(fn, fn)
+    ffLockRef.current = run.catch(() => {})
+    return run
+  }
+
+  // Multi-item converting map: { [resultId]: stageString }
+  // Allows each video card to maintain its own independent loading state.
+  const [convertingMap, setConvertingMap] = useState({})
+  function setItemConverting(id, stage) {
+    setConvertingMap((prev) => {
+      if (!stage) {
+        const next = { ...prev }
+        delete next[id]
+        return next
+      }
+      return { ...prev, [id]: stage }
+    })
+  }
+
   async function convertToMp4(r) {
-    if (converting) return
-    setConverting({ id: r.id, stage: 'Loading video...' })
+    if (convertingMap[r.id]) return
+    setItemConverting(r.id, 'Loading video...')
     setErr('')
     try {
-      const { blob } = await convertVideoToMp4(r.url, (stage) => {
-        setConverting({ id: r.id, stage })
-      })
-      setConverting({ id: r.id, stage: `Uploading ${(blob.size / 1024 / 1024).toFixed(1)}MB...` })
+      const { blob } = await withFfmpegLock(() =>
+        convertVideoToMp4(r.url, (stage) => setItemConverting(r.id, stage))
+      )
+      setItemConverting(r.id, `Uploading ${(blob.size / 1024 / 1024).toFixed(1)}MB...`)
       const { url: publicUrl } = await uploadBlob(blob, `qc-converted-${Date.now()}.mp4`, 'qc')
       const { error: updErr } = await supabase.from('results').update({ url: publicUrl }).eq('id', r.id)
       if (updErr) throw updErr
       setResults((prev) => prev.map((x) => (x.id === r.id ? { ...x, url: publicUrl } : x)))
-      setConverting(null)
+      setItemConverting(r.id, null)
     } catch (e) {
       setErr('Convert gagal: ' + (e?.message || e))
-      setConverting(null)
+      setItemConverting(r.id, null)
     }
   }
-  // Show the re-encode button on EVERY video result — not just WebM.
-  // Reason: older MP4 results in QC are still 720p / low-bitrate from
-  // the pre-1080p pipeline. One click upscales them to 1080p via the
-  // same convert function. WebM gets the BIGGEST quality win (also
-  // becomes Postiz-compatible); existing MP4 still benefits from the
-  // 1080p upscale + higher bitrate re-encode.
+
   function isWebm(r) { return r.type === 'video' && !!r.url }
 
-  // Strip audio track from a video so TikTok's autoAddMusic flag actually
-  // takes effect — TikTok only adds a trending sound when the uploaded
-  // video has no audio of its own. Stream-copy via ffmpeg so it's instant
-  // (no video re-encode). Replaces result.url in place.
   async function stripAudio(r) {
-    if (converting) return
-    setConverting({ id: r.id, stage: 'Loading ffmpeg...' })
+    if (convertingMap[r.id]) return
+    setItemConverting(r.id, 'Loading ffmpeg...')
     setErr('')
     try {
-      const blob = await stripAudioFromVideo(r.url, (stage) => {
-        setConverting({ id: r.id, stage })
-      })
-      setConverting({ id: r.id, stage: `Uploading ${(blob.size / 1024 / 1024).toFixed(1)}MB...` })
+      const blob = await withFfmpegLock(() =>
+        stripAudioFromVideo(r.url, (stage) => setItemConverting(r.id, stage))
+      )
+      setItemConverting(r.id, `Uploading ${(blob.size / 1024 / 1024).toFixed(1)}MB...`)
       const { url: publicUrl } = await uploadBlob(blob, `qc-muted-${Date.now()}.mp4`, 'qc')
       const { error: updErr } = await supabase.from('results').update({ url: publicUrl }).eq('id', r.id)
       if (updErr) throw updErr
       setResults((prev) => prev.map((x) => (x.id === r.id ? { ...x, url: publicUrl } : x)))
-      setConverting(null)
+      setItemConverting(r.id, null)
     } catch (e) {
       setErr('Strip audio gagal: ' + (e?.message || e))
-      setConverting(null)
+      setItemConverting(r.id, null)
     }
   }
 
-  // ── 🪄 AI Edit — prompt-driven edit on selected QC videos ──────────
-  // Select videos → describe the edit → Gemini plans a timeline (order,
-  // trims, transitions, punch-ins, hook text, karaoke subtitles) → plan
-  // compiles into an editor project → opens in /editor for preview →
-  // export lands back here in QC. See src/lib/ai-edit-compose.js.
-  const [aiEdit, setAiEdit] = useState(null) // { prompt, busy, stage } | null
+  const [aiEdit, setAiEdit] = useState(null)
   async function runAiEdit() {
     const vids = results.filter((r) => selectedIds.has(r.id) && r.type === 'video' && r.url)
     if (vids.length === 0) { setErr('Pilih minimal 1 VIDEO buat AI Edit'); return }
@@ -226,21 +228,14 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
     }
   }
 
-  // ── 🎙 Change Voice — swap the AI video's voice for the persona's cloned
-  // voice. ElevenLabs Speech-to-Speech keeps the original audio's timing
-  // and phonemes 1:1, so LIP-SYNC SURVIVES — only the timbre changes.
-  // Flow: /api/voice/convert (extract audio via v2 ffmpeg → S2S → mp3 on
-  // R2) → swapAudioInVideo (mux: original audio dropped, cloned voice in)
-  // → upload → NEW result row next to the original (non-destructive, so
-  // you can A/B the two voices in QC and approve the better one).
   async function changeVoice(r) {
-    if (converting) return
+    if (convertingMap[r.id]) return
     const persona = personas.find((p) => p.id === r.persona_id)
     if (!persona?.voice_id) {
       setErr(`Persona "${persona?.name || 'unassigned'}" belum punya voice. Clone/design voice dulu di Personas → Voice Clone, baru tombol ini jalan.`)
       return
     }
-    setConverting({ id: r.id, stage: 'Extract audio + ElevenLabs S2S...' })
+    setItemConverting(r.id, 'Extract audio + ElevenLabs S2S...')
     setErr('')
     try {
       const res = await fetch('/api/voice/convert', {
@@ -249,8 +244,11 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
       })
       const j = await res.json().catch(() => ({ ok: false, error: 'non-json response' }))
       if (!j.ok) throw new Error(j.error || 'voice convert failed')
-      const blob = await swapAudioInVideo(r.url, j.audio_url, (stage) => setConverting({ id: r.id, stage }))
-      setConverting({ id: r.id, stage: `Uploading ${(blob.size / 1024 / 1024).toFixed(1)}MB...` })
+      
+      const blob = await withFfmpegLock(() =>
+        swapAudioInVideo(r.url, j.audio_url, (stage) => setItemConverting(r.id, stage))
+      )
+      setItemConverting(r.id, `Uploading ${(blob.size / 1024 / 1024).toFixed(1)}MB...`)
       const { url: publicUrl } = await uploadBlob(blob, `qc-voiced-${Date.now()}.mp4`, 'qc')
       const { error: insErr } = await supabase.from('results').insert({
         workspace_id: workspaceId,
@@ -265,10 +263,10 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
         created_by: userId,
       })
       if (insErr) throw insErr
-      setConverting(null)
+      setItemConverting(r.id, null)
     } catch (e) {
       setErr('Change voice gagal: ' + (e?.message || e))
-      setConverting(null)
+      setItemConverting(r.id, null)
     }
   }
 
@@ -450,7 +448,7 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
             onSetStatus={setStatus} onRemove={removeFromQC} onOpenNote={setOpenNote}
             onRename={rename} onDeletePerma={deletePerma}
             selectedIds={selectedIds} onToggleSelect={toggleSelect}
-            converting={converting} onConvertToMp4={convertToMp4} onStripAudio={stripAudio} onChangeVoice={changeVoice} isWebm={isWebm} />
+            convertingMap={convertingMap} onConvertToMp4={convertToMp4} onStripAudio={stripAudio} onChangeVoice={changeVoice} isWebm={isWebm} />
         ))}
 
         {byPersona.length === 0 && (
@@ -468,7 +466,7 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
   )
 }
 
-function PersonaGroup({ persona, items, busyUpload, onUpload, onSetStatus, onRemove, onOpenNote, onRename, onDeletePerma, selectedIds, onToggleSelect, converting, onConvertToMp4, onStripAudio, onChangeVoice, isWebm }) {
+function PersonaGroup({ persona, items, busyUpload, onUpload, onSetStatus, onRemove, onOpenNote, onRename, onDeletePerma, selectedIds, onToggleSelect, convertingMap, onConvertToMp4, onStripAudio, onChangeVoice, isWebm }) {
   const fileRef = useRef(null)
   const counts = items.reduce((c, r) => ({ ...c, [r.qc_status]: (c[r.qc_status] || 0) + 1 }), {})
 
@@ -537,7 +535,7 @@ function PersonaGroup({ persona, items, busyUpload, onUpload, onSetStatus, onRem
               selected={selectedIds?.has(r.id)} onToggleSelect={onToggleSelect}
               onSetStatus={onSetStatus} onRemove={onRemove} onOpenNote={onOpenNote}
               onRename={onRename} onDeletePerma={onDeletePerma}
-              isWebm={isWebm?.(r)} converting={converting?.id === r.id ? converting : null}
+              isWebm={isWebm?.(r)} converting={convertingMap?.[r.id] ? { id: r.id, stage: convertingMap[r.id] } : null}
               onConvertToMp4={() => onConvertToMp4?.(r)} onStripAudio={() => onStripAudio?.(r)} onChangeVoice={() => onChangeVoice?.(r)} />
           ))}
         </div>
