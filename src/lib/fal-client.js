@@ -29,7 +29,29 @@ import { createClient } from '@/lib/supabase/client'
 // { video: {url}, ... } or { images: [{url}], ... }) so existing destructures
 // like result.video.url / result.images[0].url keep working.
 function buildResult(row) {
-  if (row.payload && typeof row.payload === 'object') return row.payload
+  let url = row.payload_url
+  
+  if (row.payload && typeof row.payload === 'object') {
+    // Pastikan jika ada url tapi struktur images/video terbungkus beda, kita ekstrak
+    if (!url) {
+      const p = row.payload
+      url = p.video?.url || (typeof p.video === 'string' ? p.video : null) || p.video_url || 
+            p.videos?.[0]?.url || (typeof p.videos?.[0] === 'string' ? p.videos[0] : null) ||
+            p.images?.[0]?.url || (typeof p.images?.[0] === 'string' ? p.images[0] : null) || 
+            p.image?.url || p.image_url || p.output?.url || p.output?.video?.url || 
+            p.file?.url || p.audio?.url || (typeof p.url === 'string' ? p.url : null)
+    }
+    
+    if (url) {
+      return { 
+        ...row.payload, 
+        video: row.payload.video || { url }, 
+        images: row.payload.images || [{ url }]
+      }
+    }
+    return row.payload
+  }
+  
   // Fallback if webhook only stored the extracted URL.
   if (row.payload_url) return { video: { url: row.payload_url }, images: [{ url: row.payload_url }] }
   return {}

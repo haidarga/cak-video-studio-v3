@@ -23,11 +23,27 @@ import { imageCost, videoCost } from '@/lib/cost-table'
 // return different shapes; we handle the common ones.
 function extractUrl(payload) {
   if (!payload || typeof payload !== 'object') return null
-  if (payload.video?.url) return payload.video.url
+  
+  // 1. Gambar
   if (payload.images?.[0]?.url) return payload.images[0].url
+  if (typeof payload.images?.[0] === 'string') return payload.images[0]
   if (payload.image?.url) return payload.image.url
-  if (payload.audio?.url) return payload.audio.url
+  if (payload.image_url) return payload.image_url
+
+  // 2. Video
+  if (payload.video?.url) return payload.video.url
   if (typeof payload.video === 'string') return payload.video
+  if (payload.video_url) return payload.video_url
+  if (payload.videos?.[0]?.url) return payload.videos[0].url
+  if (typeof payload.videos?.[0] === 'string') return payload.videos[0]
+
+  // 3. Output Generic / File / Audio
+  if (payload.output?.url) return payload.output.url
+  if (payload.output?.video?.url) return payload.output.video.url
+  if (payload.file?.url) return payload.file.url
+  if (payload.audio?.url) return payload.audio.url
+  if (typeof payload.url === 'string') return payload.url
+
   return null
 }
 

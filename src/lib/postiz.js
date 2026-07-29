@@ -30,7 +30,15 @@ async function postizJson(creds, path, init = {}) {
   let json = null
   try { json = text ? JSON.parse(text) : null } catch {}
   if (!res.ok) {
-    const errMsg = json?.message || json?.error || text.slice(0, 400) || `HTTP ${res.status}`
+    let errMsg = json?.message || json?.error
+    if (!errMsg && text) {
+      if (text.includes('<!DOCTYPE') || text.includes('<html') || text.includes('Cloudflare') || text.includes('502 Bad Gateway')) {
+        errMsg = `502 Bad Gateway (Cloudflare/Proxy Error — Postiz instance unreachable or upload size limit exceeded)`
+      } else {
+        errMsg = text.slice(0, 400)
+      }
+    }
+    if (!errMsg) errMsg = `HTTP ${res.status}`
     const err = new Error(`Postiz ${res.status} @ ${path}: ${errMsg}`)
     err.status = res.status
     err.path = path
@@ -196,11 +204,6 @@ async function uploadToPostiz(creds, { buffer, name, contentType }) {
   for (const path of paths) {
     try {
       const form = new FormData()
-      // Use File (not bare Blob) so the multipart part carries BOTH the
-      // filename AND the content-type explicitly. With a plain Blob + filename
-      // arg, some Node/undici versions drop the part's Content-Type → Postiz's
-      // multer sees application/octet-stream → "Unsupported file type" even for
-      // a valid mp4. File makes both unambiguous.
       const FileCtor = globalThis.File
       if (FileCtor) {
         form.append('file', new FileCtor([buffer], name, { type: contentType }))
@@ -209,27 +212,36 @@ async function uploadToPostiz(creds, { buffer, name, contentType }) {
       }
       const res = await fetch(`${url}${path}`, {
         method: 'POST',
-        headers: { 'Authorization': key }, // no Content-Type — let fetch set multipart boundary
+        headers: { 'Authorization': key },
         body: form,
       })
       const text = await res.text()
       let json = null
       try { json = text ? JSON.parse(text) : null } catch {}
       if (!res.ok) {
-        const msg = json?.message || json?.error || text.slice(0, 240) || `HTTP ${res.status}`
+        let msg = json?.message || json?.error
+        if (!msg && text) {
+          if (text.includes('<!DOCTYPE') || text.includes('<html') || text.includes('Cloudflare') || text.includes('502 Bad Gateway')) {
+            msg = `502 Bad Gateway (Cloudflare / Reverse Proxy Error — Postiz instance overloaded/down/upload size limit)`
+          } else {
+            msg = text.slice(0, 240)
+          }
+        }
+        if (!msg) msg = `HTTP ${res.status}`
         const sent = `sent: ${contentType}, "${name}", ${(buffer.length / 1048576).toFixed(1)}MB`
         const err = new Error(`Postiz upload ${res.status} @ ${path}: ${msg} (${sent})`)
         err.status = res.status
-        if (res.status !== 404) throw err
         lastErr = err
-        continue
+        // Try next candidate path if 404 or 5xx server error
+        if (res.status === 404 || res.status >= 500) continue
+        throw err
       }
       const id = json?.id || json?.path || json?.url
       if (!id) throw new Error('Postiz upload response gak include id/path: ' + JSON.stringify(json).slice(0, 200))
       return { id, path: json.path || json.url || null, raw: json }
     } catch (e) {
       lastErr = e
-      if (e.status && e.status !== 404) throw e
+      if (e.status && e.status !== 404 && e.status < 500) throw e
     }
   }
   throw lastErr
@@ -373,12 +385,23 @@ export async function createPostizPost({ creds, channelId, channelLabel, content
     if (!SUPPORTED.has(media.contentType)) {
       throw new Error(`File type "${media.contentType}" gak didukung Postiz/sosmed. Kemungkinan ini WebM dari export "Draft (fast)" — export ulang pakai MP4 (tombol "Export → QC (MP4)") lalu post lagi.`)
     }
-    const uploaded = await uploadToPostiz(creds, media)
-    imageField = [{
-      id: String(uploaded.id),
-      path: uploaded.path || uploaded.raw?.url || '',
-      name: uploaded.raw?.name || media.name,
-    }]
+    try {
+      const uploaded = await uploadToPostiz(creds, media)
+      imageField = [{
+        id: String(uploaded.id),
+        path: uploaded.path || uploaded.raw?.url || '',
+        name: uploaded.raw?.name || media.name,
+      }]
+    } catch (uploadErr) {
+      console.warn('[postiz] Upload endpoint failed, falling back to direct media URL:', uploadErr.message)
+      // Fallback: if /upload fails (e.g. 502 Bad Gateway / Cloudflare proxy body size limit on 15MB+ videos),
+      // pass the public R2 media URL directly to Postiz.
+      imageField = [{
+        url: mediaUrl,
+        path: mediaUrl,
+        name: media.name,
+      }]
+    }
   }
 
   const isScheduled = !!scheduledFor
