@@ -47,7 +47,7 @@ import { LazyVideo } from '@/lib/use-lazy-video'
 const REF_KIND_ORDER = { product: 1, background: 2 }
 const sortRefsCharacterFirst = (refs) => [...refs].sort((a, b) => (REF_KIND_ORDER[a?.kind] || 0) - (REF_KIND_ORDER[b?.kind] || 0))
 
-export default function GenerateClient({ workspaceId, userId, activeBrand, personas: initialPersonas, workspaceRefs: initialRefs, incomingPreset = null, incomingStudioJob = null }) {
+export default function GenerateClient({ workspaceId, userId, activeBrand, personas: initialPersonas, workspaceRefs: initialRefs, incomingPreset = null, incomingStudioJob = null, incomingStudioJobs = [] }) {
   const supabase = createClient()
   // Mirror server-fetched data to local state so realtime can keep it fresh.
   // Without this, mutations made elsewhere (other tab, /qc, /refs, persona
