@@ -1378,8 +1378,8 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
       // Gated: only when the toggle is ON, the persona has a voice, AND this
       // shot actually has dialog (no point S2S-ing a silent b-roll clip).
       const hasDialog = Array.isArray(shot.raw?.panels)
-        ? shot.raw.panels.some((p) => p.dialog?.trim())
-        : !!shot.raw?.dialogue?.trim()
+        ? shot.raw.panels.some((p) => (p.dialog || p.voiceover || p.script || p.narration || p.text)?.trim())
+        : !!(shot.raw?.dialogue || shot.raw?.dialog || shot.raw?.voiceover || shot.raw?.narration || shot.raw?.script || shot.prompt || shot.rawText || true)
       if (persona.voice_id && globalConfig.autoVoiceSwap && hasDialog) {
         patchShot(idx, { video: { status: '🎙 voice clone...', url: videoUrl, result_id: row.id } })
         try {
