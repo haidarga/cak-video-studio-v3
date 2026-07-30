@@ -47,7 +47,7 @@ import { LazyVideo } from '@/lib/use-lazy-video'
 const REF_KIND_ORDER = { product: 1, background: 2 }
 const sortRefsCharacterFirst = (refs) => [...refs].sort((a, b) => (REF_KIND_ORDER[a?.kind] || 0) - (REF_KIND_ORDER[b?.kind] || 0))
 
-export default function GenerateClient({ workspaceId, userId, activeBrand, personas: initialPersonas, workspaceRefs: initialRefs, incomingPreset = null }) {
+export default function GenerateClient({ workspaceId, userId, activeBrand, personas: initialPersonas, workspaceRefs: initialRefs, incomingPreset = null, incomingStudioJob = null }) {
   const supabase = createClient()
   // Mirror server-fetched data to local state so realtime can keep it fresh.
   // Without this, mutations made elsewhere (other tab, /qc, /refs, persona
@@ -160,6 +160,39 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
   // Held in state so the user can dismiss it, and the gen pipeline can read
   // it when building motion prompts.
   const [activePreset, setActivePreset] = useState(incomingPreset)
+  const [studioJob, setStudioJob] = useState(incomingStudioJob)
+
+  // Pre-fill from Studio Job (pushed from Caketing via Inbox)
+  useEffect(() => {
+    if (!incomingStudioJob) return
+    const personaId = incomingStudioJob.persona_mapping?.studio_persona_id
+    if (personaId) {
+      setSelectedIds(new Set([personaId]))
+      const shots = (incomingStudioJob.parsed_shots || []).map((s, idx) => ({
+        id: `s-${idx}`,
+        shot: s.shot || idx + 1,
+        scene_type: s.scene_type || 'default',
+        image_prompt: s.image_prompt || '',
+        video_motion: s.video_motion || '',
+        dialogue: s.dialogue || '',
+        duration: s.duration || 5,
+        chars_in_shot: s.chars_in_shot || [],
+      }))
+      setStateByPersona({
+        [personaId]: {
+          naskah: incomingStudioJob.naskah_text || '',
+          refIds: new Set(),
+          showWorkspaceRefs: false,
+          parsed: incomingStudioJob.parsed_shots ? { shots } : null,
+          busy: false,
+          shots,
+        },
+      })
+    }
+    if (incomingStudioJob.format_meta?.aspect_ratio) {
+      setGlobalConfig((c) => ({ ...c, ar: incomingStudioJob.format_meta.aspect_ratio }))
+    }
+  }, [incomingStudioJob])
 
   function togglePersona(id) {
     setSelectedIds((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -201,26 +234,27 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
         </p>
       </div>
 
-      {/* Cinematic preset banner — appears when user lands here via the
-          "Use →" button in GOD MODE. Preset is auto-applied to every shot's
-          video_motion when the user clicks Parse. Dismissable. */}
-      {activePreset && (
-        <div className="mb-4 p-3 rounded-lg bg-gradient-to-r from-[var(--accent)]/15 via-[var(--accent)]/5 to-transparent border border-[var(--accent)]/40 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2 min-w-0 flex-1">
-            <span className="text-xl flex-shrink-0">🎥</span>
+      {/* Studio Job banner — appears when user opens a job from Studio Inbox */}
+      {studioJob && (
+        <div className="mb-4 p-3 rounded-xl bg-gradient-to-r from-purple-900/30 via-pink-900/20 to-transparent border border-purple-500/40 flex items-center justify-between gap-3 shadow-lg shadow-purple-500/10">
+          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+            <span className="text-xl flex-shrink-0">⚡</span>
             <div className="min-w-0">
-              <div className="text-xs font-bold text-[var(--accent)]">
-                Cinematic preset aktif: {activePreset.label}
+              <div className="text-xs font-extrabold text-purple-300 flex items-center gap-2">
+                <span>From Studio Inbox: {studioJob.title}</span>
+                <span className="text-[10px] font-normal px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                  {studioJob.source}
+                </span>
               </div>
-              <div className="text-[10px] text-[var(--muted)] truncate">
-                {activePreset.desc} — auto-inject ke video_motion saat klik Parse
+              <div className="text-[10px] text-[var(--muted)] truncate mt-0.5">
+                Pre-parsed with {studioJob.parsed_shots?.length || 0} shots · Persona: {studioJob.persona_mapping?.source_persona_name || 'N/A'}
               </div>
             </div>
           </div>
           <button
-            onClick={() => setActivePreset(null)}
+            onClick={() => setStudioJob(null)}
             className="text-[10px] text-[var(--muted)] hover:text-white flex-shrink-0 px-2 py-1 rounded hover:bg-[var(--surface2)]">
-            ✕ Lepas preset
+            ✕ Clear job
           </button>
         </div>
       )}

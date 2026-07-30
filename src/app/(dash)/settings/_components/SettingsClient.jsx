@@ -22,7 +22,54 @@ export default function SettingsClient({ initialStatus, initialBudget }) {
   const [llmCatalog, setLlmCatalog] = useState({})
   const [hasOpenaiKey, setHasOpenaiKey] = useState(false)
   const [openaiKeyInput, setOpenaiKeyInput] = useState('')
-  const [llmDraft, setLlmDraft] = useState({ provider: 'google', model: '' })
+  // External API keys state (for Caketing integration)
+  const [extKeys, setExtKeys] = useState([])
+  const [newKeyLabel, setNewKeyLabel] = useState('')
+  const [createdRawKey, setCreatedRawKey] = useState(null)
+
+  async function loadExtKeys() {
+    try {
+      const r = await fetch('/api/external/keys')
+      const j = await r.json()
+      if (j.ok) setExtKeys(j.keys || [])
+    } catch {}
+  }
+  useEffect(() => { loadExtKeys() }, [])
+
+  async function generateExtKey() {
+    setBusy(true); setMsg(''); setErr('')
+    try {
+      const r = await fetch('/api/external/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: newKeyLabel || 'Caketing Integration' }),
+      })
+      const j = await r.json()
+      if (!j.ok) throw new Error(j.error)
+      setCreatedRawKey(j.key)
+      setNewKeyLabel('')
+      await loadExtKeys()
+      setMsg('API Key generated! Copy key di bawah ini.')
+    } catch (e) { setErr(e.message) }
+    setBusy(false)
+  }
+
+  async function revokeExtKey(keyId) {
+    if (!confirm('Revoke API key ini? Caketing tidak akan bisa push naskah lagi dengan key ini.')) return
+    setBusy(true); setMsg(''); setErr('')
+    try {
+      const r = await fetch('/api/external/keys', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keyId }),
+      })
+      const j = await r.json()
+      if (!j.ok) throw new Error(j.error)
+      await loadExtKeys()
+      setMsg('API key revoked ✓')
+    } catch (e) { setErr(e.message) }
+    setBusy(false)
+  }
 
   async function loadLlm() {
     try {
@@ -480,6 +527,83 @@ export default function SettingsClient({ initialStatus, initialBudget }) {
             </div>
           </>
         )}
+      </section>
+
+      {/* ── EXTERNAL API KEYS — Caketing Tunnel Integration ─────────────── */}
+      <section className="bg-[var(--surface)] border border-[var(--border)] rounded-lg p-5 space-y-4">
+        <div>
+          <div className="text-xs font-semibold mb-1 flex items-center gap-2">
+            🔑 External API Keys <span className="text-[9px] font-normal text-[var(--muted2)]">Caketing → Studio Tunnel</span>
+          </div>
+          <div className="text-[10px] text-[var(--muted2)]">
+            Generate API key untuk di-paste di Caketing Settings. Key ini mengizinkan Caketing nge-push naskah yang approved langsung jadi job di Studio Inbox.
+          </div>
+        </div>
+
+        {/* Newly created key banner */}
+        {createdRawKey && (
+          <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-xs space-y-2">
+            <div className="font-bold text-emerald-400">✅ New API Key Created!</div>
+            <div className="text-[11px] text-[var(--muted)]">Copy key di bawah ini sekarang. Key tidak akan ditampilkan lagi setelah halaman ini direfresh.</div>
+            <div className="flex items-center gap-2">
+              <input readOnly value={createdRawKey} className="flex-1 text-xs px-2.5 py-1.5 rounded bg-black/40 border border-emerald-500/40 font-mono text-emerald-300" />
+              <button onClick={() => navigator.clipboard.writeText(createdRawKey)} className="text-xs px-3 py-1.5 rounded bg-emerald-600 text-white font-bold hover:bg-emerald-500">
+                Copy
+              </button>
+              <button onClick={() => setCreatedRawKey(null)} className="text-xs px-2 py-1.5 text-[var(--muted)] hover:text-white">
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Existing keys list */}
+        <div className="space-y-2">
+          {extKeys.length === 0 ? (
+            <div className="text-xs text-[var(--muted)] py-2">Belum ada API key. Buat key pertama di bawah untuk menghubungkan Caketing.</div>
+          ) : (
+            extKeys.map(k => (
+              <div key={k.id} className="p-3 rounded bg-[var(--surface2)] border border-[var(--border)] flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-bold text-[var(--fg)] flex items-center gap-2">
+                    {k.label}
+                    {k.is_active ? (
+                      <span className="text-[9px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-semibold">Active</span>
+                    ) : (
+                      <span className="text-[9px] px-2 py-0.5 rounded-full bg-red-500/10 text-red-400 border border-red-500/30 font-semibold">Revoked</span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-[var(--muted)] font-mono mt-0.5">
+                    Prefix: <span className="text-[var(--accent)]">{k.key_prefix}...</span> · Created: {new Date(k.created_at).toLocaleDateString('id-ID')}
+                    {k.last_used_at && <> · Last used: {new Date(k.last_used_at).toLocaleDateString('id-ID')}</>}
+                  </div>
+                </div>
+                {k.is_active && (
+                  <button onClick={() => revokeExtKey(k.id)} disabled={busy} className="text-xs px-3 py-1 rounded border border-red-500/30 text-red-400 hover:bg-red-500/10 disabled:opacity-50">
+                    Revoke
+                  </button>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Generate form */}
+        <div className="pt-3 border-t border-[var(--border)] flex items-center gap-2">
+          <input
+            value={newKeyLabel}
+            onChange={e => setNewKeyLabel(e.target.value)}
+            placeholder="Key Label (e.g. Caketing Main)"
+            className="flex-1 text-xs px-3 py-2 rounded bg-[var(--surface2)] border border-[var(--border)]"
+          />
+          <button
+            onClick={generateExtKey}
+            disabled={busy}
+            className="text-xs px-4 py-2 rounded bg-gradient-to-r from-purple-600 to-pink-600 font-bold text-white shadow-md hover:opacity-90 disabled:opacity-50"
+          >
+            + Generate Key
+          </button>
+        </div>
       </section>
     </div>
   )

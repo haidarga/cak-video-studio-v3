@@ -28,6 +28,17 @@ export default async function GeneratePage({ searchParams }) {
   const ws = memberships?.[0]?.workspaces
   if (!ws) return <div className="p-4 text-sm text-[var(--muted)]">No workspace</div>
 
+  let incomingStudioJob = null
+  if (sp?.studio_job) {
+    const { data: job } = await supabase
+      .from('studio_jobs')
+      .select('*')
+      .eq('id', String(sp.studio_job))
+      .eq('workspace_id', ws.id)
+      .maybeSingle()
+    incomingStudioJob = job || null
+  }
+
   // Personas are brand-scoped via personas.brand_id. STRICT filter rule:
   //   - active_brand_id set  -> show ONLY personas with matching brand_id.
   //     Untagged personas (brand_id=null) are HIDDEN from a branded view.
@@ -61,6 +72,7 @@ export default async function GeneratePage({ searchParams }) {
       personas={personas || []}
       workspaceRefs={refs || []}
       incomingPreset={incomingPreset}
+      incomingStudioJob={incomingStudioJob}
     />
   )
 }
