@@ -10,7 +10,7 @@ import { NextResponse } from 'next/server'
 import { validateExternalApiKey, hasPermission } from '@/lib/external-auth'
 import { createAdminClient } from '@/lib/supabase/admin'
 
-const MAX_NASKAH_PER_REQUEST = 50
+const MAX_NASKAH_PER_REQUEST = 100
 const MAX_NASKAH_TEXT_LEN = 10000
 const MAX_TITLE_LEN = 200
 
