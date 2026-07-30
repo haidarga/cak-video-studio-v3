@@ -22,6 +22,7 @@ export default function SettingsClient({ initialStatus, initialBudget }) {
   const [llmCatalog, setLlmCatalog] = useState({})
   const [hasOpenaiKey, setHasOpenaiKey] = useState(false)
   const [openaiKeyInput, setOpenaiKeyInput] = useState('')
+  const [llmDraft, setLlmDraft] = useState({ provider: 'google', model: '' })
   // External API keys state (for Caketing integration)
   const [extKeys, setExtKeys] = useState([])
   const [newKeyLabel, setNewKeyLabel] = useState('')
