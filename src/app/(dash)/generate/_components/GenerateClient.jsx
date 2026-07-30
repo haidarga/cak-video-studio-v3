@@ -161,38 +161,50 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
   // it when building motion prompts.
   const [activePreset, setActivePreset] = useState(incomingPreset)
   const [studioJob, setStudioJob] = useState(incomingStudioJob)
+  const [studioJobs, setStudioJobs] = useState(incomingStudioJobs || (incomingStudioJob ? [incomingStudioJob] : []))
 
-  // Pre-fill from Studio Job (pushed from Caketing via Inbox)
+  // Pre-fill from Studio Job / Batch (pushed from Caketing via Inbox)
   useEffect(() => {
-    if (!incomingStudioJob) return
-    const personaId = incomingStudioJob.persona_mapping?.studio_persona_id
-    if (personaId) {
-      setSelectedIds(new Set([personaId]))
-      const shots = (incomingStudioJob.parsed_shots || []).map((s, idx) => ({
-        id: `s-${idx}`,
-        shot: s.shot || idx + 1,
-        scene_type: s.scene_type || 'default',
-        image_prompt: s.image_prompt || '',
-        video_motion: s.video_motion || '',
-        dialogue: s.dialogue || '',
-        duration: s.duration || 5,
-        chars_in_shot: s.chars_in_shot || [],
-      }))
-      setStateByPersona({
-        [personaId]: {
-          naskah: incomingStudioJob.naskah_text || '',
+    const jobList = incomingStudioJobs?.length > 0 ? incomingStudioJobs : (incomingStudioJob ? [incomingStudioJob] : [])
+    if (jobList.length === 0) return
+
+    const newSelectedIds = new Set()
+    const newStateByPersona = {}
+
+    for (const j of jobList) {
+      const personaId = j.persona_mapping?.studio_persona_id
+      if (personaId) {
+        newSelectedIds.add(personaId)
+        const shots = (j.parsed_shots || []).map((s, idx) => ({
+          id: `s-${idx}`,
+          shot: s.shot || idx + 1,
+          scene_type: s.scene_type || 'default',
+          image_prompt: s.image_prompt || '',
+          video_motion: s.video_motion || '',
+          dialogue: s.dialogue || '',
+          duration: s.duration || 5,
+          chars_in_shot: s.chars_in_shot || [],
+        }))
+        newStateByPersona[personaId] = {
+          naskah: j.naskah_text || '',
           refIds: new Set(),
           showWorkspaceRefs: false,
-          parsed: incomingStudioJob.parsed_shots ? { shots } : null,
+          parsed: j.parsed_shots ? { shots } : null,
           busy: false,
           shots,
-        },
-      })
+        }
+      }
     }
-    if (incomingStudioJob.format_meta?.aspect_ratio) {
-      setGlobalConfig((c) => ({ ...c, ar: incomingStudioJob.format_meta.aspect_ratio }))
+
+    if (newSelectedIds.size > 0) {
+      setSelectedIds(newSelectedIds)
+      setStateByPersona((st) => ({ ...st, ...newStateByPersona }))
     }
-  }, [incomingStudioJob])
+
+    if (jobList[0]?.format_meta?.aspect_ratio) {
+      setGlobalConfig((c) => ({ ...c, ar: jobList[0].format_meta.aspect_ratio }))
+    }
+  }, [incomingStudioJob, incomingStudioJobs])
 
   function togglePersona(id) {
     setSelectedIds((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })

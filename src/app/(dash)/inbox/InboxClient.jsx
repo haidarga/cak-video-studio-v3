@@ -55,7 +55,7 @@ function ShotPreview({ shots }) {
   )
 }
 
-function JobCard({ job, personaMap, expanded, onToggle }) {
+function JobCard({ job, personaMap, expanded, onToggle, onDelete }) {
   const persona = job.persona_mapping || {}
   const studioPersonaName = persona.studio_persona_id
     ? personaMap[persona.studio_persona_id] || 'Unknown'
@@ -72,57 +72,61 @@ function JobCard({ job, personaMap, expanded, onToggle }) {
   const isActionable = ['pending', 'parsed'].includes(job.status)
 
   return (
-    <div className="glass rounded-2xl border border-[var(--border)] overflow-hidden transition-all hover:border-[var(--accent)]/40 hover:shadow-lg hover:shadow-[var(--accent-glow)]">
+    <div className="glass rounded-xl border border-[var(--border)] overflow-hidden transition-all hover:border-[var(--accent)]/40">
       {/* Card header */}
-      <button
-        onClick={onToggle}
-        className="w-full text-left px-5 py-4 flex items-start gap-4 transition-colors hover:bg-[var(--glass-hover)]"
-      >
-        {/* Left: persona avatar placeholder */}
-        <div className="flex-shrink-0 w-12 h-12 rounded-xl bg-gradient-to-br from-[var(--purple)] to-[var(--magenta)] flex items-center justify-center text-white text-lg font-bold shadow-md shadow-[var(--accent-glow)]">
-          {sourcePersonaName.charAt(0).toUpperCase()}
-        </div>
+      <div className="w-full text-left px-4 py-3 flex items-start gap-3 transition-colors hover:bg-[var(--glass-hover)]">
+        <button onClick={onToggle} className="flex-1 min-w-0 text-left flex items-start gap-3 cursor-pointer">
+          <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-gradient-to-br from-purple-600 to-pink-600 flex items-center justify-center text-white text-sm font-bold shadow-sm">
+            {sourcePersonaName.charAt(0).toUpperCase()}
+          </div>
 
-        {/* Middle: info */}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-0.5">
-            <span className="text-sm font-bold text-[var(--fg)] truncate">🎬 {job.title}</span>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-0.5">
+              <span className="text-xs font-bold text-[var(--fg)] truncate">🎬 {job.title}</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-[var(--muted)]">
+              <span>Source: <span className="text-[var(--fg)] font-semibold capitalize">{job.source}</span>
+                {job.brand_name && <> · <span className="text-[var(--accent)]">{job.brand_name}</span></>}
+              </span>
+              <span>Shots: <span className="font-mono text-[var(--fg)]">{shotCount}</span> · ~{duration}s · {ar} · {platform}</span>
+            </div>
+            <div className="flex items-center gap-1.5 mt-0.5 text-[11px]">
+              <span className="text-[var(--muted)]">Persona:</span>
+              <span className="font-semibold text-[var(--fg)]">{sourcePersonaName}</span>
+              <span className="text-[var(--muted)]">→</span>
+              {matchType === 'auto' ? (
+                <span className="text-emerald-400 font-semibold">{studioPersonaName} ✅</span>
+              ) : (
+                <span className="text-amber-400 font-semibold">⚠️ Unmapped</span>
+              )}
+            </div>
           </div>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--muted)]">
-            <span>Source: <span className="text-[var(--fg)] font-semibold capitalize">{job.source}</span>
-              {job.brand_name && <> · <span className="text-[var(--accent)]">{job.brand_name}</span></>}
-            </span>
-            <span>Shots: <span className="font-mono text-[var(--fg)]">{shotCount}</span> · ~{duration}s · {ar} · {platform}</span>
-          </div>
-          <div className="flex items-center gap-1.5 mt-1 text-[11px]">
-            <span className="text-[var(--muted)]">Persona:</span>
-            <span className="font-semibold text-[var(--fg)]">{sourcePersonaName}</span>
-            <span className="text-[var(--muted)]">→</span>
-            {matchType === 'auto' ? (
-              <span className="text-emerald-400 font-semibold">{studioPersonaName} ✅</span>
-            ) : (
-              <span className="text-amber-400 font-semibold">⚠️ Unmapped</span>
-            )}
-          </div>
-        </div>
+        </button>
 
-        {/* Right: status + time */}
         <div className="flex flex-col items-end gap-1">
           <StatusBadge status={job.status} />
-          <span className="text-[10px] text-[var(--muted)]">
-            {new Date(job.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })}
-          </span>
+          <div className="flex items-center gap-2 mt-1">
+            <span className="text-[10px] text-[var(--muted)]">
+              {new Date(job.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })}
+            </span>
+            <button
+              onClick={(e) => { e.stopPropagation(); onDelete(job.id) }}
+              title="Delete this naskah"
+              className="text-[11px] text-[var(--muted)] hover:text-red-400 transition-colors p-1 cursor-pointer"
+            >
+              🗑 Hapus
+            </button>
+          </div>
         </div>
-      </button>
+      </div>
 
       {/* Expanded: preview + actions */}
       {expanded && (
-        <div className="border-t border-[var(--border)] bg-[rgba(0,0,0,0.15)] px-5 py-4">
-          {/* Brief context */}
+        <div className="border-t border-[var(--border)] bg-[rgba(0,0,0,0.15)] px-4 py-3 space-y-3">
           {Object.keys(job.brief_context || {}).length > 0 && (
-            <div className="mb-3">
+            <div>
               <div className="text-[10px] uppercase tracking-wider text-[var(--muted)] font-bold mb-1">Brief Context</div>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-1.5">
                 {Object.entries(job.brief_context).map(([k, v]) => (
                   <span key={k} className="text-[11px] text-[var(--fg)] bg-[var(--glass)] px-2 py-0.5 rounded-md border border-[var(--border)]">
                     <span className="text-[var(--muted)]">{k}:</span> {String(v).slice(0, 80)}
@@ -132,17 +136,15 @@ function JobCard({ job, personaMap, expanded, onToggle }) {
             </div>
           )}
 
-          {/* Naskah text preview */}
-          <div className="mb-3">
+          <div>
             <div className="text-[10px] uppercase tracking-wider text-[var(--muted)] font-bold mb-1">Naskah</div>
             <div className="glass rounded-xl p-3 max-h-40 overflow-y-auto text-xs text-[var(--fg)] whitespace-pre-wrap leading-relaxed border border-[var(--border)]">
               {job.naskah_text}
             </div>
           </div>
 
-          {/* Parsed shots */}
           {shotCount > 0 && (
-            <div className="mb-4">
+            <div>
               <div className="text-[10px] uppercase tracking-wider text-[var(--muted)] font-bold mb-1">
                 Parsed Shots ({shotCount})
               </div>
@@ -150,19 +152,17 @@ function JobCard({ job, personaMap, expanded, onToggle }) {
             </div>
           )}
 
-          {/* Error message */}
           {job.error && (
-            <div className="mb-3 p-2 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-400">
+            <div className="p-2 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-400">
               {job.error}
             </div>
           )}
 
-          {/* Actions */}
-          <div className="flex items-center gap-2.5 mt-1">
+          <div className="flex items-center gap-2 pt-1">
             {isActionable && persona.studio_persona_id && (
               <Link
                 href={`/generate?studio_job=${job.id}`}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-[var(--purple)] to-[var(--magenta)] px-4 py-2 text-xs font-bold text-white shadow-md shadow-[var(--accent-glow)] hover:scale-[1.03] transition-transform"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-md hover:scale-[1.02] transition-transform"
               >
                 🚀 Open in Generate
               </Link>
@@ -175,18 +175,10 @@ function JobCard({ job, personaMap, expanded, onToggle }) {
             {job.status === 'done' && job.result_ids?.length > 0 && (
               <Link
                 href="/results"
-                className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--glass)] border border-[var(--border)] px-4 py-2 text-xs font-semibold text-[var(--fg)] hover:bg-[var(--glass-hover)] transition-colors"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--glass)] border border-[var(--border)] px-3.5 py-1.5 text-xs font-semibold text-[var(--fg)] hover:bg-[var(--glass-hover)] transition-colors"
               >
                 📁 View Results ({job.result_ids.length})
               </Link>
-            )}
-            {isActionable && (
-              <button
-                onClick={() => {/* TODO: dismiss/cancel job */}}
-                className="text-xs text-[var(--muted)] hover:text-red-400 transition-colors ml-auto"
-              >
-                ✕ Dismiss
-              </button>
             )}
           </div>
         </div>
@@ -195,9 +187,98 @@ function JobCard({ job, personaMap, expanded, onToggle }) {
   )
 }
 
+function BatchCard({ batch, personaMap, onDeleteBatch, onDeleteJob }) {
+  const [expanded, setExpanded] = useState(false)
+  const [expandedJobId, setExpandedJobId] = useState(null)
+
+  const { batchId, title, jobs } = batch
+  const jobCount = jobs.length
+  const personas = [...new Set(jobs.map(j => j.persona_mapping?.source_persona_name || 'Subject'))]
+  const pendingJobs = jobs.filter(j => ['pending', 'parsed'].includes(j.status))
+  const doneJobs = jobs.filter(j => j.status === 'done')
+  const totalShots = jobs.reduce((acc, j) => acc + (j.parsed_shots?.length || 0), 0)
+
+  const isBatchActionable = pendingJobs.length > 0
+  const allJobIdsParam = jobs.map(j => j.id).join(',')
+
+  return (
+    <div className="glass rounded-2xl border border-purple-500/30 overflow-hidden shadow-lg shadow-purple-500/5 transition-all hover:border-purple-500/60">
+      {/* Batch Header */}
+      <div className="px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-gradient-to-r from-purple-900/20 via-background to-pink-900/10 border-b border-[var(--border)]">
+        <div className="flex items-start gap-3">
+          <div className="flex-shrink-0 w-12 h-12 rounded-xl bg-gradient-to-br from-purple-600 to-pink-600 flex items-center justify-center text-white text-xl font-extrabold shadow-md shadow-purple-500/20">
+            📦
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-base font-extrabold text-[var(--fg)]">{title}</h3>
+              <span className="rounded-full bg-purple-500/20 border border-purple-500/40 px-2.5 py-0.5 text-[11px] font-bold text-purple-300">
+                {jobCount} Naskah
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--muted)] mt-1">
+              <span>🎯 Personas: <strong className="text-purple-300">{personas.join(', ')}</strong></span>
+              <span>·</span>
+              <span>🎬 {totalShots} Shots Total</span>
+              {pendingJobs.length > 0 && (
+                <>
+                  <span>·</span>
+                  <span className="text-amber-400 font-semibold">⏳ {pendingJobs.length} Pending</span>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Batch Action Buttons */}
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className="px-3 py-1.5 rounded-xl border border-[var(--border)] bg-[var(--glass)] text-xs font-semibold text-[var(--fg)] hover:bg-[var(--glass-hover)] transition-colors cursor-pointer"
+          >
+            {expanded ? '▲ Sembunyikan' : `👁 Lihat (${jobCount})`}
+          </button>
+
+          {isBatchActionable && (
+            <Link
+              href={`/generate?studio_job=${allJobIdsParam}`}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 px-4 py-1.5 text-xs font-bold text-white shadow-md shadow-purple-500/30 hover:scale-[1.02] transition-transform"
+            >
+              🚀 Eksekusi All Batch
+            </Link>
+          )}
+
+          <button
+            onClick={() => onDeleteBatch(batchId, title)}
+            className="px-2.5 py-1.5 rounded-xl border border-red-500/30 bg-red-500/10 text-xs font-semibold text-red-400 hover:bg-red-500/20 transition-colors cursor-pointer"
+            title="Hapus seluruh batch ini"
+          >
+            🗑 Hapus Batch
+          </button>
+        </div>
+      </div>
+
+      {/* Expanded Jobs List */}
+      {expanded && (
+        <div className="p-4 space-y-3 bg-[rgba(0,0,0,0.2)]">
+          {jobs.map(job => (
+            <JobCard
+              key={job.id}
+              job={job}
+              personaMap={personaMap}
+              expanded={expandedJobId === job.id}
+              onToggle={() => setExpandedJobId(expandedJobId === job.id ? null : job.id)}
+              onDelete={onDeleteJob}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function InboxClient({ jobs: initialJobs, personaMap, workspaceId }) {
   const [jobs, setJobs] = useState(initialJobs)
-  const [expandedId, setExpandedId] = useState(null)
   const [filter, setFilter] = useState('all') // 'all' | 'pending' | 'done'
 
   // Subscribe to realtime updates on studio_jobs
@@ -228,6 +309,40 @@ export default function InboxClient({ jobs: initialJobs, personaMap, workspaceId
     return () => { supabase.removeChannel(channel) }
   }, [workspaceId])
 
+  async function handleDeleteJob(jobId) {
+    if (!window.confirm('Yakin mau hapus naskah ini dari Inbox?')) return
+    try {
+      const res = await fetch('/api/studio-jobs', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: jobId }),
+      })
+      const data = await res.json()
+      if (data.ok) {
+        setJobs(prev => prev.filter(j => j.id !== jobId))
+      }
+    } catch {
+      alert('Gagal menghapus job')
+    }
+  }
+
+  async function handleDeleteBatch(batchId, title) {
+    if (!window.confirm(`Yakin mau hapus seluruh batch "${title}" dari Inbox?`)) return
+    try {
+      const res = await fetch('/api/studio-jobs', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ batch_id: batchId }),
+      })
+      const data = await res.json()
+      if (data.ok) {
+        setJobs(prev => prev.filter(j => (j.source_ref?.push_batch_id || j.source_ref?.batch_id) !== batchId))
+      }
+    } catch {
+      alert('Gagal menghapus batch')
+    }
+  }
+
   const filteredJobs = filter === 'all'
     ? jobs
     : jobs.filter(j =>
@@ -239,6 +354,24 @@ export default function InboxClient({ jobs: initialJobs, personaMap, workspaceId
   const pendingCount = jobs.filter(j => ['pending', 'parsed'].includes(j.status)).length
   const doneCount = jobs.filter(j => j.status === 'done').length
 
+  // Group filteredJobs into Batches
+  const batchesMap = new Map()
+  for (const job of filteredJobs) {
+    const batchId = job.source_ref?.push_batch_id || job.source_ref?.batch_id || `single_${job.id}`
+    const batchTitle = job.source_ref?.push_batch_title || job.title?.split('·')[0]?.trim() || 'Custom Batch'
+
+    if (!batchesMap.has(batchId)) {
+      batchesMap.set(batchId, {
+        batchId,
+        title: batchTitle,
+        jobs: [],
+      })
+    }
+    batchesMap.get(batchId).jobs.push(job)
+  }
+
+  const batchList = Array.from(batchesMap.values())
+
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       {/* Header */}
@@ -247,13 +380,13 @@ export default function InboxClient({ jobs: initialJobs, personaMap, workspaceId
           <h1 className="text-xl font-extrabold tracking-tight text-[var(--fg)] flex items-center gap-2">
             📥 Studio Inbox
             {pendingCount > 0 && (
-              <span className="inline-flex items-center justify-center rounded-full bg-amber-500/20 border border-amber-500/30 px-2 py-0.5 text-xs font-bold text-amber-400 tabular-nums">
+              <span className="inline-flex items-center justify-center rounded-full bg-amber-500/20 border border-amber-500/30 px-2.5 py-0.5 text-xs font-bold text-amber-400 tabular-nums">
                 {pendingCount} pending
               </span>
             )}
           </h1>
           <p className="text-xs text-[var(--muted)] mt-0.5">
-            Naskah pushed from Caketing — ready for video production
+            Naskah pushed from Caketing — grouped by push batch & ready for production
           </p>
         </div>
         {/* Filters */}
@@ -266,7 +399,7 @@ export default function InboxClient({ jobs: initialJobs, personaMap, workspaceId
             <button
               key={f.key}
               onClick={() => setFilter(f.key)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                 filter === f.key
                   ? 'bg-[var(--accent)] text-white shadow-md shadow-[var(--accent-glow)]'
                   : 'glass text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--glass-hover)]'
@@ -284,20 +417,20 @@ export default function InboxClient({ jobs: initialJobs, personaMap, workspaceId
           <div className="text-4xl mb-3">📥</div>
           <h3 className="text-sm font-bold text-[var(--fg)] mb-1">No jobs yet</h3>
           <p className="text-xs text-[var(--muted)] max-w-xs">
-            Push approved naskah from Caketing to see them here. Each naskah becomes a production job you can open in Generate.
+            Push approved naskah from Caketing to see them here. Each push creates a grouped Batch ready for generation.
           </p>
         </div>
       )}
 
-      {/* Job cards */}
-      <div className="space-y-3">
-        {filteredJobs.map(job => (
-          <JobCard
-            key={job.id}
-            job={job}
+      {/* Batch Cards */}
+      <div className="space-y-4">
+        {batchList.map(batch => (
+          <BatchCard
+            key={batch.batchId}
+            batch={batch}
             personaMap={personaMap}
-            expanded={expandedId === job.id}
-            onToggle={() => setExpandedId(expandedId === job.id ? null : job.id)}
+            onDeleteBatch={handleDeleteBatch}
+            onDeleteJob={handleDeleteJob}
           />
         ))}
       </div>

@@ -2,22 +2,12 @@ import { createClient } from '@/lib/supabase/server'
 import GenerateClient from './_components/GenerateClient'
 import { getPresetById } from '@/lib/cinematic-presets'
 
-// Force dynamic rendering on every request. Was `revalidate = 30` ISR
-// before, which cached the persona/refs/brand list for 30s after each
-// fetch. When the user switched brands via ActiveBrandWidget, the
-// router.refresh() call hit the cached HTML and served stale data until
-// the 30s window expired — user reported "musti direfresh dulu baru
-// bisa". For brand-scoped content the ISR cache costs more than it saves.
 export const dynamic = 'force-dynamic'
 
 export default async function GeneratePage({ searchParams }) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
-  // Optional ?preset=<id> handoff from God Mode. The chatroom surfaces a
-  // cinematic preset and the "Use →" button deep-links here with the preset
-  // id; we resolve it server-side so the client receives a ready-to-apply
-  // preset object (label + prompt) instead of having to import the library.
   const sp = await searchParams
   const incomingPreset = sp?.preset ? getPresetById(String(sp.preset)) : null
 
@@ -29,26 +19,22 @@ export default async function GeneratePage({ searchParams }) {
   if (!ws) return <div className="p-4 text-sm text-[var(--muted)]">No workspace</div>
 
   let incomingStudioJob = null
+  let incomingStudioJobs = []
+
   if (sp?.studio_job) {
-    const { data: job } = await supabase
-      .from('studio_jobs')
-      .select('*')
-      .eq('id', String(sp.studio_job))
-      .eq('workspace_id', ws.id)
-      .maybeSingle()
-    incomingStudioJob = job || null
+    const rawIds = String(sp.studio_job).split(',').filter(Boolean)
+    if (rawIds.length > 0) {
+      const { data: jobs } = await supabase
+        .from('studio_jobs')
+        .select('*')
+        .in('id', rawIds)
+        .eq('workspace_id', ws.id)
+
+      incomingStudioJobs = jobs || []
+      incomingStudioJob = jobs?.[0] || null
+    }
   }
 
-  // Personas are brand-scoped via personas.brand_id. STRICT filter rule:
-  //   - active_brand_id set  -> show ONLY personas with matching brand_id.
-  //     Untagged personas (brand_id=null) are HIDDEN from a branded view.
-  //   - no active brand      -> show all personas (workspace-wide view).
-  // User expectation: "brand = folder". Switching brand means switching
-  // folder; personas in other folders shouldn't leak through. Untagged
-  // personas show up in "Tanpa brand" mode where the user can manage +
-  // assign them to a specific brand.
-  // Refs stay workspace-wide (refs.brand_id doesn't exist in schema —
-  // refs are intentionally shared across brands).
   const personasQuery = supabase
     .from('personas')
     .select('id, name, username, avatar_url, role_label, postiz_channel_id, voice_id, voice_name, brand_id, persona_refs(refs(id, fal_url, label, knowledge, kind))')
@@ -73,6 +59,7 @@ export default async function GeneratePage({ searchParams }) {
       workspaceRefs={refs || []}
       incomingPreset={incomingPreset}
       incomingStudioJob={incomingStudioJob}
+      incomingStudioJobs={incomingStudioJobs}
     />
   )
 }
