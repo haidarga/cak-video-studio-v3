@@ -249,7 +249,7 @@ function BatchCard({ batch, personaMap, onDeleteBatch, onDeleteJob }) {
           )}
 
           <button
-            onClick={() => onDeleteBatch(batchId, title)}
+            onClick={() => onDeleteBatch(batch)}
             className="px-2.5 py-1.5 rounded-xl border border-red-500/30 bg-red-500/10 text-xs font-semibold text-red-400 hover:bg-red-500/20 transition-colors cursor-pointer"
             title="Hapus seluruh batch ini"
           >
@@ -326,17 +326,19 @@ export default function InboxClient({ jobs: initialJobs, personaMap, workspaceId
     }
   }
 
-  async function handleDeleteBatch(batchId, title) {
-    if (!window.confirm(`Yakin mau hapus seluruh batch "${title}" dari Inbox?`)) return
+  async function handleDeleteBatch(batchObj) {
+    const { title, jobs: batchJobs } = batchObj
+    if (!window.confirm(`Yakin mau hapus batch "${title}" (${batchJobs.length} naskah) dari Inbox?`)) return
+    const jobIds = batchJobs.map(j => j.id)
     try {
       const res = await fetch('/api/studio-jobs', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ batch_id: batchId }),
+        body: JSON.stringify({ job_ids: jobIds }),
       })
       const data = await res.json()
       if (data.ok) {
-        setJobs(prev => prev.filter(j => (j.source_ref?.push_batch_id || j.source_ref?.batch_id) !== batchId))
+        setJobs(prev => prev.filter(j => !jobIds.includes(j.id)))
       }
     } catch {
       alert('Gagal menghapus batch')
@@ -354,16 +356,21 @@ export default function InboxClient({ jobs: initialJobs, personaMap, workspaceId
   const pendingCount = jobs.filter(j => ['pending', 'parsed'].includes(j.status)).length
   const doneCount = jobs.filter(j => j.status === 'done').length
 
-  // Group filteredJobs into Batches
+  // Group filteredJobs into Batches (PER-DAY / PER-SERIES so NO duplicate personas in the same batch!)
   const batchesMap = new Map()
   for (const job of filteredJobs) {
-    const batchId = job.source_ref?.push_batch_id || job.source_ref?.batch_id || `single_${job.id}`
-    const batchTitle = job.source_ref?.push_batch_title || job.title?.split('·')[0]?.trim() || 'Custom Batch'
+    const dayMatch = job.title?.match(/Hari \d+(?:\/\d+)?/i)?.[0] || (job.source_ref?.day_no ? `Hari ${job.source_ref.day_no}` : '')
+    const topicTitle = job.source_ref?.push_batch_title?.split('·')[0]?.trim() || job.title?.split('·')[0]?.trim() || 'Content Plan'
+    const fullBatchTitle = dayMatch ? `${topicTitle} · ${dayMatch}` : (job.source_ref?.push_batch_title || topicTitle)
+
+    const rawBatchId = job.source_ref?.push_batch_id || job.source_ref?.batch_id || `single_${job.id}`
+    const dayKey = dayMatch ? dayMatch.toLowerCase().replace(/[^a-z0-9]/g, '_') : 'all'
+    const batchId = `${rawBatchId}_${dayKey}`
 
     if (!batchesMap.has(batchId)) {
       batchesMap.set(batchId, {
         batchId,
-        title: batchTitle,
+        title: fullBatchTitle,
         jobs: [],
       })
     }
