@@ -101,7 +101,7 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
   const [uiMode] = useUiMode()
   const [globalConfig, setGlobalConfig] = useState({
     mode: 'shots', ar: '9:16', lang: 'Indonesian',
-    imgModel: IMAGE_MODELS[0].v, vidModel: VIDEO_MODELS[0].v,
+    imgModel: 'openai/gpt-image-2/edit', vidModel: VIDEO_MODELS[0].v,
     style: 'ugc',                       // @deprecated — kept for back-compat, mapped to camera in compiler
     cameraPreset: DEFAULT_CAMERA,       // NEW — drives Visual Compiler L1
     // Output constraints — toggles per gen session.
@@ -530,6 +530,7 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
           key={persona.id}
           persona={persona}
           workspaceRefs={workspaceRefs}
+          autoStartImages={incomingStudioJobs?.length > 0}
           // Lift newly-uploaded refs into workspaceRefs state so the
           // selectedRefs useMemo inside PersonaSection can resolve their id
           // through the personaOwnRefs+workspaceRefs lookup. Without this,
@@ -608,9 +609,25 @@ function friendlyFalError(raw) {
   return s
 }
 
-function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs = [], state, onPatch, globalConfig: rawGlobalConfig, perPersonaMode = false, userCameraPresets = [], activeBrand, activePreset = null, workspaceId, userId, onErr, supabase }) {
+function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs = [], state, onPatch, globalConfig: rawGlobalConfig, perPersonaMode = false, userCameraPresets = [], activeBrand, activePreset = null, workspaceId, userId, onErr, supabase, autoStartImages = false }) {
   const personaOwnRefs = (persona.persona_refs || []).map((pr) => pr.refs).filter(Boolean)
   const [cfgOpen, setCfgOpen] = useState(false)
+
+  // Auto-generate images for Studio Jobs
+  const autoGenRef = useRef(false)
+  useEffect(() => {
+    if (autoStartImages && state.shots?.length > 0 && !autoGenRef.current) {
+      const hasIdle = state.shots.some(s => s.image?.status === 'idle')
+      if (hasIdle) {
+        autoGenRef.current = true
+        state.shots.forEach((shot, idx) => {
+          if (shot.image?.status === 'idle') {
+            setTimeout(() => genImageForShot(idx), idx * 600)
+          }
+        })
+      }
+    }
+  }, [autoStartImages, state.shots])
 
   // Per-persona config ("variant generation"). When perPersonaMode is ON and
   // this persona has an override, the EFFECTIVE config = global defaults merged

@@ -1,48 +1,86 @@
 # CAK Video Studio v3
 
 Multi-user, real-time AI video production platform for creator teams.
-**Frontend on Vercel** (this repo) + **worker on HF Space** (legacy v2 repo, render/ffmpeg).
+Ini adalah bagian "Studio" dari ekosistem CAK AI, yang berfungsi sebagai tempat eksekusi visual (Image & Video Generation) dari naskah-naskah yang sudah dibuat oleh Caketing (AI Copywriter).
 
-## Status
-Foundation only. Auth + DB schema + dashboard shell.
-Feature migration from v2 happens in follow-up commits.
+## 🚀 Overview & End-to-End Pipeline
 
-## Stack
-- Next.js 14 (App Router, JavaScript) + Tailwind
-- Supabase (Postgres + Auth + Realtime + RLS)
-- Heavy compute (Remotion render, ffmpeg) → kept on HF Space worker
+1. **Caketing (The Brain & Copywriter)**: 
+   - Caketing bikin Brief, Persona, dan Naskah (berupa script teks dan shot breakdown).
+   - Setelah naskah di-approve di Caketing, tim klik **Push to Studio**.
+   - Naskah ini akan dikirim via API `/api/external/ingest` ke CAK Video Studio dan masuk ke **Studio Inbox**.
 
-## Setup
+2. **Studio Inbox (The Queue)**:
+   - Di Inbox, naskah dikelompokkan ke dalam **Batch** berdasarkan topik/brief dari Caketing (sesuai `push_batch_id`).
+   - Tim QC bisa klik **🚀 Eksekusi All Batch** untuk memproses satu topik sekaligus.
 
-### 1. Apply DB schema
-1. Open your Supabase project → **SQL Editor** → New query
-2. Paste **`supabase/migrations/0001_init.sql`** → Run
-3. Verify: Table Editor should show `workspaces`, `personas`, `refs`, `brands`, `results`, `jobs`, `scheduled_posts`, etc.
+3. **Auto-Generation Pipeline (The Magic)**:
+   - Begitu klik Eksekusi All Batch, halaman `/generate` akan terbuka.
+   - Sistem **secara otomatis** akan menarik prompt gambar dari setiap shot naskah.
+   - Sistem akan langsung menjalankan **Auto-Generate Image** menggunakan model default (**GPT Image 2 Edit**) untuk SEMUA shot di batch tersebut.
+   - Tim tinggal menunggu loading (staggered delay) dan gambar-gambar akan muncul satu persatu.
+   - Tim bisa mereview gambar, dan kalau ada yang kurang pas, bisa klik *Regenerate* manual.
 
-### 2. Local dev
+4. **Video Generation & QC (Final Polish)**:
+   - Setelah semua image oke, tim bisa meng-generate Video (menggunakan model video seperti Luma, Kling, atau Seedance).
+   - Video yang sudah jadi bisa langsung di-publish via Postiz, atau masuk ke tahap Editor (timeline rendering).
+
+---
+
+## 🏗️ Architecture & Logic
+
+Aplikasi ini menggunakan **Next.js 14 App Router** dan **Supabase**.
+
+- **`/app/(dash)/inbox/InboxClient.jsx`**:
+  - Mengambil data job naskah yang belum diproses.
+  - Melakukan *Grouping Batch* berdasarkan `push_batch_id` yang dikirim Caketing (tidak lagi di-split per hari).
+  
+- **`/app/(dash)/generate/_components/GenerateClient.jsx`**:
+  - State manager utama untuk editor shot per shot.
+  - Membaca `incomingStudioJobs` dan menyebarkan prop `autoStartImages` ke komponen-komponen anaknya.
+  
+- **`PersonaSection` (di dalam `GenerateClient.jsx`)**:
+  - Komponen per-persona yang menampung shots.
+  - Punya `useEffect` yang jika `autoStartImages = true`, akan melooping semua `idle` shots dan menjalankan `setTimeout(() => genImageForShot(idx), delay)` untuk menghindari rate limit API saat batch besar.
+  
+- **`fal-client.js`**:
+  - Client side proxy yang membungkus pemanggilan ke model AI via layanan FAL.
+  - Mendukung metode synchronous (untuk model cepat) dan asynchronous webhook + realtime Supabase (untuk model video atau GPT Image 2 yang butuh waktu lama).
+
+---
+
+## 🤖 Agents & AI Models
+
+Di CAK Video Studio, agennya adalah kumpulan model AI yang digunakan untuk rendering:
+
+1. **Image Models (Default: `gpt-image-2/edit`)**:
+   - `openai/gpt-image-2/edit`: Model utama untuk generasi gambar yang ngunci (pixel-lock) reference wajah/produk, sangat bagus untuk menjaga konsistensi identitas.
+   - `fal-ai/nano-banana-2/edit`: Model alternatif untuk multi-reference.
+   - `xai/grok-imagine-image/edit`: Model Grok untuk variasi estetik.
+
+2. **Video Models**:
+   - Berbagai model untuk animate image to video seperti Kling v3, Seedance, Gemini Omni Flash, Luma, dll.
+   - *Video Edit Models* (seperti Grok Edit Video) untuk modifikasi pasca render.
+
+---
+
+## Setup & Deployment
+
+### 1. Database Schema
+1. Open Supabase project → SQL Editor.
+2. Paste `supabase/migrations/0001_init.sql` & Run.
+
+### 2. Local Dev
 ```bash
 cp .env.example .env.local
 # Fill in NEXT_PUBLIC_SUPABASE_URL + NEXT_PUBLIC_SUPABASE_ANON_KEY
 npm install
 npm run dev
 ```
-Open <http://localhost:3000> → sign up → dashboard.
 
-### 3. Deploy to Vercel
-1. **Import** this repo on vercel.com
-2. **Environment Variables** (Production + Preview):
-   - `NEXT_PUBLIC_SUPABASE_URL`
-   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-   - `SUPABASE_SERVICE_ROLE_KEY` *(server-only, NEVER expose)*
-   - `POSTIZ_API_URL`, `POSTIZ_API_KEY`
-   - `FAL_KEY`, `GEMINI_KEY`
-   - `WORKER_URL` (HF Space URL)
-3. Deploy.
-
-## Roadmap
-1. ✅ Foundation: Auth, schema, dashboard shell
-2. Brands CRUD (next)
-3. Refs + per-product knowledge
-4. Personas (channel + voice + refs binding)
-5. Generate pipeline → push job to worker (HF Space)
-6. Realtime QC kanban + Postiz post-now / schedule
+### 3. Vercel Environment Variables
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY` *(server-only)*
+- `POSTIZ_API_URL`, `POSTIZ_API_KEY`
+- `FAL_KEY`, `GEMINI_KEY`

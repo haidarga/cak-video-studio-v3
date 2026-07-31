@@ -356,16 +356,14 @@ export default function InboxClient({ jobs: initialJobs, personaMap, workspaceId
   const pendingCount = jobs.filter(j => ['pending', 'parsed'].includes(j.status)).length
   const doneCount = jobs.filter(j => j.status === 'done').length
 
-  // Group filteredJobs into Batches (PER-DAY / PER-SERIES so NO duplicate personas in the same batch!)
+  // Group filteredJobs into Batches (Group purely by push_batch_id from Caketing so they don't split)
   const batchesMap = new Map()
   for (const job of filteredJobs) {
-    const dayMatch = job.title?.match(/Hari \d+(?:\/\d+)?/i)?.[0] || (job.source_ref?.day_no ? `Hari ${job.source_ref.day_no}` : '')
-    const topicTitle = job.source_ref?.push_batch_title?.split('·')[0]?.trim() || job.title?.split('·')[0]?.trim() || 'Content Plan'
-    const fullBatchTitle = dayMatch ? `${topicTitle} · ${dayMatch}` : (job.source_ref?.push_batch_title || topicTitle)
+    const topicTitle = job.source_ref?.push_batch_title?.trim() || job.title?.split('·')[0]?.trim() || 'Content Plan'
+    const fullBatchTitle = job.source_ref?.push_batch_title || topicTitle
 
     const rawBatchId = job.source_ref?.push_batch_id || job.source_ref?.batch_id || `single_${job.id}`
-    const dayKey = dayMatch ? dayMatch.toLowerCase().replace(/[^a-z0-9]/g, '_') : 'all'
-    const batchId = `${rawBatchId}_${dayKey}`
+    const batchId = rawBatchId
 
     if (!batchesMap.has(batchId)) {
       batchesMap.set(batchId, {
