@@ -240,7 +240,7 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
       const st = stateByPersona[pid]
       if (st?.shots) {
         st.shots.forEach((s) => {
-          if (s.image?.status === 'done' || s.image?.status === 'error') {
+          if (s.image?.url || s.image?.status === 'done' || s.image?.status === 'error' || String(s.image?.status || '').includes('error')) {
             count++
           }
         })
@@ -648,6 +648,16 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
                 ? '✅ Selesai! Membuka studio...'
                 : 'Mengunci identitas persona & style scene...'}
             </div>
+
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() => setAutoGenState({ active: false, total: 0, completed: 0 })}
+                className="px-4 py-1.5 rounded-xl border border-gray-700 bg-gray-800/80 text-xs font-semibold text-gray-300 hover:text-white hover:bg-gray-700 transition-colors cursor-pointer"
+              >
+                🏃 Lanjutkan di Background (Tutup Modal)
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -703,7 +713,7 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
   const personaOwnRefs = (persona.persona_refs || []).map((pr) => pr.refs).filter(Boolean)
   const [cfgOpen, setCfgOpen] = useState(false)
 
-  // Auto-parse & Auto-generate images for Studio Jobs
+  // Auto-parse & Auto-generate images for Studio Jobs (Sequential queue per persona)
   const autoGenRef = useRef(false)
   useEffect(() => {
     if (autoStartImages && !autoGenRef.current) {
@@ -711,14 +721,23 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
         autoGenRef.current = true
         parseNaskah()
       } else if (state.shots?.length > 0) {
-        const hasIdle = state.shots.some(s => s.image?.status === 'idle')
+        const hasIdle = state.shots.some(s => !s.image?.url && s.image?.status !== 'done')
         if (hasIdle) {
           autoGenRef.current = true
-          state.shots.forEach((shot, idx) => {
-            if (shot.image?.status === 'idle') {
-              setTimeout(() => genImageForShot(idx), idx * 600)
+          async function runPersonaQueue() {
+            for (let idx = 0; idx < state.shots.length; idx++) {
+              const shot = state.shots[idx]
+              if (!shot.image?.url && shot.image?.status !== 'done' && shot.image?.status !== 'generating') {
+                try {
+                  await genImageForShot(idx)
+                } catch (e) {
+                  console.warn(`[PersonaSeqGen] shot ${idx} error:`, e)
+                }
+                await new Promise((r) => setTimeout(r, 400))
+              }
             }
-          })
+          }
+          runPersonaQueue()
         }
       }
     }
