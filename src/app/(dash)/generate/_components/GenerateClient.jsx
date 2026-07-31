@@ -698,21 +698,26 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
   const personaOwnRefs = (persona.persona_refs || []).map((pr) => pr.refs).filter(Boolean)
   const [cfgOpen, setCfgOpen] = useState(false)
 
-  // Auto-generate images for Studio Jobs
+  // Auto-parse & Auto-generate images for Studio Jobs
   const autoGenRef = useRef(false)
   useEffect(() => {
-    if (autoStartImages && state.shots?.length > 0 && !autoGenRef.current) {
-      const hasIdle = state.shots.some(s => s.image?.status === 'idle')
-      if (hasIdle) {
+    if (autoStartImages && !autoGenRef.current) {
+      if ((!state.shots || state.shots.length === 0) && state.naskah?.trim()) {
         autoGenRef.current = true
-        state.shots.forEach((shot, idx) => {
-          if (shot.image?.status === 'idle') {
-            setTimeout(() => genImageForShot(idx), idx * 600)
-          }
-        })
+        parseNaskah()
+      } else if (state.shots?.length > 0) {
+        const hasIdle = state.shots.some(s => s.image?.status === 'idle')
+        if (hasIdle) {
+          autoGenRef.current = true
+          state.shots.forEach((shot, idx) => {
+            if (shot.image?.status === 'idle') {
+              setTimeout(() => genImageForShot(idx), idx * 600)
+            }
+          })
+        }
       }
     }
-  }, [autoStartImages, state.shots])
+  }, [autoStartImages, state.shots, state.naskah])
 
   // Per-persona config ("variant generation"). When perPersonaMode is ON and
   // this persona has an override, the EFFECTIVE config = global defaults merged
@@ -1105,8 +1110,15 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       // models (Nano-Banana / Seedance / Happy Horse) re-gen consistently
       // instead of drifting to a new result every time. OFF = fresh each gen.
       const seed = globalConfig.seedLock ? globalConfig.seed : randomSeed()
-      const imgInput = applySeed(globalConfig.imgModel, buildImgInput(globalConfig.imgModel, { prompt: imageRoles + (continuityBlock ? `${continuityBlock}\n\n` : '') + fullPrompt, refUrls, ar: globalConfig.ar }), seed)
-      const imgResult = await falRun(globalConfig.imgModel, imgInput, { onProgress: (p) => patchShot(idx, { image: { status: p } }), workspaceId })
+      const hasRefs = refUrls.length > 0
+      const targetModel = (!hasRefs && globalConfig.imgModel.includes('gpt-image-2/edit'))
+        ? 'openai/gpt-image-2'
+        : (!hasRefs && globalConfig.imgModel.includes('/edit'))
+          ? globalConfig.imgModel.replace(/\/edit$/, '')
+          : globalConfig.imgModel
+
+      const imgInput = applySeed(targetModel, buildImgInput(targetModel, { prompt: imageRoles + (continuityBlock ? `${continuityBlock}\n\n` : '') + fullPrompt, refUrls, ar: globalConfig.ar }), seed)
+      const imgResult = await falRun(targetModel, imgInput, { onProgress: (p) => patchShot(idx, { image: { status: p } }), workspaceId })
       const imageUrl = imgResult.images?.[0]?.url
       if (!imageUrl) throw new Error('no image URL returned')
       // Push to variants instead of overwriting — user wants to A/B-compare

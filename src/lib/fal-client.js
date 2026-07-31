@@ -318,7 +318,10 @@ export function buildImgInput(imgModel, { prompt, refUrls = [], ar = '9:16' }) {
   }
   const image_size = ar === '9:16' ? { width: 1024, height: 1536 } : ar === '16:9' ? { width: 1536, height: 1024 } : { width: 1024, height: 1024 }
   if (imgModel.includes('gpt-image-2/edit')) {
-    return { prompt, ...(refs.length ? { image_urls: refs.slice(0, 10) } : {}), image_size, quality: 'medium', num_images: 1 }
+    if (!refs.length) {
+      return { prompt, image_size, quality: 'medium', num_images: 1 }
+    }
+    return { prompt, image_urls: refs.slice(0, 10), image_size, quality: 'medium', num_images: 1 }
   }
   // GPT Image 2 GENERATION mode (no /edit suffix) — same underlying model
   // as gpt-image-2/edit but in text-to-image generation mode. Refs treated
