@@ -164,12 +164,15 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
   const [studioJobs, setStudioJobs] = useState(incomingStudioJobs || (incomingStudioJob ? [incomingStudioJob] : []))
 
   // Pre-fill from Studio Job / Batch (pushed from Caketing via Inbox)
+  const [autoGenState, setAutoGenState] = useState({ active: false, total: 0, completed: 0 })
+
   useEffect(() => {
     const jobList = incomingStudioJobs?.length > 0 ? incomingStudioJobs : (incomingStudioJob ? [incomingStudioJob] : [])
     if (jobList.length === 0) return
 
     const newSelectedIds = new Set()
     const newStateByPersona = {}
+    let totalShotsCount = 0
 
     for (const j of jobList) {
       let personaId = j.persona_mapping?.studio_persona_id
@@ -184,7 +187,8 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
       }
       if (personaId) {
         newSelectedIds.add(personaId)
-        const shots = (j.parsed_shots || []).map((s, idx) => ({
+        const parsedList = j.parsed_shots || []
+        const shots = parsedList.map((s, idx) => ({
           id: `s-${idx}`,
           shot: s.shot || idx + 1,
           scene_type: s.scene_type || 'default',
@@ -193,7 +197,11 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
           dialogue: s.dialogue || '',
           duration: s.duration || 5,
           chars_in_shot: s.chars_in_shot || [],
+          raw: s,
+          image: { status: 'idle' },
+          video: { status: 'idle' },
         }))
+        totalShotsCount += shots.length
         newStateByPersona[personaId] = {
           naskah: j.naskah_text || '',
           refIds: new Set(),
@@ -210,10 +218,41 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
       setStateByPersona((st) => ({ ...st, ...newStateByPersona }))
     }
 
+    if (totalShotsCount > 0) {
+      setAutoGenState({ active: true, total: totalShotsCount, completed: 0 })
+    }
+
     if (jobList[0]?.format_meta?.aspect_ratio) {
       setGlobalConfig((c) => ({ ...c, ar: jobList[0].format_meta.aspect_ratio }))
     }
   }, [incomingStudioJob, incomingStudioJobs])
+
+  // Track completed shots across all active personas for the loading screen
+  const completedShotsCount = useMemo(() => {
+    if (!autoGenState.active) return 0
+    let count = 0
+    selectedIds.forEach((pid) => {
+      const st = stateByPersona[pid]
+      if (st?.shots) {
+        st.shots.forEach((s) => {
+          if (s.image?.status === 'done' || s.image?.status === 'error') {
+            count++
+          }
+        })
+      }
+    })
+    return count
+  }, [autoGenState.active, selectedIds, stateByPersona])
+
+  // Auto-dismiss loading screen when all shots finish
+  useEffect(() => {
+    if (autoGenState.active && autoGenState.total > 0 && completedShotsCount >= autoGenState.total) {
+      const timer = setTimeout(() => {
+        setAutoGenState({ active: false, total: 0, completed: 0 })
+      }, 1200)
+      return () => clearTimeout(timer)
+    }
+  }, [autoGenState.active, autoGenState.total, completedShotsCount])
 
   function togglePersona(id) {
     setSelectedIds((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -568,6 +607,43 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
       {selectedPersonas.length === 0 && (
         <div className="text-sm text-[var(--muted)] p-12 border border-dashed border-[var(--border)] rounded-lg text-center">
           Pilih persona di atas buat mulai. Tiap persona bakal punya editor sendiri di sini.
+        </div>
+      )}
+
+      {/* Full-Page Loading Overlay during Batch Image Auto-Generation */}
+      {autoGenState.active && (
+        <div className="fixed inset-0 z-[9999] bg-black/85 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center">
+          <div className="bg-[var(--surface1,#16161e)] border border-amber-500/40 rounded-2xl p-8 max-w-md w-full shadow-2xl space-y-6 animate-in fade-in zoom-in duration-300">
+            <div className="w-16 h-16 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mx-auto animate-pulse">
+              <span className="text-3xl">⚡</span>
+            </div>
+            <div>
+              <h2 className="text-xl font-extrabold text-white">Auto-Generating Batch Images...</h2>
+              <p className="text-xs text-amber-400 font-mono mt-1 font-bold">Model: GPT Image 2 Edit</p>
+              <p className="text-xs text-gray-400 mt-2">
+                Sistem lagi nge-generate semua gambar shot untuk batch ini pake AI. Mohon tunggu sampai kelar bro!
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex justify-between text-xs text-gray-300 font-bold">
+                <span>Progress Rendering</span>
+                <span className="tabular-nums">{completedShotsCount} / {autoGenState.total} shots</span>
+              </div>
+              <div className="w-full h-3 bg-gray-800 rounded-full overflow-hidden border border-gray-700">
+                <div 
+                  className="h-full bg-gradient-to-r from-amber-500 to-yellow-400 transition-all duration-500 ease-out"
+                  style={{ width: `${Math.min(100, Math.round((completedShotsCount / (autoGenState.total || 1)) * 100))}%` }}
+                />
+              </div>
+            </div>
+
+            <div className="text-[11px] text-gray-400 italic">
+              {completedShotsCount >= autoGenState.total && autoGenState.total > 0
+                ? '✅ Selesai! Membuka studio...'
+                : 'Mengunci identitas persona & style scene...'}
+            </div>
+          </div>
         </div>
       )}
     </div>
