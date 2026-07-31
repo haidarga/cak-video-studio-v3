@@ -249,15 +249,28 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
     return count
   }, [autoGenState.active, selectedIds, stateByPersona])
 
+  // Check if any persona is currently parsing naskah
+  const isParsingNaskah = useMemo(() => {
+    if (!autoGenState.active) return false
+    let parsing = false
+    selectedIds.forEach((pid) => {
+      const st = stateByPersona[pid]
+      if (st?.busy || (!st?.shots?.length && st?.naskah?.trim())) {
+        parsing = true
+      }
+    })
+    return parsing
+  }, [autoGenState.active, selectedIds, stateByPersona])
+
   // Auto-dismiss loading screen when all shots finish
   useEffect(() => {
-    if (autoGenState.active && autoGenState.total > 0 && completedShotsCount >= autoGenState.total) {
+    if (autoGenState.active && autoGenState.total > 0 && completedShotsCount >= autoGenState.total && !isParsingNaskah) {
       const timer = setTimeout(() => {
         setAutoGenState({ active: false, total: 0, completed: 0 })
       }, 1200)
       return () => clearTimeout(timer)
     }
-  }, [autoGenState.active, autoGenState.total, completedShotsCount])
+  }, [autoGenState.active, autoGenState.total, completedShotsCount, isParsingNaskah])
 
   function togglePersona(id) {
     setSelectedIds((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -618,35 +631,70 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
       {/* Full-Page Loading Overlay during Batch Image Auto-Generation */}
       {autoGenState.active && (
         <div className="fixed inset-0 z-[9999] bg-black/85 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center">
-          <div className="bg-[var(--surface1,#16161e)] border border-amber-500/40 rounded-2xl p-8 max-w-md w-full shadow-2xl space-y-6 animate-in fade-in zoom-in duration-300">
+          <div className="bg-[var(--surface1,#16161e)] border border-amber-500/40 rounded-2xl p-8 max-w-md w-full shadow-2xl space-y-5 animate-in fade-in zoom-in duration-300">
             <div className="w-16 h-16 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mx-auto animate-pulse">
-              <span className="text-3xl">⚡</span>
+              <span className="text-3xl">{isParsingNaskah ? '📋' : '⚡'}</span>
             </div>
+
             <div>
-              <h2 className="text-xl font-extrabold text-white">Auto-Generating Batch Images...</h2>
-              <p className="text-xs text-amber-400 font-mono mt-1 font-bold">Model: GPT Image 2 Edit</p>
-              <p className="text-xs text-gray-400 mt-2">
-                Sistem lagi nge-generate semua gambar shot untuk batch ini pake AI. Mohon tunggu sampai kelar bro!
+              <h2 className="text-xl font-extrabold text-white">
+                {isParsingNaskah ? 'Parsing Naskah Batch...' : 'Auto-Rendering Batch Images...'}
+              </h2>
+              <p className="text-xs text-amber-400 font-mono mt-1 font-bold">
+                Model: {globalConfig.imgModel || 'GPT Image 2 Edit'}
               </p>
+            </div>
+
+            {/* Pipeline Stage Stepper */}
+            <div className="flex items-center justify-center gap-2 text-xs font-bold py-1 border-y border-gray-800">
+              <span className={`px-3 py-1 rounded-full border transition-colors ${
+                isParsingNaskah 
+                  ? 'bg-amber-500/20 border-amber-500/40 text-amber-300 animate-pulse' 
+                  : 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400'
+              }`}>
+                {isParsingNaskah ? '🔄 1. Parsing Naskah...' : '✅ 1. Parsed'}
+              </span>
+              <span className="text-gray-600">➔</span>
+              <span className={`px-3 py-1 rounded-full border transition-colors ${
+                !isParsingNaskah && completedShotsCount < autoGenState.total
+                  ? 'bg-purple-500/20 border-purple-500/40 text-purple-300 animate-pulse'
+                  : completedShotsCount >= autoGenState.total && autoGenState.total > 0
+                    ? 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400'
+                    : 'bg-gray-800 border-gray-700 text-gray-500'
+              }`}>
+                {!isParsingNaskah && completedShotsCount < autoGenState.total
+                  ? `⚡ 2. Rendering (${completedShotsCount}/${autoGenState.total})`
+                  : completedShotsCount >= autoGenState.total && autoGenState.total > 0
+                    ? '✅ 2. Rendered'
+                    : '2. Rendering'}
+              </span>
             </div>
 
             <div className="space-y-2">
               <div className="flex justify-between text-xs text-gray-300 font-bold">
-                <span>Progress Rendering</span>
-                <span className="tabular-nums">{completedShotsCount} / {autoGenState.total} shots</span>
+                <span>Progress Pipeline</span>
+                <span className="tabular-nums">
+                  {isParsingNaskah ? 'Parsing...' : `${completedShotsCount} / ${autoGenState.total} shots`}
+                </span>
               </div>
               <div className="w-full h-3 bg-gray-800 rounded-full overflow-hidden border border-gray-700">
                 <div 
-                  className="h-full bg-gradient-to-r from-amber-500 to-yellow-400 transition-all duration-500 ease-out"
-                  style={{ width: `${Math.min(100, Math.round((completedShotsCount / (autoGenState.total || 1)) * 100))}%` }}
+                  className="h-full bg-gradient-to-r from-amber-500 via-purple-500 to-emerald-400 transition-all duration-500 ease-out"
+                  style={{ 
+                    width: isParsingNaskah 
+                      ? '15%' 
+                      : `${Math.min(100, Math.max(15, Math.round((completedShotsCount / (autoGenState.total || 1)) * 100)))}%` 
+                  }}
                 />
               </div>
             </div>
 
             <div className="text-[11px] text-gray-400 italic">
-              {completedShotsCount >= autoGenState.total && autoGenState.total > 0
-                ? '✅ Selesai! Membuka studio...'
-                : 'Mengunci identitas persona & style scene...'}
+              {isParsingNaskah
+                ? '📋 Stage 1: AI Gemini lagi nge-parse naskah & nentuin prompt visual shot per shot...'
+                : completedShotsCount >= autoGenState.total && autoGenState.total > 0
+                  ? '✅ Stage Complete! Semua gambar batch selesai di-render. Membuka studio...'
+                  : `🎨 Stage 2: AI lagi nge-render gambar ke-${Math.min(completedShotsCount + 1, autoGenState.total)} dari ${autoGenState.total} pake GPT Image 2 Edit...`}
             </div>
 
             <div className="pt-2">

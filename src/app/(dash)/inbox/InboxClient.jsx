@@ -290,6 +290,17 @@ export default function InboxClient({ jobs: initialJobs, personaMap, workspaceId
   const [jobs, setJobs] = useState(initialJobs)
   const [filter, setFilter] = useState('all') // 'all' | 'pending' | 'done'
   const [activeModalBatch, setActiveModalBatch] = useState(null)
+  const [userCameraPresets, setUserCameraPresets] = useState([])
+
+  // Fetch workspace custom camera presets (e.g. AceKid, Pixar-style 3D, Gagagibah, etc.)
+  useEffect(() => {
+    fetch('/api/workspace/camera-presets')
+      .then((r) => r.json())
+      .then((j) => {
+        if (j.ok) setUserCameraPresets(j.presets || [])
+      })
+      .catch(() => {})
+  }, [])
 
   // Subscribe to realtime updates on studio_jobs
   useEffect(() => {
@@ -474,29 +485,49 @@ export default function InboxClient({ jobs: initialJobs, personaMap, workspaceId
               </button>
             </div>
 
-            {/* Visual Style Grid */}
+            {/* Visual Style Selection */}
             <div className="space-y-4 text-left">
               <div>
-                <label className="block text-xs font-bold text-gray-200 mb-2">
-                  📸 Pilih Camera / Visual Style untuk Batch Ini:
+                <label className="block text-xs font-bold text-gray-200 mb-1.5 flex items-center justify-between">
+                  <span>📸 Pilih Camera / Visual Style untuk Batch Ini:</span>
+                  <span className="text-[10px] text-purple-400 font-normal">
+                    {userCameraPresets.length > 0 ? `+${userCameraPresets.length} Custom presets` : ''}
+                  </span>
                 </label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-60 overflow-y-auto pr-1">
-                  {STYLE_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      onClick={() => setActiveModalBatch({ ...activeModalBatch, selectedStyle: opt.id })}
-                      className={`p-3 rounded-xl border text-left text-xs transition-all cursor-pointer ${
-                        (activeModalBatch.selectedStyle || 'samsung_a13_candid') === opt.id
-                          ? 'border-purple-500 bg-purple-500/20 text-white font-bold shadow-md shadow-purple-500/20 ring-1 ring-purple-500'
-                          : 'border-[var(--border)] bg-[var(--surface2,#121217)] text-gray-300 hover:border-purple-500/50'
-                      }`}
-                    >
-                      <div className="font-bold text-white">{opt.label}</div>
-                      <div className="text-[10px] text-gray-400 font-normal mt-0.5">{opt.desc}</div>
-                    </button>
-                  ))}
-                </div>
+                <select
+                  value={activeModalBatch.selectedStyle || 'samsung_a13_candid'}
+                  onChange={(e) => setActiveModalBatch({ ...activeModalBatch, selectedStyle: e.target.value })}
+                  className="w-full rounded-xl border border-purple-500/40 bg-[var(--surface2,#121217)] px-3.5 py-2.5 text-xs font-semibold text-white outline-none focus:border-purple-400 cursor-pointer shadow-inner"
+                >
+                  <optgroup label="📱 PHONE (4)">
+                    <option value="samsung_a13_candid">⚙ Samsung A13 candid (UGC) — TikTok UGC, real-person testimonial, handheld</option>
+                    <option value="iphone_15_clean">⚙ iPhone 15 clean — Polished UGC, founder talking head, podcast clip</option>
+                    <option value="iphone_15_candid">⚙ iPhone 15 UGC Candid — Real-person candid point-and-shoot, raw iPhone snapshot</option>
+                    <option value="raw_ugc_candid">⚙ Raw UGC Candid — Authentic no-filter look</option>
+                  </optgroup>
+
+                  <optgroup label="🎬 CINEMA (4)">
+                    <option value="studio_tvc">⚙ Studio TVC — Premium brand spot, controlled lighting, locked-off</option>
+                    <option value="cinematic_anamorphic">⚙ Cinematic anamorphic — Hero brand film, narrative ad, festival look</option>
+                    <option value="product_macro">⚙ Product macro — Product hero shot, e-commerce key visual</option>
+                    <option value="documentary_handheld">⚙ Documentary handheld — Real-world story, observational style</option>
+                  </optgroup>
+
+                  <optgroup label="🎨 ANIMATION (2)">
+                    <option value="animation_2d">⚙ 2D animation — Animated explainer, mascot ad, kid-friendly</option>
+                    <option value="pixar_3d">⚙ Pixar-style 3D — Family / mascot 3D ad, character-driven CG</option>
+                  </optgroup>
+
+                  {userCameraPresets.length > 0 && (
+                    <optgroup label={`👤 CUSTOM WORKSPACE STYLES (${userCameraPresets.length})`}>
+                      {userCameraPresets.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          👤 {p.label} — {p.use_case || p.desc || 'Custom workspace style'}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
               </div>
 
               <div>
