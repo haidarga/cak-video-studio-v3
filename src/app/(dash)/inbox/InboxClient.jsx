@@ -356,13 +356,16 @@ export default function InboxClient({ jobs: initialJobs, personaMap, workspaceId
   const pendingCount = jobs.filter(j => ['pending', 'parsed'].includes(j.status)).length
   const doneCount = jobs.filter(j => j.status === 'done').length
 
-  // Group filteredJobs into Batches (Group purely by push_batch_id from Caketing so they don't split)
+  // Group filteredJobs into Batches (Group by main topic title e.g. "Why Susu Segar?" so personas for 1 topic stay in 1 batch)
   const batchesMap = new Map()
   for (const job of filteredJobs) {
-    const topicTitle = job.source_ref?.push_batch_title?.trim() || job.title?.split('·')[0]?.trim() || 'Content Plan'
-    const fullBatchTitle = job.source_ref?.push_batch_title || topicTitle
+    const rawTitle = job.title || 'Content Plan'
+    // Extract base topic title by splitting at " - " (e.g. "Why Susu Segar? - Zoe Kaylani" -> "Why Susu Segar?")
+    const topicFromTitle = rawTitle.split(' - ')[0]?.trim() || rawTitle.split('·')[0]?.trim()
+    const topicTitle = job.source_ref?.push_batch_title?.trim() || topicFromTitle || 'Content Plan'
+    const fullBatchTitle = topicTitle
 
-    const rawBatchId = job.source_ref?.push_batch_id || job.source_ref?.batch_id || `single_${job.id}`
+    const rawBatchId = job.source_ref?.push_batch_id || job.source_ref?.batch_id || `topic_${topicTitle.toLowerCase().replace(/[^a-z0-9]/g, '_')}`
     const batchId = rawBatchId
 
     if (!batchesMap.has(batchId)) {
