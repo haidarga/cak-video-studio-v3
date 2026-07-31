@@ -377,7 +377,7 @@ export default function InboxClient({ jobs: initialJobs, personaMap, workspaceId
   const pendingCount = jobs.filter(j => ['pending', 'parsed'].includes(j.status)).length
   const doneCount = jobs.filter(j => j.status === 'done').length
 
-  // Group filteredJobs into Batches (Group by main topic title e.g. "Why Susu Segar?" so personas for 1 topic stay in 1 batch)
+  // Group filteredJobs into Batches (1 push event = 1 batch card)
   const batchesMap = new Map()
   for (const job of filteredJobs) {
     const raw = job.title || ''
@@ -385,7 +385,14 @@ export default function InboxClient({ jobs: initialJobs, personaMap, workspaceId
     const topicFromTitle = parts.length > 1 && parts[0].trim() ? parts[0].trim() : raw.trim()
     const topicTitle = topicFromTitle || 'Content Plan'
 
-    const batchId = `topic_${topicTitle.toLowerCase().replace(/[^a-z0-9]/g, '_')}`
+    const pushBatchId = job.source_ref?.push_batch_id || job.source_ref?.batch_id
+    const createdTime = job.created_at ? new Date(job.created_at).getTime() : Date.now()
+    // 3-minute bucket groups jobs pushed in the same request together, but keeps separate pushes apart
+    const timeBucket = Math.floor(createdTime / (3 * 60 * 1000))
+
+    const batchId = pushBatchId && !pushBatchId.startsWith('topic_')
+      ? pushBatchId
+      : `${topicTitle.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${timeBucket}`
 
     if (!batchesMap.has(batchId)) {
       batchesMap.set(batchId, {
