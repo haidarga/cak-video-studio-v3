@@ -187,7 +187,7 @@ function JobCard({ job, personaMap, expanded, onToggle, onDelete }) {
   )
 }
 
-function BatchCard({ batch, personaMap, onDeleteBatch, onDeleteJob }) {
+function BatchCard({ batch, personaMap, onDeleteBatch, onDeleteJob, onOpenExecutionModal }) {
   const [expanded, setExpanded] = useState(false)
   const [expandedJobId, setExpandedJobId] = useState(null)
 
@@ -199,17 +199,6 @@ function BatchCard({ batch, personaMap, onDeleteBatch, onDeleteJob }) {
   const totalShots = jobs.reduce((acc, j) => acc + (j.parsed_shots?.length || 0), 0)
 
   const isBatchActionable = pendingJobs.length > 0
-  const allJobIdsParam = jobs.map(j => j.id).join(',')
-  const [selectedStyle, setSelectedStyle] = useState('samsung_a13_candid')
-
-  const STYLE_OPTIONS = [
-    { id: 'samsung_a13_candid', label: '📱 Samsung A13 candid (UGC)' },
-    { id: 'iphone_15_clean', label: '📱 iPhone 15 clean' },
-    { id: 'studio_tvc', label: '🎬 Studio TVC (Commercial)' },
-    { id: 'cinematic_anamorphic', label: '🎞 Cinematic Anamorphic' },
-    { id: 'candid_nightlife_flash', label: '🌃 Nightlife On-Camera Flash' },
-    { id: 'gopro_hero12_action', label: '🏄 GoPro Action POV' },
-  ]
 
   return (
     <div className="glass rounded-2xl border border-purple-500/30 overflow-hidden shadow-lg shadow-purple-500/5 transition-all hover:border-purple-500/60">
@@ -250,26 +239,13 @@ function BatchCard({ batch, personaMap, onDeleteBatch, onDeleteJob }) {
           </button>
 
           {isBatchActionable && (
-            <div className="flex items-center gap-2">
-              <select
-                value={selectedStyle}
-                onChange={(e) => setSelectedStyle(e.target.value)}
-                className="rounded-xl border border-purple-500/40 bg-[var(--surface1,#16161e)] px-2.5 py-1.5 text-xs font-semibold text-purple-200 outline-none hover:border-purple-400 cursor-pointer"
-              >
-                {STYLE_OPTIONS.map((opt) => (
-                  <option key={opt.id} value={opt.id} className="bg-[#121217] text-white">
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-
-              <Link
-                href={`/generate?studio_job=${allJobIdsParam}&camera_preset=${selectedStyle}`}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 px-4 py-1.5 text-xs font-bold text-white shadow-md shadow-purple-500/30 hover:scale-[1.02] transition-transform whitespace-nowrap"
-              >
-                🚀 Eksekusi All Batch
-              </Link>
-            </div>
+            <button
+              type="button"
+              onClick={() => onOpenExecutionModal(batch)}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 px-4 py-1.5 text-xs font-bold text-white shadow-md shadow-purple-500/30 hover:scale-[1.02] transition-transform whitespace-nowrap cursor-pointer"
+            >
+              🚀 Eksekusi All Batch
+            </button>
           )}
 
           <button
@@ -301,9 +277,19 @@ function BatchCard({ batch, personaMap, onDeleteBatch, onDeleteJob }) {
   )
 }
 
+const STYLE_OPTIONS = [
+  { id: 'samsung_a13_candid', label: '📱 Samsung A13 candid (UGC)', desc: 'TikTok UGC, candid handheld phone feel' },
+  { id: 'iphone_15_clean', label: '📱 iPhone 15 clean', desc: 'Clean smartphone 4k video, crisp details' },
+  { id: 'studio_tvc', label: '🎬 Studio Commercial (TVC)', desc: 'Pro studio softbox lighting, brand commercial' },
+  { id: 'cinematic_anamorphic', label: '🎞 Cinematic Anamorphic', desc: '2.39:1 widescreen, film lens flare, dramatic' },
+  { id: 'candid_nightlife_flash', label: '🌃 Nightlife On-Camera Flash', desc: 'Harsh frontal flash in dark room/bar setting' },
+  { id: 'gopro_hero12_action', label: '🏄 GoPro Action POV', desc: 'Wide-angle action camera, immersive movement' },
+]
+
 export default function InboxClient({ jobs: initialJobs, personaMap, workspaceId }) {
   const [jobs, setJobs] = useState(initialJobs)
   const [filter, setFilter] = useState('all') // 'all' | 'pending' | 'done'
+  const [activeModalBatch, setActiveModalBatch] = useState(null)
 
   // Subscribe to realtime updates on studio_jobs
   useEffect(() => {
@@ -461,9 +447,96 @@ export default function InboxClient({ jobs: initialJobs, personaMap, workspaceId
             personaMap={personaMap}
             onDeleteBatch={handleDeleteBatch}
             onDeleteJob={handleDeleteJob}
+            onOpenExecutionModal={(b) => setActiveModalBatch({ batch: b, selectedStyle: 'samsung_a13_candid', selectedModel: 'openai/gpt-image-2/edit' })}
           />
         ))}
       </div>
+
+      {/* Batch Execution Modal */}
+      {activeModalBatch && (
+        <div className="fixed inset-0 z-[9999] bg-black/80 backdrop-blur-md flex flex-col items-center justify-center p-4">
+          <div className="bg-[var(--surface1,#16161e)] border border-purple-500/40 rounded-2xl p-6 max-w-lg w-full shadow-2xl space-y-5 animate-in fade-in zoom-in duration-200">
+            {/* Modal Header */}
+            <div className="flex items-start justify-between border-b border-[var(--border)] pb-3">
+              <div>
+                <h2 className="text-base font-extrabold text-white flex items-center gap-2">
+                  🚀 Eksekusi Batch: <span className="text-purple-300">{activeModalBatch.batch.title}</span>
+                </h2>
+                <p className="text-xs text-[var(--muted)] mt-0.5">
+                  {activeModalBatch.batch.jobs.length} Naskah · {activeModalBatch.batch.jobs.reduce((a, b) => a + (b.parsed_shots?.length || 0), 0)} Shots Total
+                </p>
+              </div>
+              <button 
+                onClick={() => setActiveModalBatch(null)}
+                className="text-gray-400 hover:text-white text-base font-bold p-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Visual Style Grid */}
+            <div className="space-y-4 text-left">
+              <div>
+                <label className="block text-xs font-bold text-gray-200 mb-2">
+                  📸 Pilih Camera / Visual Style untuk Batch Ini:
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-60 overflow-y-auto pr-1">
+                  {STYLE_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setActiveModalBatch({ ...activeModalBatch, selectedStyle: opt.id })}
+                      className={`p-3 rounded-xl border text-left text-xs transition-all cursor-pointer ${
+                        (activeModalBatch.selectedStyle || 'samsung_a13_candid') === opt.id
+                          ? 'border-purple-500 bg-purple-500/20 text-white font-bold shadow-md shadow-purple-500/20 ring-1 ring-purple-500'
+                          : 'border-[var(--border)] bg-[var(--surface2,#121217)] text-gray-300 hover:border-purple-500/50'
+                      }`}
+                    >
+                      <div className="font-bold text-white">{opt.label}</div>
+                      <div className="text-[10px] text-gray-400 font-normal mt-0.5">{opt.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-gray-200 mb-1.5">
+                  🤖 Model AI Image:
+                </label>
+                <select
+                  value={activeModalBatch.selectedModel || 'openai/gpt-image-2/edit'}
+                  onChange={(e) => setActiveModalBatch({ ...activeModalBatch, selectedModel: e.target.value })}
+                  className="w-full rounded-xl border border-purple-500/40 bg-[var(--surface2,#121217)] px-3 py-2 text-xs font-semibold text-white outline-none focus:border-purple-400"
+                >
+                  <option value="openai/gpt-image-2/edit">🆕 GPT Image 2 Edit (Pixel-lock identity - Default)</option>
+                  <option value="openai/gpt-image-2">🆕 GPT Image 2 (Text-to-Image mode)</option>
+                  <option value="fal-ai/nano-banana-2/edit">⚡ Nano Banana 2 (Fast multi-ref)</option>
+                  <option value="xai/grok-imagine-image/edit">🔥 Grok Imagine Edit</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Footer Buttons */}
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-[var(--border)]">
+              <button
+                type="button"
+                onClick={() => setActiveModalBatch(null)}
+                className="px-4 py-2 rounded-xl border border-[var(--border)] text-xs font-semibold text-gray-300 hover:bg-gray-800 cursor-pointer"
+              >
+                Batal
+              </button>
+              <Link
+                href={`/generate?studio_job=${activeModalBatch.batch.jobs.map(j => j.id).join(',')}&camera_preset=${activeModalBatch.selectedStyle || 'samsung_a13_candid'}&img_model=${encodeURIComponent(activeModalBatch.selectedModel || 'openai/gpt-image-2/edit')}`}
+                onClick={() => setActiveModalBatch(null)}
+                className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 px-5 py-2 text-xs font-bold text-white shadow-lg shadow-purple-500/30 hover:scale-[1.02] transition-transform"
+              >
+                🚀 Start Auto-Generation
+              </Link>
+            </div>
+
+          </div>
+        </div>
+      )}
     </div>
   )
 }

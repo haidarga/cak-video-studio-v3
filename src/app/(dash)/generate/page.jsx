@@ -51,6 +51,7 @@ export default async function GeneratePage({ searchParams }) {
   ])
 
   const incomingCameraPreset = sp?.camera_preset || null
+  const incomingImgModel = sp?.img_model || null
 
   return (
     <GenerateClient
@@ -61,6 +62,7 @@ export default async function GeneratePage({ searchParams }) {
       workspaceRefs={refs || []}
       incomingPreset={incomingPreset}
       incomingCameraPreset={incomingCameraPreset}
+      incomingImgModel={incomingImgModel}
       incomingStudioJob={incomingStudioJob}
       incomingStudioJobs={incomingStudioJobs}
     />
