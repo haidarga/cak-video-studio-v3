@@ -284,10 +284,10 @@ async function falRunOnce(model, input, { onProgress, maxWaitMs, workspaceId, du
         onProgress?.(`waiting (${elapsed}s)`)
       }
     }
-    // 8s (was 20s) — realtime should settle instantly, but when it silently
-    // drops this poll is the only signal; 8s caps the "stuck" window that made
-    // users re-gen (→ duplicates). Cheap: it hits our own Supabase + fal status.
-    fallbackInterval = setInterval(pollOnce, 8000)
+    // 3s (was 8s) — fast poll ensures the UI snaps to completed image/video
+    // immediately even if Supabase Realtime drops or lags.
+    setTimeout(pollOnce, 1500)
+    fallbackInterval = setInterval(pollOnce, 3000)
 
     // Instant recovery when the tab comes back: background tabs throttle
     // timers (and sleep suspends them entirely), so the 20s interval may not

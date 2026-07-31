@@ -1491,20 +1491,16 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
       })
 
       // Voice clone post-gen — if persona has a cloned voice, swap the AI native audio
-      // for the persona's voice via ElevenLabs Speech-to-Speech. Lip-sync preserved
-      // because S2S converts the same audio (same phonemes/timing, new timbre).
-      // Best-effort; failures don't break the video gen.
-      // Gated: only when the toggle is ON, the persona has a voice, AND this
-      // shot actually has dialog (no point S2S-ing a silent b-roll clip).
-      const hasDialog = Array.isArray(shot.raw?.panels)
-        ? shot.raw.panels.some((p) => (p.dialog || p.voiceover || p.script || p.narration || p.text)?.trim())
-        : !!(shot.raw?.dialogue || shot.raw?.dialog || shot.raw?.voiceover || shot.raw?.narration || shot.raw?.script || shot.prompt || shot.rawText || true)
-      if (persona.voice_id && globalConfig.autoVoiceSwap && hasDialog) {
+      // for the persona's voice via ElevenLabs Speech-to-Speech. Lip-sync preserved.
+      // Resolve effectiveVoiceId from persona record or fallback lookup in personas list
+      const effectiveVoiceId = persona?.voice_id || persona?.voice || (personas || []).find((p) => p.id === persona?.id || p.name?.toLowerCase().trim() === persona?.name?.toLowerCase().trim())?.voice_id
+
+      if (effectiveVoiceId && globalConfig.autoVoiceSwap !== false) {
         patchShot(idx, { video: { status: '🎙 voice clone...', url: videoUrl, result_id: row.id } })
         try {
           const r = await fetch('/api/voice/convert', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ video_url: videoUrl, voice_id: persona.voice_id, result_id: row.id }),
+            body: JSON.stringify({ video_url: videoUrl, voice_id: effectiveVoiceId, result_id: row.id }),
           })
           const j = await r.json()
           if (j.ok) {
