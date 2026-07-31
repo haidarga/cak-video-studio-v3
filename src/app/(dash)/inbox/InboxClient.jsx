@@ -359,19 +359,17 @@ export default function InboxClient({ jobs: initialJobs, personaMap, workspaceId
   // Group filteredJobs into Batches (Group by main topic title e.g. "Why Susu Segar?" so personas for 1 topic stay in 1 batch)
   const batchesMap = new Map()
   for (const job of filteredJobs) {
-    const rawTitle = job.title || 'Content Plan'
-    // Extract base topic title by splitting at " - " (e.g. "Why Susu Segar? - Zoe Kaylani" -> "Why Susu Segar?")
-    const topicFromTitle = rawTitle.split(' - ')[0]?.trim() || rawTitle.split('·')[0]?.trim()
-    const topicTitle = job.source_ref?.push_batch_title?.trim() || topicFromTitle || 'Content Plan'
-    const fullBatchTitle = topicTitle
+    const raw = job.title || ''
+    const parts = raw.split(/\s*[-·]\s*/)
+    const topicFromTitle = parts.length > 1 && parts[0].trim() ? parts[0].trim() : raw.trim()
+    const topicTitle = topicFromTitle || 'Content Plan'
 
-    const rawBatchId = job.source_ref?.push_batch_id || job.source_ref?.batch_id || `topic_${topicTitle.toLowerCase().replace(/[^a-z0-9]/g, '_')}`
-    const batchId = rawBatchId
+    const batchId = `topic_${topicTitle.toLowerCase().replace(/[^a-z0-9]/g, '_')}`
 
     if (!batchesMap.has(batchId)) {
       batchesMap.set(batchId, {
         batchId,
-        title: fullBatchTitle,
+        title: topicTitle,
         jobs: [],
       })
     }

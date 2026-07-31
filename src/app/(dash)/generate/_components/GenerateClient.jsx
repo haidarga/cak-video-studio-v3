@@ -172,7 +172,16 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
     const newStateByPersona = {}
 
     for (const j of jobList) {
-      const personaId = j.persona_mapping?.studio_persona_id
+      let personaId = j.persona_mapping?.studio_persona_id
+      if (!personaId && j.persona_mapping?.source_persona_name) {
+        const pName = j.persona_mapping.source_persona_name.toLowerCase().trim()
+        const found = (personas || []).find((p) => p.name.toLowerCase().trim() === pName)
+        if (found) personaId = found.id
+      }
+      if (!personaId && j.title) {
+        const found = (personas || []).find((p) => j.title.toLowerCase().includes(p.name.toLowerCase()))
+        if (found) personaId = found.id
+      }
       if (personaId) {
         newSelectedIds.add(personaId)
         const shots = (j.parsed_shots || []).map((s, idx) => ({
