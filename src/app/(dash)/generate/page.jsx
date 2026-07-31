@@ -50,6 +50,8 @@ export default async function GeneratePage({ searchParams }) {
       : Promise.resolve({ data: null }),
   ])
 
+  const incomingCameraPreset = sp?.camera_preset || null
+
   return (
     <GenerateClient
       workspaceId={ws.id}
@@ -58,6 +60,7 @@ export default async function GeneratePage({ searchParams }) {
       personas={personas || []}
       workspaceRefs={refs || []}
       incomingPreset={incomingPreset}
+      incomingCameraPreset={incomingCameraPreset}
       incomingStudioJob={incomingStudioJob}
       incomingStudioJobs={incomingStudioJobs}
     />

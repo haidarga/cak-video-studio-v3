@@ -200,6 +200,16 @@ function BatchCard({ batch, personaMap, onDeleteBatch, onDeleteJob }) {
 
   const isBatchActionable = pendingJobs.length > 0
   const allJobIdsParam = jobs.map(j => j.id).join(',')
+  const [selectedStyle, setSelectedStyle] = useState('samsung_a13_candid')
+
+  const STYLE_OPTIONS = [
+    { id: 'samsung_a13_candid', label: '📱 Samsung A13 candid (UGC)' },
+    { id: 'iphone_15_clean', label: '📱 iPhone 15 clean' },
+    { id: 'studio_tvc', label: '🎬 Studio TVC (Commercial)' },
+    { id: 'cinematic_anamorphic', label: '🎞 Cinematic Anamorphic' },
+    { id: 'candid_nightlife_flash', label: '🌃 Nightlife On-Camera Flash' },
+    { id: 'gopro_hero12_action', label: '🏄 GoPro Action POV' },
+  ]
 
   return (
     <div className="glass rounded-2xl border border-purple-500/30 overflow-hidden shadow-lg shadow-purple-500/5 transition-all hover:border-purple-500/60">
@@ -240,12 +250,26 @@ function BatchCard({ batch, personaMap, onDeleteBatch, onDeleteJob }) {
           </button>
 
           {isBatchActionable && (
-            <Link
-              href={`/generate?studio_job=${allJobIdsParam}`}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 px-4 py-1.5 text-xs font-bold text-white shadow-md shadow-purple-500/30 hover:scale-[1.02] transition-transform"
-            >
-              🚀 Eksekusi All Batch
-            </Link>
+            <div className="flex items-center gap-2">
+              <select
+                value={selectedStyle}
+                onChange={(e) => setSelectedStyle(e.target.value)}
+                className="rounded-xl border border-purple-500/40 bg-[var(--surface1,#16161e)] px-2.5 py-1.5 text-xs font-semibold text-purple-200 outline-none hover:border-purple-400 cursor-pointer"
+              >
+                {STYLE_OPTIONS.map((opt) => (
+                  <option key={opt.id} value={opt.id} className="bg-[#121217] text-white">
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+
+              <Link
+                href={`/generate?studio_job=${allJobIdsParam}&camera_preset=${selectedStyle}`}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 px-4 py-1.5 text-xs font-bold text-white shadow-md shadow-purple-500/30 hover:scale-[1.02] transition-transform whitespace-nowrap"
+              >
+                🚀 Eksekusi All Batch
+              </Link>
+            </div>
           )}
 
           <button
