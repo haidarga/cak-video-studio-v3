@@ -10,12 +10,45 @@
 //
 // Postiz nolak external media URLs (e.g. Supabase Storage) — image[].URL harus
 // di domain uploads.postiz.com, jadi kita HARUS upload-relay dulu.
+//
+// Channel-binding logic lives in ./postiz-match.js (pure, shared with the UI).
+
+import { resolveChannelBinding } from './postiz-match.js'
+
+export { resolveChannelBinding, findChannelByLabel, channelMatchesLabel, normalizeLabel } from './postiz-match.js'
 
 function normCreds(creds) {
   if (!creds || !creds.url || !creds.key) {
     throw new Error('Postiz creds gak lengkap — pastikan workspace punya postiz_accounts row valid.')
   }
   return { url: String(creds.url).replace(/\/$/, ''), key: String(creds.key) }
+}
+
+// ── Transient-failure retry ─────────────────────────────────────────
+// A self-hosted Postiz behind Cloudflare throws 502/504 regularly. Without a
+// retry, one blip either (a) skipped channel validation entirely — which is how
+// posts landed on the wrong persona — or (b) failed a perfectly good post.
+const TRANSIENT_RE = /502|503|504|timeout|timed out|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up|fetch failed|Bad Gateway|Service Unavailable|Cloudflare/i
+
+export function isTransientPostizError(e) {
+  if (e?.status && e.status >= 500) return true
+  return TRANSIENT_RE.test(String(e?.message || e))
+}
+
+async function withRetry(fn, { tries = 3, baseMs = 700, label = 'call' } = {}) {
+  let last
+  for (let attempt = 1; attempt <= tries; attempt++) {
+    try {
+      return await fn()
+    } catch (e) {
+      last = e
+      if (attempt === tries || !isTransientPostizError(e)) throw e
+      const wait = baseMs * 2 ** (attempt - 1)
+      console.warn(`[postiz] ${label}: transient fail ${attempt}/${tries}, retry in ${wait}ms — ${e.message}`)
+      await new Promise((r) => setTimeout(r, wait))
+    }
+  }
+  throw last
 }
 
 async function postizJson(creds, path, init = {}) {
@@ -168,10 +201,38 @@ export function coerceMp4Brand(buf) {
   return { buf: out, changed: true }
 }
 
+// Hard ceiling so a huge export fails fast with an actionable message instead of
+// burning the whole serverless budget and leaving the row stuck in 'posting'.
+// Budget note: /api/postiz/post runs under maxDuration=60. These caps are sized
+// so we fail with a readable error INSIDE that budget instead of being killed by
+// the platform mid-flight (which used to strand the row in 'posting' forever).
+const MAX_MEDIA_BYTES = 150 * 1024 * 1024
+const DOWNLOAD_TIMEOUT_MS = 35_000
+
 async function downloadMedia(url) {
-  const res = await fetch(url, { cache: 'no-store' })
-  if (!res.ok) throw new Error(`Gagal download media (${res.status}) dari ${url.slice(0, 80)}`)
-  const raw = Buffer.from(await res.arrayBuffer())
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(), DOWNLOAD_TIMEOUT_MS)
+  let res
+  try {
+    res = await fetch(url, { cache: 'no-store', signal: ac.signal })
+  } catch (e) {
+    clearTimeout(timer)
+    if (e?.name === 'AbortError') throw new Error(`Download media timeout (>${DOWNLOAD_TIMEOUT_MS / 1000}s) dari R2 — file kegedean atau koneksi lagi lemot.`)
+    throw e
+  }
+  if (!res.ok) { clearTimeout(timer); throw new Error(`Gagal download media (${res.status}) dari ${url.slice(0, 80)}`) }
+
+  const declared = Number(res.headers.get('content-length') || 0)
+  if (declared && declared > MAX_MEDIA_BYTES) {
+    clearTimeout(timer)
+    throw new Error(`Media ${(declared / 1048576).toFixed(0)}MB kegedean buat relay ke Postiz (max ${MAX_MEDIA_BYTES / 1048576}MB). Export ulang dengan bitrate lebih rendah.`)
+  }
+
+  let raw
+  try { raw = Buffer.from(await res.arrayBuffer()) } finally { clearTimeout(timer) }
+  if (raw.length > MAX_MEDIA_BYTES) {
+    throw new Error(`Media ${(raw.length / 1048576).toFixed(0)}MB kegedean buat relay ke Postiz (max ${MAX_MEDIA_BYTES / 1048576}MB). Export ulang dengan bitrate lebih rendah.`)
+  }
   const { buf: buffer, changed: brandFixed } = coerceMp4Brand(raw)
 
   let contentType = (res.headers.get('content-type') || '').toLowerCase().split(';')[0].trim()
@@ -286,82 +347,28 @@ function defaultSettings(platform, opts = {}) {
   return { post_type: 'post' }
 }
 
-// Resolve which Postiz channel a post should actually go to, validated against
-// the LIVE integration list. Pure + sync so it can be unit-tested without
-// network. Returns { channelId, platform, healed } or THROWS to fail closed.
-//
-// Three failure modes this defends against:
-//   A. DEAD ID DRIFT — Postiz reissues integration ids on reconnect; the stored
-//      id no longer exists. Self-hosted Postiz, given an unknown id, silently
-//      routes to the account's FALLBACK channel (another persona). Heal by label.
-//   B. WRONG ACCOUNT — id IS live but points to a DIFFERENT account than the
-//      label (e.g. "Ben's post lands on Rio"). A valid id is NOT enough; the
-//      live channel name/username must match the label. Re-bind, else fail closed.
-//   C. STALE PLATFORM — id+label fine, but the stored platform is wrong (Ben was
-//      attached as IG, but the channel is the TikTok the user actually posts to).
-//      A wrong platform makes defaultSettings() emit the wrong block → Postiz 400
-//      ("gak mau upload"). The live channel's platform is AUTHORITATIVE.
-export function resolveChannelBinding({ channelId, channelLabel, platform, liveChannels }) {
-  const norm = (v) => String(v || '').toLowerCase().replace(/^@/, '').trim()
-  // Fuzzy label match: exact OR substring containment. Handles common drift
-  // scenarios like display name changes ('lyra.nala' → 'Lyra Nala') without
-  // breaking the strict id-first validation path. Only used as a HEAL fallback.
-  const labelMatches = (c) => {
-    const nl = norm(channelLabel)
-    if (!nl) return false
-    return [c.username, c.name].some((v) => {
-      const nv = norm(v)
-      return nv === nl || (nv.length >= 3 && nl.length >= 3 && (nv.includes(nl) || nl.includes(nv)))
-    })
-  }
-  if (!liveChannels || !liveChannels.length) return { channelId, platform, healed: false } // can't validate — don't block
-  let healed = false
-  let match = liveChannels.find((c) => String(c.id) === String(channelId))
-
-  // CASE A — id not found live: heal by label.
-  if (!match && channelLabel) {
-    match = liveChannels.find(labelMatches)
-    if (match) {
-      console.warn(`[postiz] channel id drift HEALED (dead id): "${channelId}" → "${match.id}" via label "${channelLabel}"`)
-      channelId = String(match.id); healed = true
-    }
-  }
-
-  // CASE B — id live but WRONG account.
-  if (match && channelLabel && !labelMatches(match)) {
-    const correct = liveChannels.find(labelMatches)
-    if (correct) {
-      console.warn(`[postiz] WRONG-ACCOUNT binding HEALED: id "${channelId}" = "${match.name || match.username}" but label is "${channelLabel}" → switching to "${correct.id}"`)
-      channelId = String(correct.id); match = correct; healed = true
-    } else {
-      throw new Error(`Binding salah: channel id "${channelId}" di Postiz itu akun "${match.name || match.username}", BUKAN "${channelLabel}". Gak ada channel "${channelLabel}" yang cocok — post DIBATALIN biar gak nyasar ke akun lain. Klik 🔄 Sync Channels di /posting lalu re-link persona.`)
-    }
-  }
-
-  if (!match) {
-    throw new Error(`Channel "${channelLabel || channelId}" gak ketemu di Postiz (channel ID drift / channel ke-disconnect). Klik 🔄 Sync Channels di /posting lalu re-link persona ke channel yang bener — post DIBATALIN biar gak nyasar ke akun lain.`)
-  }
-
-  // CASE C — platform is authoritative from the live channel.
-  if (match.platform) platform = match.platform
-  return { channelId, platform, healed }
-}
-
 // ── Create post ─────────────────────────────────────────────────────
+// Returns { response, binding } — `binding` tells the caller which channel the
+// post ACTUALLY went to, so a healed id can be persisted instead of re-healed
+// (and re-risked) on every future post.
 export async function createPostizPost({ creds, channelId, channelLabel, content, mediaUrl, scheduledFor, platform, tiktokAutoAddMusic }) {
   if (!channelId) throw new Error('channelId kosong — persona belum link ke Postiz channel')
   normCreds(creds) // throws if missing — fail fast before downloading media
 
-  // Validate + heal the channel binding against the live integration list.
-  // See resolveChannelBinding() for the three failure modes it defends against.
+  // Validate the channel binding against the LIVE integration list, with retry.
+  // If we still can't get the list, resolveChannelBinding FAILS CLOSED — an
+  // unverified id is exactly how a post ends up on someone else's account.
   let liveChannels = []
-  try { liveChannels = await fetchPostizChannels(creds) } catch (e) { /* network down — skip validation rather than block a good post */ }
-  ;({ channelId, platform } = resolveChannelBinding({ channelId, channelLabel, platform, liveChannels }))
-
-  if (!platform) {
-    const ch = liveChannels.find((c) => String(c.id) === String(channelId))
-    if (ch) platform = ch.platform || ch.raw?.providerIdentifier || ''
+  let liveChannelsError = null
+  try {
+    liveChannels = await withRetry(() => fetchPostizChannels(creds), { label: 'fetchChannels' })
+  } catch (e) {
+    liveChannelsError = String(e?.message || e).slice(0, 200)
   }
+  const binding = resolveChannelBinding({ channelId, channelLabel, platform, liveChannels, liveChannelsError })
+  channelId = binding.channelId
+  platform = binding.platform
+
   // Authoritative fallback — hit the integration directly for its real
   // providerIdentifier. Without a resolved platform, defaultSettings() emits a
   // GENERIC settings block (no __type / no tiktok fields), and Postiz then 400s
@@ -385,23 +392,20 @@ export async function createPostizPost({ creds, channelId, channelLabel, content
     if (!SUPPORTED.has(media.contentType)) {
       throw new Error(`File type "${media.contentType}" gak didukung Postiz/sosmed. Kemungkinan ini WebM dari export "Draft (fast)" — export ulang pakai MP4 (tombol "Export → QC (MP4)") lalu post lagi.`)
     }
-    try {
-      const uploaded = await uploadToPostiz(creds, media)
-      imageField = [{
-        id: String(uploaded.id),
-        path: uploaded.path || uploaded.raw?.url || '',
-        name: uploaded.raw?.name || media.name,
-      }]
-    } catch (uploadErr) {
-      console.warn('[postiz] Upload endpoint failed, falling back to direct media URL:', uploadErr.message)
-      // Fallback: if /upload fails (e.g. 502 Bad Gateway / Cloudflare proxy body size limit on 15MB+ videos),
-      // pass the public R2 media URL directly to Postiz.
-      imageField = [{
-        url: mediaUrl,
-        path: mediaUrl,
-        name: media.name,
-      }]
-    }
+    // NO external-URL fallback here. Postiz only accepts media it hosts (see the
+    // header comment), so passing the raw R2 URL produced a post that Postiz
+    // ACCEPTED and we marked 'posted' — but that never actually published. A
+    // hard failure with a retryable error is strictly better than a silent one.
+    // Only 2 attempts: each one re-uploads the whole buffer, and stacking 3 of
+    // them on top of the download + channel-fetch retries can blow the 60s
+    // budget and get the function killed mid-flight (which is what stranded rows
+    // in 'posting'). Failing cleanly at 2 is better than being killed at 3.
+    const uploaded = await withRetry(() => uploadToPostiz(creds, media), { label: 'upload', tries: 2, baseMs: 1200 })
+    imageField = [{
+      id: String(uploaded.id),
+      path: uploaded.path || uploaded.raw?.url || '',
+      name: uploaded.raw?.name || media.name,
+    }]
   }
 
   const isScheduled = !!scheduledFor
@@ -419,16 +423,23 @@ export async function createPostizPost({ creds, channelId, channelLabel, content
     }],
   }
 
-  // Diagnostic log — shows up in Vercel function logs. Use when debugging why
-  // TikTok features (autoAddMusic, etc) aren't taking effect — we can confirm
-  // the body we send matches Postiz's documented schema.
-  console.log('[postiz] sending body:', JSON.stringify(body, null, 2))
+  // Gated: this dumps the full caption text on every post. Set POSTIZ_DEBUG=1
+  // when you need to confirm the outgoing schema (e.g. TikTok settings block).
+  if (process.env.POSTIZ_DEBUG) {
+    console.log('[postiz] sending body:', JSON.stringify(body, null, 2))
+  } else {
+    console.log(`[postiz] posting → channel=${channelId} platform=${platform || '?'} media=${imageField.length ? 'yes' : 'no'} scheduled=${isScheduled}`)
+  }
 
   const paths = ['/public/v1/posts', '/api/public/v1/posts', '/api/v1/posts']
   let lastErr
   for (const path of paths) {
     try {
-      return await postizJson(creds, path, { method: 'POST', body: JSON.stringify(body) })
+      const response = await withRetry(
+        () => postizJson(creds, path, { method: 'POST', body: JSON.stringify(body) }),
+        { label: `POST ${path}` }
+      )
+      return { response, binding }
     } catch (e) {
       lastErr = e
       if (e.status && e.status !== 404) {

@@ -42,7 +42,10 @@ export async function GET(req) {
   const admin = createAdminClient()
   let credsRow
   if (accountId) {
-    const { data } = await admin.from('postiz_accounts').select('url, api_key').eq('id', accountId).maybeSingle()
+    // Workspace-scoped: target_postiz_account_id is client-written and RLS does
+    // not verify it belongs to this workspace. See /api/postiz/post for detail.
+    const { data } = await admin.from('postiz_accounts').select('url, api_key')
+      .eq('id', accountId).eq('workspace_id', sp.workspace_id).maybeSingle()
     credsRow = data
   }
   if (!credsRow) {

@@ -5,6 +5,9 @@ import { createPostizPost } from '@/lib/postiz'
 import { getActiveWorkspace } from '@/lib/workspace'
 
 // Vercel Pro: allow up to 60s — butuh waktu buat download media + relay-upload.
+// lib/postiz.js sizes its own download/upload timeouts to fail cleanly inside
+// this budget; anything that still dies is recovered by /api/cron/reconcile-posts.
+export const runtime = 'nodejs' // lib/postiz.js uses Buffer
 export const maxDuration = 60
 
 // POST /api/postiz/post — actually push a scheduled_posts row to Postiz.
@@ -26,7 +29,7 @@ export async function POST(req) {
   const wsId = await getActiveWorkspace(supabase, user)
   const { data: sp, error } = await supabase
     .from('scheduled_posts')
-    .select('*, results(id, type, url, label), personas(id, name, postiz_channel_id, postiz_platform, postiz_account_id, persona_channels(channel_id, channel_label, platform, postiz_account_id, is_default))')
+    .select('*, results(id, type, url, label), personas(id, name, postiz_channel_id, postiz_channel_label, postiz_platform, postiz_account_id, persona_channels(id, channel_id, channel_label, username, platform, postiz_account_id, is_default))')
     .eq('id', scheduled_post_id).eq('workspace_id', wsId).single()
   if (error || !sp) return NextResponse.json({ ok: false, error: 'scheduled post not found' }, { status: 404 })
 
@@ -47,14 +50,25 @@ export async function POST(req) {
   const platform = sp.target_platform || defaultLink?.platform || sp.personas?.postiz_platform || null
   const accountId = sp.target_postiz_account_id || defaultLink?.postiz_account_id || sp.personas?.postiz_account_id
   // Channel label for the drift / wrong-account guards in createPostizPost.
-  // When target_channel_id is set (mirror mode), ONLY use target_channel_label.
-  // Falling back to the persona's default link label would cross-contaminate:
-  // the persona's linked channel label ≠ the mirror target channel, causing
-  // resolveChannelBinding to false-positive WRONG_ACCOUNT and block the post.
-  // When no target override, fall back to persona_channels label (normal flow).
+  // Without a label those guards are skipped entirely and a stale id can publish
+  // to another persona's account — so we work harder to produce one.
+  //
+  // In mirror mode we must NOT fall back to the persona's DEFAULT link label:
+  // that label describes a different channel and would false-positive as
+  // WRONG_ACCOUNT. But we can safely fall back to the link for THIS EXACT
+  // channel_id — it is the same channel, just labelled in another table.
+  const linkForTarget = sp.target_channel_id
+    ? personaLinks.find((l) => String(l.channel_id) === String(sp.target_channel_id))
+    : null
+  // personas.postiz_channel_label describes the LEGACY personas.postiz_channel_id,
+  // so it is only a valid label when we are actually falling back to that legacy
+  // id. Using it alongside a persona_channels link would describe a different
+  // channel and could trip the wrong-account guard into re-binding the post.
   const channelLabel = sp.target_channel_id
-    ? (sp.target_channel_label || null)
-    : (defaultLink?.channel_label || null)
+    ? (sp.target_channel_label || linkForTarget?.channel_label || linkForTarget?.username || null)
+    : defaultLink
+      ? (defaultLink.channel_label || defaultLink.username || null)
+      : (sp.personas?.postiz_channel_label || null)
   if (!channelId) {
     return NextResponse.json({ ok: false, error: `Belum ada target channel. Pilih channel di Schedule modal atau link persona ke channel di /posting.` }, { status: 400 })
   }
@@ -70,7 +84,14 @@ export async function POST(req) {
   // first account (single-Postiz legacy behaviour).
   let credsRow
   if (accountId) {
-    const { data } = await admin.from('postiz_accounts').select('url, api_key').eq('id', accountId).maybeSingle()
+    // MUST be scoped to this row's workspace. target_postiz_account_id is written
+    // by the client on insert, and RLS on scheduled_posts only checks workspace
+    // membership — it never validates that the referenced postiz_account belongs
+    // to the same workspace. Without this filter, a member of workspace A could
+    // insert a row pointing at workspace B's account id and make the server
+    // publish with B's credentials, onto B's social accounts.
+    const { data } = await admin.from('postiz_accounts').select('url, api_key')
+      .eq('id', accountId).eq('workspace_id', sp.workspace_id).maybeSingle()
     credsRow = data
   }
   if (!credsRow) {
@@ -88,7 +109,7 @@ export async function POST(req) {
   await admin.from('scheduled_posts').update({ status: 'posting', error: null }).eq('id', sp.id)
 
   try {
-    const postizResult = await createPostizPost({
+    const { response: postizResult, binding } = await createPostizPost({
       creds: { url: credsRow.url, key: credsRow.api_key },
       channelId,
       channelLabel,
@@ -107,14 +128,53 @@ export async function POST(req) {
       || null
 
     const isScheduled = !!sp.scheduled_for
-    await admin.from('scheduled_posts').update({
+    const baseUpdate = {
       status: isScheduled ? 'scheduled' : 'posted',
       external_id: externalId,
       external_response: postizResult,
       posted_at: isScheduled ? null : new Date().toISOString(),
       error: null,
+    }
+    // Record where the post ACTUALLY went. Previously a healed binding was only
+    // fixed in memory, so the row kept claiming a channel it never used.
+    const { error: updErr } = await admin.from('scheduled_posts').update({
+      ...baseUpdate,
+      target_channel_id: binding.channelId,
+      target_channel_label: binding.verifiedLabel || channelLabel || null,
+      target_platform: binding.platform || platform || null,
     }).eq('id', sp.id)
-    return NextResponse.json({ ok: true, result: postizResult, scheduled: isScheduled })
+    // The post is already live at this point, so a failed status write must not
+    // leave the row looking stuck. Most likely cause: migration 0031 (which adds
+    // target_channel_label) hasn't been applied yet — retry without the new
+    // column so the row still lands on 'posted' instead of stranding in 'posting'.
+    if (updErr) {
+      console.warn('[postiz] status update failed, retrying without new columns:', updErr.message)
+      await admin.from('scheduled_posts').update(baseUpdate).eq('id', sp.id)
+    }
+
+    // Persist the heal so the NEXT post doesn't repeat the same lookup and take
+    // the same wrong-account risk. Best-effort: a unique (persona_id, channel_id)
+    // collision just means the correct link already exists.
+    if (binding.healed && linkForTarget?.id) {
+      const { error: healErr } = await admin.from('persona_channels').update({
+        channel_id: binding.channelId,
+        channel_label: binding.verifiedLabel || linkForTarget.channel_label,
+        platform: binding.platform || linkForTarget.platform,
+      }).eq('id', linkForTarget.id)
+      if (healErr) console.warn('[postiz] could not persist healed binding:', healErr.message)
+    } else if (binding.healed && !sp.target_channel_id && defaultLink?.id) {
+      const { error: healErr } = await admin.from('persona_channels').update({
+        channel_id: binding.channelId,
+        channel_label: binding.verifiedLabel || defaultLink.channel_label,
+        platform: binding.platform || defaultLink.platform,
+      }).eq('id', defaultLink.id)
+      if (healErr) console.warn('[postiz] could not persist healed binding:', healErr.message)
+    }
+    if (binding.unverified) {
+      console.warn(`[postiz] post ${sp.id} sent to channel ${binding.channelId} WITHOUT a label to verify identity against.`)
+    }
+
+    return NextResponse.json({ ok: true, result: postizResult, scheduled: isScheduled, binding })
   } catch (e) {
     const msg = String(e?.message || e).slice(0, 1000)
     await admin.from('scheduled_posts').update({ status: 'failed', error: msg }).eq('id', sp.id)

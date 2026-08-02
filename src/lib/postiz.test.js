@@ -1,78 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { sniffMime, coerceMp4Brand, resolveChannelBinding } from './postiz.js'
+import { sniffMime, coerceMp4Brand } from './postiz.js'
 
-describe('resolveChannelBinding — channel drift / wrong-account / stale-platform guard', () => {
-  const BEN_TT = { id: 'tt-ben', name: 'Ben Official', username: 'ben.official', platform: 'tiktok' }
-  const RIO_IG = { id: 'ig-rio', name: 'riocollagetech', username: 'riocollagetech', platform: 'instagram' }
-  const live = [BEN_TT, RIO_IG]
-
-  it('passes through when the id is live and the label matches', () => {
-    const out = resolveChannelBinding({ channelId: 'tt-ben', channelLabel: 'Ben Official', platform: 'tiktok', liveChannels: live })
-    expect(out.channelId).toBe('tt-ben')
-    expect(out.healed).toBe(false)
-  })
-
-  it('CASE C: live channel platform OVERRIDES a stale stored platform (IG→TikTok)', () => {
-    // Ben attached as IG in the row, but the channel he posts to is TikTok.
-    const out = resolveChannelBinding({ channelId: 'tt-ben', channelLabel: 'Ben Official', platform: 'instagram', liveChannels: live })
-    expect(out.platform).toBe('tiktok') // authoritative from live channel — fixes "gak mau upload"
-  })
-
-  it('CASE A: heals a DEAD id by matching the label', () => {
-    const out = resolveChannelBinding({ channelId: 'old-dead-id', channelLabel: 'ben.official', platform: null, liveChannels: live })
-    expect(out.channelId).toBe('tt-ben')
-    expect(out.platform).toBe('tiktok')
-    expect(out.healed).toBe(true)
-  })
-
-  it('CASE B: re-binds a VALID-but-wrong-account id to the channel matching the label', () => {
-    // Ben's row points at Rio's (valid) IG id — must NOT post there.
-    const out = resolveChannelBinding({ channelId: 'ig-rio', channelLabel: 'Ben Official', platform: 'instagram', liveChannels: live })
-    expect(out.channelId).toBe('tt-ben') // switched to Ben's real channel
-    expect(out.platform).toBe('tiktok')
-    expect(out.healed).toBe(true)
-  })
-
-  it('CASE B: FAILS CLOSED when id is wrong account and no channel matches the label', () => {
-    expect(() => resolveChannelBinding({ channelId: 'ig-rio', channelLabel: 'NonExistent Persona', platform: 'instagram', liveChannels: live }))
-      .toThrow(/Binding salah/)
-  })
-
-  it('throws when a dead id cannot be healed (label matches nothing)', () => {
-    expect(() => resolveChannelBinding({ channelId: 'ghost', channelLabel: 'ghost-handle', platform: null, liveChannels: live }))
-      .toThrow(/gak ketemu di Postiz/)
-  })
-
-  it('does NOT block when the live list is empty (network down — skip validation)', () => {
-    const out = resolveChannelBinding({ channelId: 'tt-ben', channelLabel: 'whatever', platform: 'tiktok', liveChannels: [] })
-    expect(out.channelId).toBe('tt-ben')
-  })
-
-  it('does NOT enforce label match when no label is provided (best-effort id-only)', () => {
-    const out = resolveChannelBinding({ channelId: 'ig-rio', channelLabel: null, platform: null, liveChannels: live })
-    expect(out.channelId).toBe('ig-rio')
-    expect(out.platform).toBe('instagram')
-  })
-
-  it('fuzzy: heals when label is a SUBSTRING of channel name (display name drift)', () => {
-    const out = resolveChannelBinding({ channelId: 'old-dead', channelLabel: 'ben', platform: null, liveChannels: live })
-    expect(out.channelId).toBe('tt-ben')
-    expect(out.healed).toBe(true)
-  })
-
-  it('fuzzy: heals when channel username CONTAINS the label', () => {
-    const channels = [{ id: 'ch-1', name: 'Lyra Nala', username: 'lyranarll', platform: 'instagram' }]
-    const out = resolveChannelBinding({ channelId: 'dead-id', channelLabel: 'lyra', platform: null, liveChannels: channels })
-    expect(out.channelId).toBe('ch-1')
-    expect(out.healed).toBe(true)
-  })
-
-  it('fuzzy: does NOT match very short substrings (< 3 chars) to avoid false positives', () => {
-    // 'io' is too short to fuzzy match 'riocollagetech'
-    expect(() => resolveChannelBinding({ channelId: 'dead', channelLabel: 'io', platform: null, liveChannels: live }))
-      .toThrow(/gak ketemu di Postiz/)
-  })
-})
+// Channel-binding tests now live in ./postiz-match.test.js — the logic moved to
+// the pure ./postiz-match.js module so the UI can share the same matcher.
 
 // Build a minimal ftyp box: [size][ftyp][majorBrand][minorVer][...compatible]
 function ftyp(major, compatible = major) {

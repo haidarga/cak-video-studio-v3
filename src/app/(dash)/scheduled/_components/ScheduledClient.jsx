@@ -2,6 +2,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { LazyVideo } from '@/lib/use-lazy-video'
+// Same matcher the server uses in resolveChannelBinding — pure module, safe to
+// import client-side (lib/postiz.js itself is server-only, it touches Buffer).
+import { findChannelByLabel } from '@/lib/postiz-match'
 
 function platformIcon(p) {
   const x = (p || '').toLowerCase()
@@ -40,8 +43,16 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
     let alive = true
     setChannelsLoading(true)
     fetch('/api/postiz/channels').then((r) => r.json()).then((d) => {
-      if (alive && d.ok) setChannels(d.channels)
-      else if (alive) setErr(`Sync channels: ${d.error}`)
+      if (!alive) return
+      if (!d.ok) { setErr(`Sync channels: ${d.error}`); return }
+      setChannels(d.channels)
+      // A partially-fetched list is dangerous now that posting fails closed:
+      // channels from a down account simply won't be there, and their posts
+      // will be refused. Say so instead of silently showing a short list.
+      if (d.account_errors?.length) {
+        setErr(`⚠ ${d.account_errors.length} Postiz account gagal di-sync — channel-nya GAK muncul di list, dan post ke channel itu bakal ditolak sampai koneksinya balik:\n` +
+          d.account_errors.map((a) => `  • ${a.account}: ${a.error}`).join('\n'))
+      }
     }).catch((e) => { if (alive) setErr(`Sync channels: ${e.message}`) })
       .finally(() => { if (alive) setChannelsLoading(false) })
     return () => { alive = false }
@@ -107,6 +118,12 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
     }
   }
 
+  // Accumulate push failures instead of overwriting — a bulk run can fail on
+  // several channels and the user needs to see all of them.
+  function appendErr(line) {
+    setErr((prev) => (prev ? `${prev}\n${line}` : line))
+  }
+
   // Shared between single + bulk: insert N scheduled_posts rows + fire pushes.
   async function insertAndFire(result, scheduledFor, caption, targets) {
     for (const target of targets) {
@@ -128,14 +145,34 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
       }).select('id').single()
       if (error) { setErr(`Insert (${target.name || target.id}): ${error.message}`); continue }
 
-      // Fire-and-forget push; status di-update via realtime sub
+      // Push. Errors MUST surface — they used to be console.error-only, so a
+      // rejected post looked identical to a healthy one (especially for future
+      // -dated rows, where 'scheduled' is both the before and after state).
+      // NOT awaited on purpose — a bulk of 20 would otherwise run serially at up
+      // to 60s each. Errors are pushed into `err` instead of console.error.
+      const label = target.name || target.id
       fetch('/api/postiz/post', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scheduled_post_id: sp.id }),
       }).then(async (res) => {
-        const data = await res.json()
-        if (!data.ok) console.error('Postiz push gagal:', data.error)
-      }).catch((e) => console.error('Postiz push error:', e))
+        const data = await res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}` }))
+        if (!data.ok) appendErr(`❌ ${label}: ${data.error}`)
+      }).catch(async (e) => {
+        // Network/abort — the row is likely stranded. Flip it so the Retry button
+        // appears; /api/cron/reconcile-posts is the backstop if the tab dies first.
+        //
+        // COMPARE-AND-SET, not a blind write: a rejected fetch does NOT mean the
+        // serverless handler stopped — it keeps running up to maxDuration and may
+        // still publish successfully. Guarding on `external_id IS NULL` means we
+        // only ever mark rows that provably never got a Postiz response back, so
+        // we can't stomp a real 'posted' and trick the user into double-posting.
+        appendErr(`❌ ${label}: ${e.message} — post mungkin gak kekirim, cek dulu sebelum Retry`)
+        await supabase.from('scheduled_posts')
+          .update({ status: 'failed', error: `Request putus dari browser: ${String(e.message).slice(0, 300)}` })
+          .eq('id', sp.id)
+          .is('external_id', null)
+          .in('status', ['posting', 'scheduled'])
+      })
     }
   }
 
@@ -191,7 +228,12 @@ export default function ScheduledClient({ workspaceId, userId, initialScheduled,
       <h1 className="text-3xl font-extrabold tracking-tight mb-1">📅 <span className="gradient-text-strong">Scheduled</span></h1>
       <p className="text-sm text-[var(--muted)] mb-6">Approved → Post Now atau jadwalin. Status sync realtime dari Postiz.</p>
 
-      {err && <div className="mb-3 text-xs text-red-400 bg-red-900/20 border border-red-900/40 p-3 rounded">⚠ {err}</div>}
+      {err && (
+        <div className="mb-3 text-xs text-red-400 bg-red-900/20 border border-red-900/40 p-3 rounded whitespace-pre-line">
+          <button onClick={() => setErr('')} className="float-right text-[var(--muted)] hover:text-red-300" aria-label="Tutup error">✕</button>
+          ⚠ {err}
+        </div>
+      )}
 
       {readyToSchedule.length > 0 && (
         <section className="mb-7">
@@ -801,14 +843,21 @@ function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubm
         targets = links.map(l => {
           // Strict ID match first
           let ch = channels.find(c => String(c.id) === String(l.channel_id))
-          // Only fuzzy-heal if strict match failed AND we have a label
-          if (!ch && l.channel_label) {
-            const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, '')
-            const sl = norm(l.channel_label)
-            if (sl.length >= 4) { // min 4 chars to prevent false positives like 'ig', 'tt'
-              ch = channels.find(c => norm(c.name) === sl || sl === norm(c.username || ''))
-                || channels.find(c => norm(c.name).startsWith(sl) || sl.startsWith(norm(c.name || '').slice(0,6)))
-            }
+          // Only heal if strict match failed AND we have a label. Uses the SAME
+          // matcher the server uses at publish time — this preview used to run a
+          // different algorithm, so it could show a confident green "→ Ben" that
+          // the server then re-bound elsewhere (or refused).
+          if (!ch && (l.channel_label || l.username)) {
+            // Scope to the link's own Postiz account before matching. The channel
+            // list here is MERGED across every account in the workspace, so two
+            // unrelated accounts can both fuzzy-match one label and the matcher
+            // (correctly) refuses to guess — dropping a route that is not
+            // actually ambiguous. The server only ever validates against the one
+            // relevant account, so mirror that scope here.
+            const scoped = l.postiz_account_id
+              ? channels.filter((c) => String(c.account_id) === String(l.postiz_account_id))
+              : channels
+            ch = findChannelByLabel(scoped.length ? scoped : channels, l.channel_label || l.username).match
           }
           if (!ch) return null
           return { id: ch.id, platform: ch.platform, name: ch.name, account_id: ch.account_id || l.postiz_account_id || null }
@@ -817,9 +866,7 @@ function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubm
         const personaChId = r.personas?.postiz_channel_id
         let ch = personaChId ? channels.find((c) => String(c.id) === String(personaChId)) : null
         if (!ch && r.personas?.postiz_channel_label) {
-          const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, '')
-          const sl = norm(r.personas.postiz_channel_label)
-          if (sl.length >= 4) ch = channels.find(c => norm(c.name) === sl)
+          ch = findChannelByLabel(channels, r.personas.postiz_channel_label).match
         }
         if (ch) targets = [{ id: ch.id, platform: ch.platform, name: ch.name, account_id: ch.account_id || null }]
       }
