@@ -99,11 +99,24 @@ export async function POST(req) {
       match_type: matched ? 'auto' : 'unmapped',
     }
 
-    // Auto-match brand by name
+    // Auto-match brand by name. Caketing derives brand_name from the batch's
+    // client, so it's empty whenever a batch has no client attached — and even
+    // when present it only matches if the Caketing client name is spelled
+    // exactly like the Studio brand.
     const brandName = item.brand_name || ''
-    const matchedBrand = brandName
+    let matchedBrand = brandName
       ? brandsByName.get(brandName.toLowerCase().trim())
       : null
+
+    // FALLBACK — infer the brand from the persona we just matched. A persona
+    // belongs to exactly one brand, so a naskah for "Fajar Sondang" is
+    // unambiguously that persona's brand regardless of what the batch's client
+    // was called. Without this, an unmatched name left brand_id NULL and the job
+    // showed up in EVERY brand's Inbox — where executing it generated with the
+    // wrong brand's personas.
+    if (!matchedBrand && matched?.brand_id) {
+      matchedBrand = { id: matched.brand_id }
+    }
 
     jobRows.push({
       workspace_id: wsId,

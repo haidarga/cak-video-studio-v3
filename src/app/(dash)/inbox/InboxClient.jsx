@@ -286,7 +286,7 @@ const STYLE_OPTIONS = [
   { id: 'gopro_hero12_action', label: '🏄 GoPro Action POV', desc: 'Wide-angle action camera, immersive movement' },
 ]
 
-export default function InboxClient({ jobs: initialJobs, personaMap, workspaceId }) {
+export default function InboxClient({ jobs: initialJobs, personaMap, workspaceId, hiddenByBrand = 0, activeBrandName = null }) {
   const [jobs, setJobs] = useState(initialJobs)
   const [filter, setFilter] = useState('all') // 'all' | 'pending' | 'done'
   const [activeModalBatch, setActiveModalBatch] = useState(null)
@@ -421,6 +421,10 @@ export default function InboxClient({ jobs: initialJobs, personaMap, workspaceId
           </h1>
           <p className="text-xs text-[var(--muted)] mt-0.5">
             Naskah pushed from Caketing — grouped by push batch & ready for production
+            {activeBrandName && <> · difilter buat brand <span className="text-[var(--accent)] font-semibold">{activeBrandName}</span></>}
+            {hiddenByBrand > 0 && (
+              <> · <span className="text-amber-400">{hiddenByBrand} job brand lain disembunyiin</span></>
+            )}
           </p>
         </div>
         {/* Filters */}
