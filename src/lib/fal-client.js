@@ -173,6 +173,9 @@ async function falRunOnce(model, input, { onProgress, maxWaitMs, workspaceId, du
 
   return await new Promise((resolve, reject) => {
     let settled = false
+    // Consecutive polls where fal reported a terminal status but handed back no
+    // media URL. Used to break out instead of looping to the hard timeout.
+    let terminalNoUrlTicks = 0
     let channel = null
     let fallbackInterval = null
     let timeoutHandle = null
@@ -282,8 +285,38 @@ async function falRunOnce(model, input, { onProgress, maxWaitMs, workspaceId, du
             : { request_id: requestId })
           return
         }
+        // fal reported the job FAILED. This used to fall through to the progress
+        // line below and render as "pending (Ns)" until the 15/20-min timeout,
+        // so the user waited out the whole window and then got a generic
+        // "timeout" instead of the real reason.
+        if (j.ok && j.status === 'failed') {
+          settled = true; cleanup()
+          reject(new Error(j.error || 'fal job failed'))
+          return
+        }
+
         const falState = j.fal_status || 'pending'
         const queuePos = j.queue_position != null ? ` · #${j.queue_position} in queue` : ''
+
+        // TERMINAL BUT URL-LESS. fal says it's done, yet nothing extractable
+        // came back. Previously this was indistinguishable from "still queued":
+        // the status text just kept updating every 3s for 15 minutes. Give it a
+        // few ticks (the result can lag the status by a beat) and then fail with
+        // something actionable instead of silently burning the timeout.
+        if (/^(COMPLETED|OK|SUCCESS)$/i.test(String(falState))) {
+          terminalNoUrlTicks++
+          if (terminalNoUrlTicks >= 4) {
+            settled = true; cleanup()
+            reject(new Error(
+              `fal bilang ${falState} tapi gak ngasih URL media (request_id=${requestId}). ` +
+              `Kemungkinan bentuk payload model ini belum dikenali. Coba Re-gen; kalau kejadian terus, laporin model-nya.`
+            ))
+            return
+          }
+        } else {
+          terminalNoUrlTicks = 0
+        }
+
         onProgress?.(`${falState}${queuePos} (${elapsed}s)`)
       } catch {
         onProgress?.(`waiting (${elapsed}s)`)

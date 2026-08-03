@@ -37,7 +37,7 @@ export default async function GeneratePage({ searchParams }) {
 
   const personasQuery = supabase
     .from('personas')
-    .select('id, name, username, avatar_url, role_label, postiz_channel_id, voice_id, voice_name, brand_id, persona_refs(refs(id, fal_url, label, knowledge, kind))')
+    .select('id, name, username, avatar_url, role_label, character_prompt, postiz_channel_id, voice_id, voice_name, brand_id, persona_refs(refs(id, fal_url, label, knowledge, kind))')
     .eq('workspace_id', ws.id)
   if (ws.active_brand_id) {
     personasQuery.eq('brand_id', ws.active_brand_id)

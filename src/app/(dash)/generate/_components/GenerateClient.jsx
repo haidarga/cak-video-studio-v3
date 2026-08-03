@@ -72,7 +72,7 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
         pendingPersonas = null
         const { data } = await supabase
           .from('personas')
-          .select('id, name, username, avatar_url, role_label, postiz_channel_id, voice_id, voice_name, persona_refs(refs(id, fal_url, label, knowledge, kind))')
+          .select('id, name, username, avatar_url, role_label, character_prompt, postiz_channel_id, voice_id, voice_name, persona_refs(refs(id, fal_url, label, knowledge, kind))')
           .eq('workspace_id', workspaceId).order('created_at', { ascending: false })
         if (data) setPersonas(data)
       }, 400)
@@ -1158,7 +1158,14 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
     inFlightRef.current.add(imgKey)
     patchShot(idx, { image: { status: 'generating' } })
     try {
-      const productKnowledge = selectedRefs.map((r) => String(r.knowledge || '').trim()).filter(Boolean).join('\n')
+      // Honour the per-shot ref ✗ toggles. genVideoForShot has always applied
+      // disabledRefIds; the image path ignored them entirely — so the chip row
+      // and the "🎯 Refs: 2/3" counter sitting right above the Gen Image button
+      // were lying, and a reference the user explicitly switched off was still
+      // sent as Image 1 with the "character IDENTITY only" role line.
+      const disabled = new Set(shot.disabledRefIds || [])
+      const enabledRefs = selectedRefs.filter((r) => !disabled.has(r.id))
+      const productKnowledge = enabledRefs.map((r) => String(r.knowledge || '').trim()).filter(Boolean).join('\n')
       // Ref preprocessing: product refs → strip background (L4 attention boost);
       // character/identity refs → DEGRADE for lo-fi presets (Law #2: a clean ref
       // anchors clean output regardless of "cheap Samsung A13" tokens — degrading
@@ -1167,12 +1174,21 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       // Character-first ordering — see sortRefsCharacterFirst. orderedSelected
       // feeds BOTH the url array and the IMAGE ROLES lines so numbering stays
       // in sync.
-      const orderedSelected = sortRefsCharacterFirst(selectedRefs)
+      const orderedSelected = sortRefsCharacterFirst(enabledRefs)
       const characterProductUrls = (await Promise.all(orderedSelected.map((r) => {
         if (r.kind === 'product' && !globalConfig.skipProduct && globalConfig.cleanProductBg !== false) {
           return cleanProductBg(r.fal_url, null, (m, i) => falRun(m, i, { workspaceId }))
         }
-        if (r.kind !== 'product' && globalConfig.degradeRefs !== false) {
+        // NEVER degrade a CHARACTER reference. Degrading exists to make refs
+        // look like the camera preset (phone-grade, grainy) so the output reads
+        // as UGC — but samsung_a13_candid, the default UGC preset, maps to
+        // 'heavy' = 480px max, JPEG q0.45, ±40 RGB noise. Feeding a 480px
+        // grain-bombed face to a pixel-lock edit model destroys the identity it
+        // is supposed to lock onto, which is exactly the "karakternya keganti
+        // dan ngawur" report. Backgrounds and style refs still get the
+        // treatment; the face stays sharp.
+        const isCharacterRef = !r.kind || r.kind === 'character'
+        if (!isCharacterRef && r.kind !== 'product' && globalConfig.degradeRefs !== false) {
           return degradeRefUrl(r.fal_url, _presetId, uploadBlob)
         }
         return Promise.resolve(r.fal_url)
@@ -1194,7 +1210,7 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       // DROP the style-ref IMAGES entirely — the preset's aesthetic still rides
       // in via the L1 camera tokens (device/lighting/look), just without faces.
       const isPixelLockEdit = /edit/i.test(globalConfig.imgModel || '')
-      const hasCharacterRef = selectedRefs.some((r) => r?.kind !== 'product' && r?.kind !== 'background' && r?.fal_url)
+      const hasCharacterRef = enabledRefs.some((r) => r?.kind !== 'product' && r?.kind !== 'background' && r?.fal_url)
       if (isPixelLockEdit && hasCharacterRef && styleUrls.length) {
         console.warn(`[gen] dropping ${styleUrls.length} style-ref image(s) for edit model "${globalConfig.imgModel}" to protect character identity (style still applied via camera preset tokens)`)
         styleUrls = []

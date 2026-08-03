@@ -22,6 +22,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { candidateFalPaths } from '@/lib/fal-paths'
+import { extractFalUrl } from '@/lib/fal-payload'
 
 export const runtime = 'nodejs'
 
@@ -78,14 +79,15 @@ export async function GET(req) {
     const fullRes = await fetch(rUrl, { headers: { 'Authorization': `Key ${falKey}` }, cache: 'no-store' })
     if (!fullRes.ok) return null
     const fullData = await fullRes.json().catch(() => ({}))
-    const videoUrl =
-      fullData?.video?.url ||
-      fullData?.video_url ||
-      fullData?.output?.video?.url ||
-      fullData?.output?.url ||
-      fullData?.url ||
-      (Array.isArray(fullData?.videos) && fullData.videos[0]?.url) ||
-      null
+    // Uses the SHARED extractor. The inline chain that used to live here only
+    // knew VIDEO shapes — no images[], no image.url, no bare-string video. This
+    // endpoint is the ONLY completion path for gpt-image-2 (the one image model
+    // routed through polling instead of the sync path), and gpt-image-2 returns
+    // images[0].url. So the poll was structurally incapable of ever seeing its
+    // own result: it kept returning status:'queued' with fal_status:'COMPLETED'
+    // every 3s until the 15-minute timeout. That is the "COMPLETED (54s) but
+    // still loading" card.
+    const videoUrl = extractFalUrl(fullData)
     return videoUrl ? { videoUrl, raw: fullData } : null
   }
 
