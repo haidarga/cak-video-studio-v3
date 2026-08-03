@@ -1592,7 +1592,10 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
       // Push to variants — every re-gen appends, user can switch between them
       // via the picker UI. video.url stays mirror of the active variant.
       patchShot(idx, (prev) => {
-        const variants = [...(prev.video_variants || []), { url: videoUrl, result_id: row.id, at: Date.now() }]
+        // poster = the image this video was generated FROM. Free, already
+        // cached in the browser, and visually identical to frame 0 — which lets
+        // the thumbnail strip render without downloading the MP4 at all.
+        const variants = [...(prev.video_variants || []), { url: videoUrl, result_id: row.id, at: Date.now(), poster: shot.image?.url || null }]
         return {
           video: { status: 'done', url: videoUrl, result_id: row.id },
           video_variants: variants,
@@ -2700,7 +2703,7 @@ function ShotEditor({ shot, idx, mode = 'shots', maxDuration = 15, requiresImage
                     <button key={r.id} type="button" onClick={() => onToggleRef?.(r.id)}
                       title={`${r.label || 'unlabeled'}${off ? ' (excluded)' : ''} — klik toggle`}
                       className={`relative w-7 h-7 rounded overflow-hidden border ${off ? 'border-[var(--border)] opacity-40' : 'border-[var(--accent)]'}`}>
-                      <img src={r.fal_url} alt="" className="w-full h-full object-cover" />
+                      <img src={r.fal_url} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
                       {off && (
                         <div className="absolute inset-0 bg-black/60 flex items-center justify-center text-white text-[11px] font-bold">✕</div>
                       )}
@@ -2847,7 +2850,15 @@ function VariantStrip({ variants, activeIdx, onPick, kind }) {
             className={`relative flex-shrink-0 w-14 h-14 rounded overflow-hidden border-2 transition-all ${isActive ? 'border-[var(--accent)] ring-1 ring-[var(--accent)]' : 'border-[var(--border)] opacity-60 hover:opacity-100'}`}
             title={`Variant ${i + 1}${isActive ? ' (active)' : ''}`}>
             {kind === 'video' ? (
-              <video src={v.url} muted preload="metadata" className="w-full h-full object-cover pointer-events-none" />
+              // A 56px thumbnail must never cost a video download. fal MP4s have
+              // no faststart atom (their moov box sits at the END of the file),
+              // so preload="metadata" made the browser fetch essentially the
+              // WHOLE mp4 just to read the duration — ten variants meant ten
+              // full downloads for one thumbnail strip. poster renders the
+              // source image instead; preload="none" fetches zero bytes.
+              v.poster
+                ? <img src={v.poster} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
+                : <video src={v.url} muted preload="none" className="w-full h-full object-cover pointer-events-none" />
             ) : (
               <img src={v.url} alt="" loading="lazy" className="w-full h-full object-cover" />
             )}
@@ -2914,7 +2925,15 @@ function MediaGallery({ shot, onPickImage, onPickVideo, onSetMediaView }) {
                   onClick={() => { onPickVideo(i); if (onSetMediaView) onSetMediaView('video') }}
                   className={`relative flex-shrink-0 w-14 h-14 rounded overflow-hidden border-2 transition-all ${isActive && shot.mediaView !== 'image' ? 'border-[var(--accent)] ring-1 ring-[var(--accent)]' : 'border-[var(--border)] opacity-60 hover:opacity-100'}`}
                   title={`Video ${i + 1}${isActive ? ' (active)' : ''}`}>
-                  <video src={v.url} muted preload="metadata" className="w-full h-full object-cover pointer-events-none" />
+                  // A 56px thumbnail must never cost a video download. fal MP4s have
+              // no faststart atom (their moov box sits at the END of the file),
+              // so preload="metadata" made the browser fetch essentially the
+              // WHOLE mp4 just to read the duration — ten variants meant ten
+              // full downloads for one thumbnail strip. poster renders the
+              // source image instead; preload="none" fetches zero bytes.
+              v.poster
+                ? <img src={v.poster} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
+                : <video src={v.url} muted preload="none" className="w-full h-full object-cover pointer-events-none" />
                   <span className="absolute top-0 left-0 text-[8px] bg-black/70 text-white px-1 rounded-br font-bold">{i + 1}</span>
                 </button>
               )
@@ -3062,7 +3081,7 @@ function StoryboardEditor({ shot, idx, ar, maxDuration = 15, requiresImageForVid
                     <button key={r.id} type="button" onClick={() => onToggleRef?.(r.id)}
                       title={`${r.label || 'unlabeled'}${off ? ' (excluded)' : ''} — klik toggle`}
                       className={`relative w-7 h-7 rounded overflow-hidden border ${off ? 'border-[var(--border)] opacity-40' : 'border-[var(--accent)]'}`}>
-                      <img src={r.fal_url} alt="" className="w-full h-full object-cover" />
+                      <img src={r.fal_url} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
                       {off && (
                         <div className="absolute inset-0 bg-black/60 flex items-center justify-center text-white text-[11px] font-bold">✕</div>
                       )}
@@ -3288,7 +3307,7 @@ function RefsPicker({ personaOwnRefs, workspaceRefs, showWorkspace, onToggleShow
       <button onClick={() => onToggle(r.id)} type="button"
         className={`relative w-[88px] rounded border ${on ? 'border-[var(--accent)] ring-1 ring-[var(--accent)]' : 'border-[var(--border)] opacity-60 hover:opacity-100'}`}>
         <div className="aspect-square w-full bg-[var(--surface2)] rounded-t overflow-hidden">
-          <img src={r.fal_url} alt={r.label} className="w-full h-full object-cover" />
+          <img src={r.fal_url} alt={r.label} loading="lazy" decoding="async" className="w-full h-full object-cover" />
         </div>
         <div className="px-1 py-1">
           <div className="text-[10px] font-semibold truncate text-left">{r.label || 'unlabeled'}</div>
@@ -3669,7 +3688,7 @@ function PresetEditorModal({ preset, onChange, err, busy, workspaceId, onCancel,
               <div className="grid grid-cols-4 gap-2">
                 {styleRefs.map((url) => (
                   <div key={url} className="relative group aspect-square bg-[var(--surface2)] rounded overflow-hidden border border-[var(--border)]">
-                    <img src={url} alt="" className="w-full h-full object-cover" />
+                    <img src={url} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
                     <button onClick={() => removeRef(url)} type="button"
                       className="absolute top-1 right-1 w-5 h-5 rounded-full bg-red-500/90 text-white text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity">×</button>
                   </div>
@@ -3882,7 +3901,7 @@ function StyleRefsPicker({ workspaceId, userId, selectedIds, onChange }) {
               <div key={r.id} className="relative group">
                 <button onClick={() => toggle(r.id)} type="button"
                   className={`w-[80px] aspect-square rounded border-2 overflow-hidden ${on ? 'border-[var(--accent)] ring-2 ring-[var(--accent)]/50' : 'border-[var(--border)] opacity-60 hover:opacity-100'}`}>
-                  <img src={r.fal_url} alt={r.label} className="w-full h-full object-cover" />
+                  <img src={r.fal_url} alt={r.label} loading="lazy" decoding="async" className="w-full h-full object-cover" />
                 </button>
                 {on && <span className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full bg-[var(--accent)] text-white text-[10px] flex items-center justify-center font-bold">✓</span>}
                 <button onClick={() => deleteRef(r.id)} className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-red-500 text-white text-[10px] hidden group-hover:flex items-center justify-center" title="Delete">×</button>
