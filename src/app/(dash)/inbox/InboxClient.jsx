@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
 import Link from 'next/link'
+import { GEN_CONSTRAINTS, defaultConstraints, serializeConstraints } from '@/lib/gen-constraints'
 
 const STATUS_STYLES = {
   pending:    { label: '⏳ Pending',    bg: 'bg-amber-500/10', border: 'border-amber-500/30', text: 'text-amber-400' },
@@ -469,7 +470,7 @@ export default function InboxClient({ jobs: initialJobs, personaMap, workspaceId
             personaMap={personaMap}
             onDeleteBatch={handleDeleteBatch}
             onDeleteJob={handleDeleteJob}
-            onOpenExecutionModal={(b) => setActiveModalBatch({ batch: b, selectedStyle: 'samsung_a13_candid', selectedModel: 'openai/gpt-image-2/edit' })}
+            onOpenExecutionModal={(b) => setActiveModalBatch({ batch: b, selectedStyle: 'samsung_a13_candid', selectedModel: 'openai/gpt-image-2/edit', constraints: defaultConstraints() })}
           />
         ))}
       </div>
@@ -558,6 +559,44 @@ export default function InboxClient({ jobs: initialJobs, personaMap, workspaceId
               </div>
             </div>
 
+            {/* Constraints — these drive the WHOLE batch. Launching without
+                showing them meant a 21-shot run could come out with dialogue or
+                burned-in text nobody wanted, and the only way to find out was
+                after paying for it. */}
+            <div className="mt-4">
+              <label className="block text-xs font-bold text-gray-200 mb-1.5">
+                🎛 Constraints <span className="font-normal text-[var(--muted)]">— berlaku buat semua shot di batch ini</span>
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {GEN_CONSTRAINTS.map((c) => {
+                  const on = !!(activeModalBatch.constraints || {})[c.key]
+                  return (
+                    <button
+                      key={c.key}
+                      type="button"
+                      title={c.hint}
+                      onClick={() => setActiveModalBatch({
+                        ...activeModalBatch,
+                        constraints: { ...(activeModalBatch.constraints || defaultConstraints()), [c.key]: !on },
+                      })}
+                      className={`px-2.5 py-1 rounded-full border text-[11px] font-semibold transition-colors ${
+                        on
+                          ? 'border-purple-400 bg-purple-500/20 text-purple-200'
+                          : 'border-[var(--border)] text-[var(--muted)] hover:text-gray-200 hover:border-gray-500'
+                      }`}
+                    >
+                      {on ? '✓ ' : '○ '}{c.label}
+                    </button>
+                  )
+                })}
+              </div>
+              {activeModalBatch.constraints?.autoVoiceSwap && (
+                <p className="mt-1.5 text-[10px] text-[var(--muted2)]">
+                  🎙 Auto voice swap nyala — ~$0.30 per video yang ada dialognya. Shot tanpa dialog dilewatin otomatis.
+                </p>
+              )}
+            </div>
+
             {/* Footer Buttons */}
             <div className="flex items-center justify-end gap-3 pt-3 border-t border-[var(--border)]">
               <button
@@ -568,7 +607,7 @@ export default function InboxClient({ jobs: initialJobs, personaMap, workspaceId
                 Batal
               </button>
               <Link
-                href={`/generate?studio_job=${activeModalBatch.batch.jobs.map(j => j.id).join(',')}&camera_preset=${activeModalBatch.selectedStyle || 'samsung_a13_candid'}&img_model=${encodeURIComponent(activeModalBatch.selectedModel || 'openai/gpt-image-2/edit')}`}
+                href={`/generate?studio_job=${activeModalBatch.batch.jobs.map(j => j.id).join(',')}&camera_preset=${activeModalBatch.selectedStyle || 'samsung_a13_candid'}&img_model=${encodeURIComponent(activeModalBatch.selectedModel || 'openai/gpt-image-2/edit')}&constraints=${encodeURIComponent(serializeConstraints(activeModalBatch.constraints || defaultConstraints()))}`}
                 onClick={() => setActiveModalBatch(null)}
                 className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 px-5 py-2 text-xs font-bold text-white shadow-lg shadow-purple-500/30 hover:scale-[1.02] transition-transform"
               >

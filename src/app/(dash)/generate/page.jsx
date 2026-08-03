@@ -52,6 +52,9 @@ export default async function GeneratePage({ searchParams }) {
 
   const incomingCameraPreset = sp?.camera_preset || null
   const incomingImgModel = sp?.img_model || null
+  // Constraints chosen in the Studio Inbox modal before launching a batch.
+  // Undefined (param absent) = caller said nothing, keep /generate's defaults.
+  const incomingConstraints = sp?.constraints === undefined ? null : String(sp.constraints)
 
   return (
     <GenerateClient
@@ -63,6 +66,7 @@ export default async function GeneratePage({ searchParams }) {
       incomingPreset={incomingPreset}
       incomingCameraPreset={incomingCameraPreset}
       incomingImgModel={incomingImgModel}
+      incomingConstraints={incomingConstraints}
       incomingStudioJob={incomingStudioJob}
       incomingStudioJobs={incomingStudioJobs}
     />

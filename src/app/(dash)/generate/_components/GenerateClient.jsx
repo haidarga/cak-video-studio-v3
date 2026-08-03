@@ -9,6 +9,7 @@ import {
 } from '@/lib/fal-client'
 import { imageCost, videoCost, fmtCost } from '@/lib/cost-table'
 import { voiceSwapDecision } from '@/lib/voice-swap-trigger'
+import { parseConstraints } from '@/lib/gen-constraints'
 // Generate-ONLY libs — live under generate/_lib so god-mode work can never
 // touch them (and vice versa). God Mode has its own prompt path in
 // src/lib/god-mode-builders.js. Keep it that way.
@@ -48,7 +49,7 @@ import { LazyVideo } from '@/lib/use-lazy-video'
 const REF_KIND_ORDER = { product: 1, background: 2 }
 const sortRefsCharacterFirst = (refs) => [...refs].sort((a, b) => (REF_KIND_ORDER[a?.kind] || 0) - (REF_KIND_ORDER[b?.kind] || 0))
 
-export default function GenerateClient({ workspaceId, userId, activeBrand, personas: initialPersonas, workspaceRefs: initialRefs, incomingPreset = null, incomingCameraPreset = null, incomingImgModel = null, incomingStudioJob = null, incomingStudioJobs = [] }) {
+export default function GenerateClient({ workspaceId, userId, activeBrand, personas: initialPersonas, workspaceRefs: initialRefs, incomingPreset = null, incomingCameraPreset = null, incomingImgModel = null, incomingConstraints = null, incomingStudioJob = null, incomingStudioJobs = [] }) {
   const supabase = createClient()
   // Mirror server-fetched data to local state so realtime can keep it fresh.
   // Without this, mutations made elsewhere (other tab, /qc, /refs, persona
@@ -223,12 +224,18 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
       setAutoGenState({ active: true, total: totalShotsCount, completed: 0 })
     }
 
-    if (jobList[0]?.format_meta?.aspect_ratio || incomingCameraPreset || incomingImgModel) {
+    // Constraints picked in the Inbox modal are authoritative for the whole
+    // batch — previously "Eksekusi All Batch" launched a 21-shot run on whatever
+    // the constraints defaulted to, so a batch could come out with dialogue or
+    // burned-in text nobody asked for.
+    const parsedConstraints = parseConstraints(incomingConstraints)
+    if (jobList[0]?.format_meta?.aspect_ratio || incomingCameraPreset || incomingImgModel || parsedConstraints) {
       setGlobalConfig((c) => ({
         ...c,
         ...(jobList[0]?.format_meta?.aspect_ratio ? { ar: jobList[0].format_meta.aspect_ratio } : {}),
         ...(incomingCameraPreset ? { cameraPreset: incomingCameraPreset } : {}),
         ...(incomingImgModel ? { imgModel: incomingImgModel } : {}),
+        ...(parsedConstraints || {}),
       }))
     }
   }, [incomingStudioJob, incomingStudioJobs])
