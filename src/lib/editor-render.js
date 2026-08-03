@@ -88,6 +88,25 @@ export function lastFFmpegLogs(n = 5) {
 // left all of its input/output MP4s in MEMFS, each crashed audio-extract
 // left a 20MB carcass. One factory run = heap exhaustion = "ErrnoError: FS
 // error" on every op after. Call at the START of every ffmpeg operation.
+// Serialize every ffmpeg.wasm operation in the tab.
+//
+// getFFmpeg() hands out ONE shared instance, purgeFFmpegFS() wipes the whole
+// MEMFS root, and callers use fixed filenames (swap-in.mp4, ta-in.mp4, ...).
+// Two operations overlapping therefore destroy each other: B's purge deletes
+// A's input mid-run, and a single FFmpeg instance cannot exec() concurrently
+// anyway.
+//
+// QCClient and factory-pipeline each grew their OWN private copy of this lock,
+// which protects within a page but not across flows — and GenerateClient (whose
+// Continue / link-shot / long-form buttons all touch ffmpeg) had none at all.
+// This is the module-level one they should all share.
+let _ffQueue = Promise.resolve()
+export function withFfmpegLock(fn) {
+  const run = _ffQueue.then(fn, fn)
+  _ffQueue = run.catch(() => {}) // a failed job must not poison the queue
+  return run
+}
+
 export async function purgeFFmpegFS() {
   const ff = ffmpegInstance
   if (!ff) return

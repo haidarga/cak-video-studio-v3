@@ -8,7 +8,13 @@
 //
 // Auth: we gate via ?secret=FAL_WEBHOOK_SECRET (set in Vercel env). fal will
 // echo the secret because it's part of the URL we registered at submit time.
-// Without the env var set we allow through (so dev setup works without it).
+// FAIL-CLOSED when the env var is unset — /api/fal/submit now refuses to
+// register a callback in that case too, so the two sides agree instead of
+// registering a URL this endpoint would always reject.
+//
+// This receiver is ALSO the authoritative result-ingestion point: it creates the
+// `results` row (see lib/gen-ingest.js), so a generation survives the browser
+// tab being closed.
 //
 // Idempotent: fal may retry on delivery failure. We UPDATE on conflict-safe
 // matching by request_id (PK), so a duplicate webhook just overwrites with
@@ -18,34 +24,14 @@ import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { logUsage } from '@/lib/usage-log'
 import { imageCost, videoCost } from '@/lib/cost-table'
+import { ingestGenJobResult } from '@/lib/gen-ingest'
+import { extractFalUrl } from '@/lib/fal-payload'
 
 // Extract the displayable URL from fal's payload. Different model families
 // return different shapes; we handle the common ones.
-function extractUrl(payload) {
-  if (!payload || typeof payload !== 'object') return null
-  
-  // 1. Gambar
-  if (payload.images?.[0]?.url) return payload.images[0].url
-  if (typeof payload.images?.[0] === 'string') return payload.images[0]
-  if (payload.image?.url) return payload.image.url
-  if (payload.image_url) return payload.image_url
-
-  // 2. Video
-  if (payload.video?.url) return payload.video.url
-  if (typeof payload.video === 'string') return payload.video
-  if (payload.video_url) return payload.video_url
-  if (payload.videos?.[0]?.url) return payload.videos[0].url
-  if (typeof payload.videos?.[0] === 'string') return payload.videos[0]
-
-  // 3. Output Generic / File / Audio
-  if (payload.output?.url) return payload.output.url
-  if (payload.output?.video?.url) return payload.output.video.url
-  if (payload.file?.url) return payload.file.url
-  if (payload.audio?.url) return payload.audio.url
-  if (typeof payload.url === 'string') return payload.url
-
-  return null
-}
+// extractUrl moved to lib/fal-payload.js so the reconcile cron uses the SAME
+// shape coverage — a weaker copy there marked good jobs as failed.
+const extractUrl = extractFalUrl
 
 export async function POST(req) {
   const { searchParams } = new URL(req.url)
@@ -70,7 +56,7 @@ export async function POST(req) {
   // Fetch the job row so we know workspace_id + kind + duration for usage log.
   const { data: job, error: jobErr } = await admin
     .from('gen_jobs')
-    .select('workspace_id, user_id, kind, model, duration_seconds, status')
+    .select('request_id, workspace_id, user_id, kind, model, duration_seconds, status, meta')
     .eq('request_id', requestId)
     .maybeSingle()
   if (jobErr || !job) {
@@ -88,13 +74,39 @@ export async function POST(req) {
   const url = ok ? extractUrl(body.payload) : null
   const error = ok ? null : (body.payload?.detail || body.payload?.error || body.error || 'fal job failed')
 
-  await admin.from('gen_jobs').update({
+  // COMPARE-AND-SET on status='pending'. The `job.status` check above is a
+  // read-then-write, so a webhook and the reconcile cron finishing the same job
+  // within the same window could BOTH pass it and both log usage — corrupting
+  // the workspace cost total that budget-gate locks generations against.
+  // Gating the update means exactly one of them sees a row come back.
+  const { data: claimed } = await admin.from('gen_jobs').update({
     status: ok ? 'done' : 'error',
     payload_url: url,
     payload: body.payload || null,
     error,
     updated_at: new Date().toISOString(),
-  }).eq('request_id', requestId)
+  }).eq('request_id', requestId).eq('status', 'pending').select('request_id')
+
+  if (!claimed?.length) {
+    // Someone else finalized it between our read and this write.
+    return NextResponse.json({ ok: true, already: 'claimed-elsewhere' })
+  }
+
+  // INGEST — create the `results` row server-side. Previously this webhook only
+  // flipped gen_jobs and the insert lived in the browser after `await falRun`,
+  // so closing the tab mid-generation lost the asset forever even though fal had
+  // finished and the account was billed. Idempotent: if the tab was open and got
+  // there first, this no-ops on the unique index from migration 0032.
+  let ingested = null
+  if (ok && url) {
+    try {
+      ingested = await ingestGenJobResult(admin, job, url)
+    } catch (e) {
+      // Never fail the webhook over ingestion — fal would retry the whole
+      // callback and we'd re-log usage below.
+      console.warn('[fal/webhook] ingest failed', e)
+    }
+  }
 
   // Log usage on successful completions only — errors didn't burn $.
   if (ok && job.workspace_id) {
@@ -112,7 +124,7 @@ export async function POST(req) {
       console.warn('webhook: usage log failed', e)
     }
   }
-  return NextResponse.json({ ok: true })
+  return NextResponse.json({ ok: true, ingested: ingested?.reason || (ingested?.inserted ? 'inserted' : null) })
 }
 
 // GET is convenient for sanity-checking the deployed URL from a browser.

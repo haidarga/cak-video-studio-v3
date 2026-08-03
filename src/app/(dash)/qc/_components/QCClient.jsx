@@ -6,6 +6,7 @@ import { LazyVideo } from '@/lib/use-lazy-video'
 import { convertVideoToMp4 } from '@/lib/video-convert'
 import { stripAudioFromVideo } from '@/lib/strip-audio'
 import { swapAudioInVideo } from '@/lib/swap-audio'
+import { withFfmpegLock } from '@/lib/editor-render'
 import { probeDurations, compilePlanToProject } from '@/lib/ai-edit-compose'
 
 const STATUSES = [
@@ -136,12 +137,13 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
   // stays around for safety; user can clean up later if they want.
   // Lock for client-side WASM ffmpeg operations (muxing/converting).
   // Serverless API calls (ElevenLabs S2S) run concurrently; WASM operations queue cleanly.
-  const ffLockRef = useRef(Promise.resolve())
-  function withFfmpegLock(fn) {
-    const run = ffLockRef.current.then(fn, fn)
-    ffLockRef.current = run.catch(() => {})
-    return run
-  }
+  //
+  // Uses the MODULE-LEVEL lock from editor-render.js, not a component-scoped one.
+  // ffmpeg.wasm is a single shared instance with one MEMFS and fixed filenames,
+  // and App Router keeps that module loaded across client navigations — so a
+  // component-scoped queue only serialized THIS page. A /generate voice-swap
+  // still running after you navigated here would collide with a QC swap and the
+  // two would delete each other's files.
 
   // Multi-item converting map: { [resultId]: stageString }
   // Allows each video card to maintain its own independent loading state.

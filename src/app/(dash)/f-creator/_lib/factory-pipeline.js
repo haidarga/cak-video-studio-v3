@@ -28,12 +28,10 @@ import { compilePlanToProject, probeDurations } from '@/lib/ai-edit-compose'
 // anything ffmpeg-bound (assemble render, audio extract, frame extract,
 // voice mux) takes this lock and queues. Gen is 90% of wall-clock, so the
 // queue is rarely felt.
-let _ffq = Promise.resolve()
-function withFfmpegLock(fn) {
-  const run = _ffq.then(fn, fn)
-  _ffq = run.catch(() => {})
-  return run
-}
+// Shared with /generate and /qc via editor-render.js — a private queue here only
+// serialized the factory's own stages, while a voice-swap left running on
+// another page hit the SAME ffmpeg instance and corrupted both.
+import { withFfmpegLock } from '@/lib/editor-render'
 
 // ── NETWORK RETRY — the factory runs for tens of minutes on home wifi;
 // transient drops (ERR_NETWORK_CHANGED, timeouts, QUIC hiccups) WILL

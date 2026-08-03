@@ -8,6 +8,7 @@ import {
   getVideoMaxDuration, toRefToVideoModel, toImageToVideoModel,
 } from '@/lib/fal-client'
 import { imageCost, videoCost, fmtCost } from '@/lib/cost-table'
+import { voiceSwapDecision } from '@/lib/voice-swap-trigger'
 // Generate-ONLY libs — live under generate/_lib so god-mode work can never
 // touch them (and vice versa). God Mode has its own prompt path in
 // src/lib/god-mode-builders.js. Keep it that way.
@@ -1545,7 +1546,28 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
         duration: shot.raw.duration || 5,
         aspect_ratio: globalConfig.ar,
       }), vidSeed)
-      const vidResult = await falRun(vidModel, vidInput, { onProgress: (p) => patchShot(idx, { video: { status: p } }), workspaceId, duration: shot.raw.duration || 5 })
+      const vidResult = await falRun(vidModel, vidInput, {
+        onProgress: (p) => patchShot(idx, { video: { status: p } }),
+        workspaceId,
+        duration: shot.raw.duration || 5,
+        // Ingestion intent — recorded on the gen_jobs row at submit time so the
+        // fal webhook (and the reconcile cron) can create the `results` row
+        // WITHOUT this tab. Before this, closing the tab mid-generation lost the
+        // asset permanently even though fal finished and we were billed.
+        meta: {
+          duration: shot.raw.duration || 5,
+          workspaceId,
+          ingest: {
+            persona_id: persona.id,
+            label: shot.label,
+            ar: globalConfig.ar,
+            group_label: persona.name,
+            type: 'video',
+            image_url: shot.image?.url || null,
+            source: 'generate',
+          },
+        },
+      })
       const videoUrl = vidResult.video?.url || vidResult.video
       if (!videoUrl) throw new Error('no video URL returned')
 
@@ -1598,7 +1620,13 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
         } catch { /* lookup is best-effort — absence just means no voice swap */ }
       }
 
-      if (effectiveVoiceId && globalConfig.autoVoiceSwap !== false) {
+      const swapDecision = voiceSwapDecision(shot, { voice_id: effectiveVoiceId }, globalConfig)
+      if (!swapDecision.ok && effectiveVoiceId && globalConfig.autoVoiceSwap !== false) {
+        // Skipped for a content reason (B-roll with no spoken line). Say so —
+        // silently keeping the AI voice is what made this feel random.
+        console.info(`[voice] skip ${persona.name}: ${swapDecision.reason}`)
+      }
+      if (swapDecision.ok) {
         patchShot(idx, { video: { status: '🎙 voice clone...', url: videoUrl, result_id: row.id } })
         try {
           const r = await fetch('/api/voice/convert', {
@@ -1607,12 +1635,44 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
           })
           const j = await r.json()
           if (j.ok) {
+            // MUX — the step this path never had. /api/voice/convert only
+            // produces the cloned-voice mp3; without muxing it back onto the
+            // video, `results.url` kept the AI's native voice. Only QC did this,
+            // which is exactly why the user had to finish every video by hand.
+            patchShot(idx, { video: { status: '🎙 muxing suara...', url: videoUrl, result_id: row.id } })
+            const { swapAudioInVideo } = await import('@/lib/swap-audio')
+            const { withFfmpegLock } = await import('@/lib/editor-render')
+            const blob = await withFfmpegLock(() =>
+              swapAudioInVideo(videoUrl, j.audio_url, (stage) =>
+                patchShot(idx, { video: { status: `🎙 ${stage}`, url: videoUrl, result_id: row.id } }))
+            )
+            const { url: voicedUrl } = await uploadBlob(blob, `voiced-${row.id}-${Date.now()}.mp4`, 'qc')
+            // Update IN PLACE rather than inserting a second row: the user wants
+            // one finished video, and a new row would be the very duplicate we
+            // just added a unique index to prevent. Original URL kept in meta so
+            // the un-voiced take is never lost.
+            // MERGE meta, don't replace it. When the webhook/reconcile cron wins
+            // the ingest race the row is created server-side and carries
+            // `ingested_by: 'server'` + `model`; a wholesale overwrite here would
+            // silently erase exactly the signal that tells us how often users are
+            // closing the tab mid-generation.
+            const { data: cur } = await supabase.from('results').select('meta').eq('id', row.id).maybeSingle()
+            const { error: upErr } = await supabase.from('results').update({
+              url: voicedUrl,
+              meta: {
+                ...(cur?.meta || {}),
+                image_url: shot.image?.url || null, raw: shot.raw, source: 'generate',
+                direct: isDirect || undefined,
+                original_url: videoUrl, cloned_audio_url: j.audio_url, voice_id: effectiveVoiceId,
+              },
+            }).eq('id', row.id)
+            if (upErr) throw upErr
             patchShot(idx, (prev) => {
               const variants = [...(prev.video_variants || [])]
               const lastIdx = variants.length - 1
-              if (lastIdx >= 0) variants[lastIdx] = { ...variants[lastIdx], cloned_audio_url: j.audio_url }
+              if (lastIdx >= 0) variants[lastIdx] = { ...variants[lastIdx], url: voicedUrl, cloned_audio_url: j.audio_url }
               return {
-                video: { status: 'done', url: videoUrl, result_id: row.id, cloned_audio_url: j.audio_url },
+                video: { status: 'done', url: voicedUrl, result_id: row.id, cloned_audio_url: j.audio_url },
                 video_variants: variants,
               }
             })
