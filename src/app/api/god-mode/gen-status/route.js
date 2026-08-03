@@ -105,10 +105,22 @@ export async function GET(req) {
         type: 'video', url: videoUrl,
         label: 'God Mode — video',
         ar,
+        // Promoted out of meta into the real column so migration 0032's unique
+        // index applies. This endpoint inserts on EVERY poll tick that sees a
+        // completed job, and fal's response_url keeps returning 200 for hours —
+        // so a remount or page reload used to mint another row for the same job.
+        request_id: requestId,
         meta: { source: 'god-mode', motion, model: matchedModel || model, request_id: requestId },
         created_by: user.id,
       }).select('id').single()
       row = ins.data
+      // Already ingested — adopt the existing row instead of surfacing a
+      // constraint error for what is really a no-op.
+      if (!row && ins.error?.code === '23505') {
+        const { data: existing } = await supabase.from('results')
+          .select('id').eq('workspace_id', wsId).eq('request_id', requestId).maybeSingle()
+        row = existing || null
+      }
     }
     // Mark the gen_jobs row done so a late fal webhook sees status='done' and
     // skips its duplicate usage-log + results write (webhook is idempotent on

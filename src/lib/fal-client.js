@@ -196,7 +196,10 @@ async function falRunOnce(model, input, { onProgress, maxWaitMs, workspaceId, du
           return
         }
         settled = true; cleanup()
-        resolve(result)
+        // Carry the fal request_id out to the caller so the `results` row can be
+        // stamped with it. That stamp is what makes the unique index in
+        // migration 0032 able to reject a duplicate ingestion of the same job.
+        resolve({ ...result, request_id: requestId })
       } else if (row.status === 'error') {
         settled = true; cleanup()
         reject(new Error(row.error || 'gen failed'))
@@ -274,7 +277,9 @@ async function falRunOnce(model, input, { onProgress, maxWaitMs, workspaceId, du
           // gen-status already saved the result row + would have triggered
           // webhook; mark settled with the URL we got.
           settled = true; cleanup()
-          resolve(j.url ? { video: { url: j.url }, images: [{ url: j.url }] } : {})
+          resolve(j.url
+            ? { video: { url: j.url }, images: [{ url: j.url }], request_id: requestId }
+            : { request_id: requestId })
           return
         }
         const falState = j.fal_status || 'pending'

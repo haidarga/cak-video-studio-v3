@@ -1045,6 +1045,17 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
   async function genImageForShot(idx) {
     const shot = state.shots[idx]
     if (!shot) return
+    // In-flight guard — genVideoForShot has had this since the duplicate-video
+    // bug; the image path never got it. Without it a second click starts a
+    // SECOND fal job: the button's `disabled={status === 'generating'}` check
+    // goes false within milliseconds because onProgress immediately overwrites
+    // status with a free-text progress string ("submitting (sync)..."), so
+    // Re-img re-enables itself and both jobs land as separate assets.
+    const ist = shot.image?.status
+    if (ist && ist !== 'idle' && ist !== 'done' && ist !== 'error') {
+      onErr(`${persona.name}: gambar lagi digenerate (${ist}) — tunggu selesai, jangan klik ulang (bikin dobel).`)
+      return
+    }
     patchShot(idx, { image: { status: 'generating' } })
     try {
       const productKnowledge = selectedRefs.map((r) => String(r.knowledge || '').trim()).filter(Boolean).join('\n')
@@ -1199,7 +1210,9 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       patchShot(idx, (prev) => {
         const variants = [...(prev.image_variants || []), { url: imageUrl, at: Date.now(), seed: modelAcceptsSeed(globalConfig.imgModel) ? seed : null }]
         return {
-          image: { status: 'done', url: imageUrl },
+          // request_id carried so "Send to QC" can stamp it on the results row
+          // (migration 0032 dedupe).
+          image: { status: 'done', url: imageUrl, request_id: imgResult.request_id || null },
           image_variants: variants,
           image_active_idx: variants.length - 1,
           // Switch the media slot to image view so the user sees the new
@@ -1536,12 +1549,23 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
       const videoUrl = vidResult.video?.url || vidResult.video
       if (!videoUrl) throw new Error('no video URL returned')
 
-      const { data: row, error } = await supabase.from('results').insert({
+      let { data: row, error } = await supabase.from('results').insert({
         workspace_id: workspaceId, persona_id: persona.id, type: 'video', url: videoUrl, label: shot.label, ar: globalConfig.ar,
         group_label: persona.name,
+        // Stamped so migration 0032's unique index can reject a second ingestion
+        // of the SAME fal job (the "current + last" duplicate).
+        request_id: vidResult.request_id || null,
         meta: { image_url: shot.image?.url || null, raw: shot.raw, source: 'generate', direct: isDirect || undefined },
         created_by: userId,
       }).select('id').single()
+      // 23505 = this fal job was already ingested (e.g. the god-mode poller got
+      // there first). Not an error — adopt the existing row instead of failing
+      // the shot or creating a twin.
+      if (error?.code === '23505' && vidResult.request_id) {
+        const { data: existing } = await supabase.from('results')
+          .select('id').eq('workspace_id', workspaceId).eq('request_id', vidResult.request_id).maybeSingle()
+        if (existing) { row = existing; error = null }
+      }
       if (error) throw error
       // Push to variants — every re-gen appends, user can switch between them
       // via the picker UI. video.url stays mirror of the active variant.
@@ -1559,8 +1583,20 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
 
       // Voice clone post-gen — if persona has a cloned voice, swap the AI native audio
       // for the persona's voice via ElevenLabs Speech-to-Speech. Lip-sync preserved.
-      // Resolve effectiveVoiceId from persona record or fallback lookup in personas list
-      const effectiveVoiceId = persona?.voice_id || persona?.voice || (personas || []).find((p) => p.id === persona?.id || p.name?.toLowerCase().trim() === persona?.name?.toLowerCase().trim())?.voice_id
+      // Resolve the persona's cloned-voice id. The previous version referenced a
+      // `personas` array that does NOT exist in this component's scope (it lives
+      // in GenerateClient, not PersonaSection) — which threw a ReferenceError on
+      // the exact path it was written for (missing voice_id), landing in the
+      // outer catch and painting a perfectly good video as `error`.
+      // Read straight from the DB instead: correct scope, and fresh data if the
+      // voice was attached after this page loaded.
+      let effectiveVoiceId = persona?.voice_id || persona?.voice || null
+      if (!effectiveVoiceId && persona?.id) {
+        try {
+          const { data: pv } = await supabase.from('personas').select('voice_id').eq('id', persona.id).maybeSingle()
+          effectiveVoiceId = pv?.voice_id || null
+        } catch { /* lookup is best-effort — absence just means no voice swap */ }
+      }
 
       if (effectiveVoiceId && globalConfig.autoVoiceSwap !== false) {
         patchShot(idx, { video: { status: '🎙 voice clone...', url: videoUrl, result_id: row.id } })
@@ -1581,11 +1617,17 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
               }
             })
           } else {
+            // Surface it. This used to be console.warn-only while the shot was
+            // painted `done`, so a budget-gate 402, an expired ElevenLabs quota,
+            // a 504 timeout or a silent-video model all looked like success and
+            // the user only found out much later in QC.
             console.warn('voice convert skipped:', j.error)
+            onErr(`${persona.name} — voice clone gagal: ${j.error || 'unknown'} (video tetap kepakai, suaranya masih suara AI)`)
             patchShot(idx, { video: { status: 'done', url: videoUrl, result_id: row.id } })
           }
         } catch (e) {
           console.warn('voice convert error:', e)
+          onErr(`${persona.name} — voice clone error: ${e?.message || e} (video tetap kepakai, suaranya masih suara AI)`)
           patchShot(idx, { video: { status: 'done', url: videoUrl, result_id: row.id } })
         }
       }
@@ -2194,13 +2236,24 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
 
     // Fallback: send image-only result
     if (shot.image?.url) {
-      const { data: row, error } = await supabase.from('results').insert({
+      let { data: row, error } = await supabase.from('results').insert({
         workspace_id: workspaceId, persona_id: persona.id, type: 'image',
         url: shot.image.url, label: shot.label, ar: globalConfig.ar,
         group_label: persona.name, qc_status: 'pending',
+        request_id: shot.image.request_id || null,
         meta: { source: 'generate-image-only', raw: shot.raw },
         created_by: userId,
       }).select('id').single()
+      // Already sent (double-click, or the same image queued twice) — adopt the
+      // existing row and mark it pending rather than erroring at the user.
+      if (error?.code === '23505' && shot.image.request_id) {
+        const { data: existing } = await supabase.from('results')
+          .select('id').eq('workspace_id', workspaceId).eq('request_id', shot.image.request_id).maybeSingle()
+        if (existing) {
+          await supabase.from('results').update({ qc_status: 'pending' }).eq('id', existing.id)
+          row = existing; error = null
+        }
+      }
       if (error) { onErr(error.message); return }
       patchShot(idx, { image: { ...shot.image, result_id: row.id }, qc_sent: 'image' })
       return

@@ -16,8 +16,17 @@ function webhookUrlFromReq(req) {
   const host = req.headers.get('x-forwarded-host') || req.headers.get('host')
   if (!host) return null
   const secret = process.env.FAL_WEBHOOK_SECRET || ''
-  const qs = secret ? `?secret=${encodeURIComponent(secret)}` : ''
-  return `${proto}://${host}/api/fal/webhook${qs}`
+  // FAIL-CLOSED, matching /api/fal/webhook which 503s when the secret is unset.
+  // The old behaviour registered a secret-less callback URL that the webhook
+  // then rejected — so fal called us, got refused, gave up, and the gen_jobs row
+  // sat at 'pending' forever with the result stranded on fal. Returning null
+  // makes the caller submit WITHOUT a webhook and rely on polling, which is at
+  // least honest, instead of registering a callback that can never succeed.
+  if (!secret) {
+    console.error('[fal/submit] FAL_WEBHOOK_SECRET not set — submitting without a webhook (polling only). Set it in Vercel env to enable server-side result ingestion.')
+    return null
+  }
+  return `${proto}://${host}/api/fal/webhook?secret=${encodeURIComponent(secret)}`
 }
 
 // Heuristic — duration in seconds for cost calc.
