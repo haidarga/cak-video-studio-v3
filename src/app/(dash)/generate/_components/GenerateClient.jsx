@@ -224,6 +224,17 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
           parsed: j.parsed_shots ? { shots } : null,
           busy: false,
           shots,
+          // Caketing's parsed_shots are SCRIPT blocks (dialogue, 📍 Lokasi,
+          // 👔 Wardrobe, 🎬 Visual), not generation prompts. Feeding
+          // `image_prompt` straight to the image model sends raw script text
+          // like "Setting/Lighting: Laboratorium. Outfit: Jas Lab Putih. Fajar
+          // (talking head) overlaid on video of…" — and `environment` /
+          // `video_motion` arrive EMPTY, so the shot card shows its placeholder
+          // and the compiler gets nothing.
+          // Everything the studio parser needs is already in naskah_text (the
+          // 📍/👔/🎬 lines are right there), so re-parsing loses nothing and
+          // yields the prompt shape the rest of the pipeline expects.
+          needsParse: true,
         }
       }
     }
@@ -276,7 +287,10 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
     let parsing = false
     selectedIds.forEach((pid) => {
       const st = stateByPersona[pid]
-      if (st?.busy || (!st?.shots?.length && st?.naskah?.trim())) {
+      // `needsParse` included: Caketing jobs arrive WITH shots, so the old
+      // "no shots yet" test read as already-parsed and the modal jumped
+      // straight to "✅ 1. Parsed" while the naskah was still raw.
+      if (st?.busy || st?.needsParse || (!st?.shots?.length && st?.naskah?.trim())) {
         parsing = true
       }
     })
@@ -842,35 +856,52 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
   const personaOwnRefs = (persona.persona_refs || []).map((pr) => pr.refs).filter(Boolean)
   const [cfgOpen, setCfgOpen] = useState(false)
 
-  // Auto-parse & Auto-generate images for Studio Jobs (Sequential queue per persona)
-  const autoGenRef = useRef(false)
+  // Auto-parse → auto-generate for Studio Jobs. Two-phase, because the old
+  // single-flag version was broken BOTH ways:
+  //
+  //   - Caketing sends parsed_shots, so `shots.length > 0` was always true and
+  //     the parse branch NEVER ran. Generation used Caketing's script blocks as
+  //     image prompts — raw naskah text, with environment/video_motion empty.
+  //   - And in the branch that DID parse, the same flag was set to true before
+  //     parsing, so when the parsed shots arrived the effect bailed on
+  //     `!autoGenRef.current` and nothing ever generated.
+  //
+  // Phases: idle → parsing → generating. Each transition is one-way, so a
+  // re-render can't restart a phase that already ran.
+  const autoPhaseRef = useRef('idle')
   useEffect(() => {
-    if (autoStartImages && !autoGenRef.current) {
-      if ((!state.shots || state.shots.length === 0) && state.naskah?.trim()) {
-        autoGenRef.current = true
-        parseNaskah()
-      } else if (state.shots?.length > 0) {
-        const hasIdle = state.shots.some(s => !s.image?.url && s.image?.status !== 'done')
-        if (hasIdle) {
-          autoGenRef.current = true
-          async function runPersonaQueue() {
-            for (let idx = 0; idx < state.shots.length; idx++) {
-              const shot = state.shots[idx]
-              if (!shot.image?.url && shot.image?.status !== 'done' && shot.image?.status !== 'generating') {
-                try {
-                  await genImageForShot(idx)
-                } catch (e) {
-                  console.warn(`[PersonaSeqGen] shot ${idx} error:`, e)
-                }
-                await new Promise((r) => setTimeout(r, 400))
-              }
-            }
+    if (!autoStartImages) return
+    if (autoPhaseRef.current === 'generating') return
+
+    // PHASE 1 — normalize Caketing's script blocks into real prompts.
+    if (state.needsParse) {
+      if (autoPhaseRef.current === 'parsing' || state.busy || !state.naskah?.trim()) return
+      autoPhaseRef.current = 'parsing'
+      parseNaskah() // clears needsParse, which re-runs this effect into phase 2
+      return
+    }
+    if (autoPhaseRef.current === 'parsing') autoPhaseRef.current = 'idle' // parse done
+
+    // PHASE 2 — sequential image queue.
+    if (!state.shots?.length) return
+    const hasIdle = state.shots.some((s) => !s.image?.url && s.image?.status !== 'done')
+    if (!hasIdle) return
+
+    autoPhaseRef.current = 'generating'
+    ;(async function runPersonaQueue() {
+      for (let idx = 0; idx < state.shots.length; idx++) {
+        const shot = state.shots[idx]
+        if (!shot.image?.url && shot.image?.status !== 'done' && shot.image?.status !== 'generating') {
+          try {
+            await genImageForShot(idx)
+          } catch (e) {
+            console.warn(`[PersonaSeqGen] shot ${idx} error:`, e)
           }
-          runPersonaQueue()
+          await new Promise((r) => setTimeout(r, 400))
         }
       }
-    }
-  }, [autoStartImages, state.shots, state.naskah])
+    })()
+  }, [autoStartImages, state.shots, state.naskah, state.needsParse, state.busy])
 
   // Per-persona config ("variant generation"). When perPersonaMode is ON and
   // this persona has an override, the EFFECTIVE config = global defaults merged
@@ -1149,7 +1180,9 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
           },
         }))
       }
-      onPatch({ parsed: lastParsed, shots: shotsInit, lfStatus: null })
+      // needsParse cleared: these shots now carry real generation prompts, not
+      // Caketing's raw script blocks.
+      onPatch({ parsed: lastParsed, shots: shotsInit, lfStatus: null, needsParse: false })
     } catch (e) { onErr(`${persona.name}: ${e.message}`) }
     onPatch({ busy: false })
   }
