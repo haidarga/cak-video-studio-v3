@@ -70,10 +70,20 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
       if (pendingPersonas) return
       pendingPersonas = setTimeout(async () => {
         pendingPersonas = null
-        const { data } = await supabase
+        // MUST mirror the server query in generate/page.jsx — same columns AND
+        // the same brand filter. It previously dropped `.eq('brand_id', …)`, so
+        // the page loaded correctly brand-scoped and then the FIRST realtime
+        // event (any persona/ref change, from any workspace — the persona_refs
+        // listener has no filter) replaced the persona picker with every persona
+        // across every brand. The user then generated under the wrong brand's
+        // persona, and since brand_id was dropped from the row too, nothing
+        // downstream could even detect it. Same leak we just closed in the Inbox.
+        let q = supabase
           .from('personas')
-          .select('id, name, username, avatar_url, role_label, character_prompt, postiz_channel_id, voice_id, voice_name, persona_refs(refs(id, fal_url, label, knowledge, kind))')
-          .eq('workspace_id', workspaceId).order('created_at', { ascending: false })
+          .select('id, name, username, avatar_url, role_label, character_prompt, postiz_channel_id, voice_id, voice_name, brand_id, persona_refs(refs(id, fal_url, label, knowledge, kind))')
+          .eq('workspace_id', workspaceId)
+        if (activeBrand?.id) q = q.eq('brand_id', activeBrand.id)
+        const { data } = await q.order('created_at', { ascending: false })
         if (data) setPersonas(data)
       }, 400)
     }
@@ -97,8 +107,10 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
       if (pendingPersonas) { clearTimeout(pendingPersonas); pendingPersonas = null }
       if (pendingRefs) { clearTimeout(pendingRefs); pendingRefs = null }
     }
+    // activeBrand?.id is a real dependency now — reloadPersonas filters on it,
+    // so a stale closure would re-introduce the cross-brand leak.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceId])
+  }, [workspaceId, activeBrand?.id])
 
   const [uiMode] = useUiMode()
   const [globalConfig, setGlobalConfig] = useState({
@@ -1362,7 +1374,6 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       onErr(`${persona.name}: video lagi digenerate — tunggu selesai, jangan klik ulang (bikin dobel).`)
       return
     }
-    inFlightRef.current.add(vidKey)
     // Validate motion field — empty/blank motion = model generates from text
     // prompt that's literally nothing or just the system role-id. User reported
     // a real $0.70 burn from the Continue button creating a shot with the
@@ -1384,7 +1395,18 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
     let vidModel = globalConfig.vidModel
     let isRefModel = vidModel?.includes('ref-to-video') || vidModel?.includes('reference-to-video')
     
-    if (!isDirect && !isRefModel && !shot.image?.url) return
+    if (!isDirect && !isRefModel && !shot.image?.url) {
+      // Was a bare `return` — clicking Gen Video on a shot with no image did
+      // absolutely nothing, with no explanation.
+      onErr(`${persona.name} ${shot.raw.shot_label || ''}: belum ada gambar. Generate image dulu, atau pakai model ref-to-video / mode Direct yang gak butuh gambar awal.`)
+      return
+    }
+
+    // Claim the in-flight slot only AFTER every early return. Adding it above
+    // meant a shot rejected for placeholder motion kept its key forever — the
+    // user fixed the text, clicked Re-vid, and got "video lagi digenerate"
+    // permanently. Same wedge as the batch that sat at 0/21.
+    inFlightRef.current.add(vidKey)
     // Determine if this shot is a storyboard grid (panel layout) — important
     // because the 3x3 grid given to an image-to-video model causes the
     // "9 panels rocking around" glitch (model animates the grid frame, not
@@ -2259,11 +2281,18 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
         if (!url) throw new Error(`segmen ${i + 1} ditolak SEMUA model (${candidates.length} dicoba): ${String(lastErr?.message || lastErr).slice(0, 120)}`)
         prevVideoUrl = url
         clips.push({ url, duration: job.duration })
-        await supabase.from('results').insert({
+        // Error was previously discarded entirely — a rejected insert (RLS, a
+        // NOT NULL created_by, a missing column) lost a PAID video segment and
+        // the run still finished with a green ✓ telling the user to check
+        // Results. A long-form run is 5-8 video gens, so this was the most
+        // expensive success-that-wasn't in the app.
+        const { error: segErr } = await supabase.from('results').insert({
           workspace_id: workspaceId, persona_id: persona.id, type: 'video', url, ar: globalConfig.ar,
           label: `${persona.name} — Long-form seg ${i + 1}/${jobs.length}`, group_label: persona.name,
+          created_by: userId,
           meta: { source: 'longform', segment: i + 1, of: jobs.length, transition: job.transition, mode: useI2V ? 'i2v-handoff' : 'r2v', model: usedModel },
         })
+        if (segErr) throw new Error(`segmen ${i + 1} ke-generate tapi GAGAL disimpan: ${segErr.message}. URL-nya: ${url}`)
       }
 
       // 4) STITCH the ordered clips into one file (client render).
@@ -2272,11 +2301,13 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
       const { renderProject } = await import('@/lib/editor-render')
       const { blob, ext, mime } = await renderProject(project, (p) => onPatch({ lfStatus: `Render: ${p}` }), { mode: 'mp4' })
       const up = await uploadBlob(blob, `longform-${persona.id}-${Date.now()}.${ext || 'mp4'}`, 'longform')
-      await supabase.from('results').insert({
+      const { error: finalErr } = await supabase.from('results').insert({
         workspace_id: workspaceId, persona_id: persona.id, type: 'video', url: up.url, ar: globalConfig.ar,
         label: `${persona.name} — Long-form FINAL (~${Math.round(project.durationSec)}s)`, group_label: persona.name,
+        created_by: userId, qc_status: 'pending',
         meta: { source: 'longform-final', segments: clips.length, mime },
       })
+      if (finalErr) throw new Error(`Video final ke-render tapi GAGAL disimpan: ${finalErr.message}. URL-nya: ${up.url}`)
       onPatch({ lfStatus: null })
       onErr(`✓ Long-form selesai: ${clips.length} segmen → 1 video ~${Math.round(project.durationSec)}s. Cek di Results.`)
     } catch (e) {

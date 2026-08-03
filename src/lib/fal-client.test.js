@@ -4,6 +4,45 @@ import { toRefToVideoModel, toImageToVideoModel, getVideoMaxDuration, buildStory
 // xai/grok-imagine-video/v1.5/reference-to-video — the v1.5 tier already shipped
 // its image-to-video variant, so the family-preserving mappers must not silently
 // downgrade a v1.5 pick to the older (cheaper, lower-quality) Grok endpoint.
+// fal spells this endpoint TWO ways: `reference-to-video` for grok / seedance /
+// happy-horse / veo / gemini, and `ref-to-video` for Kling. buildVidInput only
+// tested the long spelling, so every Kling ref gen silently built an
+// image-to-video body — no `elements`, `image_url: undefined`.
+describe('buildVidInput recognises BOTH ref-to-video spellings', () => {
+  const base = { prompt: 'x', reference_urls: ['https://x/1.jpg', 'https://x/2.jpg'], duration: 5, aspect_ratio: '9:16' }
+
+  it('treats the Kling `ref-to-video` spelling as a reference model', () => {
+    // This exact string is what toRefToVideoModel() returns for every Kling pick.
+    const out = buildVidInput('fal-ai/kling-video/v2.5-turbo/pro/ref-to-video', base)
+    expect(out.elements).toBeTruthy()          // ref branch builds elements
+    expect(out.elements.length).toBe(2)
+    expect('image_url' in out).toBe(false)     // NOT the i2v body
+  })
+
+  it('still treats the long `reference-to-video` spelling as a reference model', () => {
+    const out = buildVidInput('bytedance/seedance-2.0/fast/reference-to-video', base)
+    expect(out.image_urls).toEqual(['https://x/1.jpg', 'https://x/2.jpg'])
+    expect(out.image_url).toBeUndefined()
+  })
+
+  it('still treats an image-to-video model as NOT a reference model', () => {
+    const out = buildVidInput('fal-ai/kling-video/v3/standard/image-to-video', { ...base, image_url: 'https://x/start.jpg' })
+    expect(out.image_url).toBe('https://x/start.jpg')
+    expect(out.elements).toBeUndefined()
+  })
+
+  it('what toRefToVideoModel returns is always recognised as a ref model', () => {
+    // Guards the round-trip: the mapper and the builder must agree, or the
+    // storyboard switch silently produces the wrong request body.
+    for (const m of ['fal-ai/kling-video/v3/standard/image-to-video', 'xai/grok-imagine-video/image-to-video',
+                     'alibaba/happy-horse/image-to-video', 'bytedance/seedance-2.0/fast/image-to-video']) {
+      const ref = toRefToVideoModel(m)
+      const out = buildVidInput(ref, base)
+      expect(out.image_url, `${ref} built an i2v body`).toBeUndefined()
+    }
+  })
+})
+
 describe('Grok Imagine 1.5 — reference-to-video', () => {
   const V15_REF = 'xai/grok-imagine-video/v1.5/reference-to-video'
   const V15_I2V = 'xai/grok-imagine-video/v1.5/image-to-video'

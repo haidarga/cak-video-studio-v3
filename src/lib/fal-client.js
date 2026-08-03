@@ -423,7 +423,16 @@ function veoDuration(duration, isRef) {
 }
 
 export function buildVidInput(vidModel, { prompt, image_url, reference_urls, duration, aspect_ratio }) {
-  const isRef = vidModel.includes('reference-to-video')
+  // MUST match BOTH spellings. fal uses `reference-to-video` for grok / seedance
+  // / happy-horse / veo / gemini, but Kling's endpoint is `ref-to-video` — and
+  // `ref-to-video` is exactly what toRefToVideoModel() returns for every Kling
+  // pick, what VIDEO_MODELS lists, and what model-fallback falls back to.
+  // Checking only the long spelling made isRef false for Kling, so a storyboard
+  // or direct-mode Kling gen fell into the image-to-video branch and shipped a
+  // body with no `elements` and `image_url: undefined`. Every other call site in
+  // the codebase already tests both — this one, the function that actually
+  // builds the request, was the odd one out.
+  const isRef = /reference-to-video|ref-to-video/.test(vidModel || '')
   // Pure text-to-video — NO image fields at all (sending them 422s on some
   // endpoints). Per-family shapes from the fal dashboards.
   if (vidModel.includes('text-to-video')) {

@@ -35,11 +35,16 @@ export default async function EditorPage() {
     }
   }
 
-  // Don't ship `meta` jsonb in the list query — it can contain cloned audio
-  // URLs, clip arrays, etc. The editor only needs meta for the active project,
-  // not the picker. Loaded on-demand when user selects a result.
+  // `meta` used to be excluded here with a note saying it'd be fetched
+  // on-demand when a result is selected. That on-demand fetch was never
+  // written — so EditorClient's `result.meta?.cloned_audio_url` (:322) was
+  // always null, every clip was created with use_cloned_voice: false, and the
+  // 🎙 badge (:1082) never rendered. The persona voice swap we pay ElevenLabs
+  // for was silently discarded at the last step before export.
+  // Selecting only the two fields the editor actually reads keeps the payload
+  // small without dropping the feature.
   const resultsQuery = supabase.from('results')
-    .select('id, type, url, label, ar, qc_status, group_label, created_at, persona_id, personas(id, name, username, avatar_url)')
+    .select('id, type, url, label, ar, qc_status, group_label, created_at, persona_id, meta, personas(id, name, username, avatar_url)')
     .eq('workspace_id', ws.id)
   const personasQuery = supabase.from('personas')
     .select('id, name, username, avatar_url')

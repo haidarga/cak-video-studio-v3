@@ -32,7 +32,12 @@ export default async function ScheduledPage() {
     .select('*, results(id, type, url, label, ar), personas(id, name, username, avatar_url, postiz_channel_id, postiz_platform)')
     .eq('workspace_id', ws.id)
   const approvedQuery = supabase.from('results')
-    .select('id, type, url, label, ar, personas(id, name, username, avatar_url, postiz_channel_id, postiz_platform, persona_channels(channel_id, channel_label, platform, postiz_account_id, is_default))')
+    // postiz_channel_label + the inner username are BOTH read by the auto-route
+    // preview (ScheduledClient :850, :860, :868) and were both missing, so the
+    // label-healing fallback was dead: links that carry only a username, and
+    // legacy personas on the single-link model, showed as "no route" even
+    // though /api/postiz/post — which does select them — resolves them fine.
+    .select('id, type, url, label, ar, personas(id, name, username, avatar_url, postiz_channel_id, postiz_channel_label, postiz_platform, persona_channels(channel_id, channel_label, username, platform, postiz_account_id, is_default))')
     .eq('workspace_id', ws.id).eq('qc_status', 'approved')
   if (allowedPersonaIds) {
     scheduledQuery.in('persona_id', allowedPersonaIds)
