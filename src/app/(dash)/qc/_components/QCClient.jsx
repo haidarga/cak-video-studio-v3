@@ -467,7 +467,40 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
   )
 }
 
+// How many cards a persona group renders before the scroll sentinel pulls in
+// more. The poster fix cut BYTES, but 300 cards is still ~4500 DOM nodes and
+// 300 images decoded up front, which is what makes scrolling stutter. Rendering
+// incrementally bounds the DOM instead.
+const QC_PAGE = 20
+const QC_STEP = 20
+
 function PersonaGroup({ persona, items, busyUpload, onUpload, onSetStatus, onRemove, onOpenNote, onRename, onDeletePerma, selectedIds, onToggleSelect, convertingMap, onConvertToMp4, onStripAudio, onChangeVoice, isWebm }) {
+  const [visibleCount, setVisibleCount] = useState(QC_PAGE)
+  const sentinelRef = useRef(null)
+  const hasMore = visibleCount < items.length
+
+  // Grow as the sentinel approaches the viewport. rootMargin pre-loads the next
+  // page before the user actually reaches the bottom, so it feels continuous
+  // rather than like a paginated list.
+  useEffect(() => {
+    if (!hasMore) return
+    const el = sentinelRef.current
+    if (!el || typeof IntersectionObserver === 'undefined') {
+      setVisibleCount(items.length) // no observer support → just render it all
+      return
+    }
+    const obs = new IntersectionObserver(([entry]) => {
+      if (entry?.isIntersecting) setVisibleCount((c) => Math.min(c + QC_STEP, items.length))
+    }, { rootMargin: '600px' })
+    obs.observe(el)
+    return () => obs.disconnect()
+  }, [hasMore, items.length])
+
+  // A filter change can shrink the list below what we were showing.
+  useEffect(() => {
+    setVisibleCount((c) => Math.min(Math.max(c, QC_PAGE), Math.max(items.length, QC_PAGE)))
+  }, [items.length])
+
   const fileRef = useRef(null)
   const counts = items.reduce((c, r) => ({ ...c, [r.qc_status]: (c[r.qc_status] || 0) + 1 }), {})
 
@@ -531,7 +564,7 @@ function PersonaGroup({ persona, items, busyUpload, onUpload, onSetStatus, onRem
         </div>
       ) : (
         <div className="p-3 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-          {items.map((r) => (
+          {items.slice(0, visibleCount).map((r) => (
             <QCCard key={r.id} result={r}
               selected={selectedIds?.has(r.id)} onToggleSelect={onToggleSelect}
               onSetStatus={onSetStatus} onRemove={onRemove} onOpenNote={onOpenNote}
@@ -539,6 +572,11 @@ function PersonaGroup({ persona, items, busyUpload, onUpload, onSetStatus, onRem
               isWebm={isWebm?.(r)} converting={convertingMap?.[r.id] ? { id: r.id, stage: convertingMap[r.id] } : null}
               onConvertToMp4={() => onConvertToMp4?.(r)} onStripAudio={() => onStripAudio?.(r)} onChangeVoice={() => onChangeVoice?.(r)} />
           ))}
+          {hasMore && (
+            <div ref={sentinelRef} className="col-span-full py-4 text-center text-[11px] text-[var(--muted2)]">
+              memuat {Math.min(QC_STEP, items.length - visibleCount)} lagi… ({visibleCount}/{items.length})
+            </div>
+          )}
         </div>
       )}
     </section>
@@ -567,6 +605,20 @@ function qcCardEqual(prev, next) {
     && a.meta?.source === b.meta?.source
 }
 
+// Poster for a video card, in order of preference:
+//   1. results.poster_url — the source image, stamped at generation time
+//   2. a frame pulled from the v2 HF Space (server-side ffmpeg, already used by
+//      lib/ffmpeg-extract.js) — costs one small JPEG instead of a whole MP4
+// Rows generated before poster_url existed, plus t2v / uploads / editor exports,
+// have no stored poster, and a grid full of black boxes is worse than what we
+// started with. This keeps them looking right without a backfill job.
+const V2_BASE = process.env.NEXT_PUBLIC_V2_BACKEND_URL || 'https://cahmul2-cak-video-studio-v2.hf.space'
+function posterFor(r) {
+  if (r.poster_url) return r.poster_url
+  if (r.type === 'video' && r.url) return `${V2_BASE}/api/extract-frame?url=${encodeURIComponent(r.url)}&pos=0`
+  return null
+}
+
 // memo'd: with 300 cards on the page, toggling one selected state was
 // re-rendering all 299 siblings. Now: only the card whose `r` or `selected`
 // actually changed re-renders.
@@ -583,8 +635,10 @@ const QCCard = memo(function QCCard({ result: r, onSetStatus, onRemove, onOpenNo
   // there is no cheap way to peek at a video. Showing an image instead is the
   // only real fix.
   const [showVideo, setShowVideo] = useState(false)
+  const [posterFailed, setPosterFailed] = useState(false)
   const statusCfg = STATUSES.find((s) => s.v === r.qc_status) || STATUSES[0]
   const isVideo = r.type === 'video'
+  const poster = isVideo ? posterFor(r) : null
   return (
     <div className={`bg-[var(--surface2)] border rounded overflow-hidden ${selected ? 'border-[var(--accent)] ring-2 ring-[var(--accent)]/50' : 'border-[var(--border)]'}`}>
       <div className="relative aspect-[9/16] bg-black"
@@ -594,16 +648,18 @@ const QCCard = memo(function QCCard({ result: r, onSetStatus, onRemove, onOpenNo
           <img src={r.url} alt={r.label} loading="lazy" decoding="async" className="w-full h-full object-cover" />
         ) : showVideo ? (
           <video src={r.url} muted loop playsInline autoPlay preload="auto"
-            poster={r.poster_url || undefined}
+            poster={poster || undefined}
             className="w-full h-full object-cover" />
-        ) : r.poster_url ? (
+        ) : poster && !posterFailed ? (
           <>
-            <img src={r.poster_url} alt={r.label} loading="lazy" decoding="async" className="w-full h-full object-cover" />
+            <img src={poster} alt={r.label} loading="lazy" decoding="async"
+              onError={() => setPosterFailed(true)}
+              className="w-full h-full object-cover" />
             <span className="absolute inset-0 flex items-center justify-center text-2xl text-white/70 pointer-events-none drop-shadow">▶</span>
           </>
         ) : (
-          // No poster (t2v, upload, editor export). Don't fetch anything —
-          // hovering mounts the real video.
+          // No poster available (and the frame-extract fallback failed too).
+          // Fetch nothing — hovering mounts the real video.
           <div className="w-full h-full flex items-center justify-center text-white/40 text-xs gap-1">
             <span className="text-2xl">▶</span>
           </div>
