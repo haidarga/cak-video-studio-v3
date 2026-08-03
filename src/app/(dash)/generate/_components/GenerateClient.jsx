@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import {
   falRun, buildImgInput, buildVidInput,
@@ -758,6 +758,63 @@ function friendlyFalError(raw) {
   return s
 }
 
+// ── Shot card memoization ───────────────────────────────────────────
+// All shot state lives at the root, so ONE shot's progress tick used to
+// re-render every shot card on the page. The fal poller emits a new progress
+// string every 3s per in-flight job (it embeds elapsed seconds, so it always
+// differs) — with 20 shots that is 20 full card re-renders every 3 seconds.
+// QCClient already solved this exact problem (see qcCardEqual there); the
+// generate page never got the same treatment.
+//
+// WHY A CUSTOM COMPARATOR AND NOT PLAIN memo(): the call site passes ~17 inline
+// closures, freshly allocated every render, so plain memo would never hit. We
+// deliberately IGNORE function identity — but that is only safe if we compare
+// everything those closures actually capture, otherwise a retained closure
+// reads stale state (user edits a prompt, clicks Gen Video, gets the OLD one).
+// Hence `_deps`, which carries exactly that:
+//   - globalConfig / activeBrand   → read by genImageForShot / genVideoForShot
+//   - persona                      → character_prompt + name go into the prompt
+//   - userCameraPresets            → getCameraPreset() / prompt compiler
+//   - shotsLen                     → gates onLinkNext
+//   - nextShot                     → linkFrameToNextShot reads shots[i+1]
+// `shot` itself is compared by reference: patchShot always produces a new
+// object, so a real change always breaks equality.
+//
+// Two captures are deliberately NOT here: `state.naskah` and the full
+// `state.shots` array, both read by continueStoryboard. Including the shots
+// array would mean any shot's 3-second progress tick invalidates every card and
+// the memo buys nothing — so continueStoryboard reads them through `stateRef`
+// instead, which is always current.
+function shotDepsEqual(a, b) {
+  if (a.shot !== b.shot) return false
+  if (a.idx !== b.idx) return false
+  const x = a._deps || {}, y = b._deps || {}
+  if (x.shotsLen !== y.shotsLen) return false
+  if (x.nextShot !== y.nextShot) return false
+  if (x.globalConfig !== y.globalConfig) return false
+  if (x.activeBrand !== y.activeBrand) return false
+  if (x.persona !== y.persona) return false
+  if (x.userCameraPresets !== y.userCameraPresets) return false
+  if (a.maxDuration !== b.maxDuration) return false
+  if (a.requiresImageForVideo !== b.requiresImageForVideo) return false
+  if (a.mode !== b.mode || a.ar !== b.ar || a.vidModelLabel !== b.vidModelLabel) return false
+  const ar1 = a.availableRefs || [], ar2 = b.availableRefs || []
+  if (ar1.length !== ar2.length) return false
+  // Compare CONTENT, not just id: a ref can keep its id while its fal_url or
+  // knowledge text is replaced (re-upload, edited product notes), and those feed
+  // straight into the generation prompt.
+  for (let i = 0; i < ar1.length; i++) {
+    const p = ar1[i], q = ar2[i]
+    if (p === q) continue
+    if (p?.id !== q?.id || p?.fal_url !== q?.fal_url || p?.knowledge !== q?.knowledge) return false
+  }
+  return true
+}
+// Function declarations hoist, so wrapping them here (above their definitions)
+// is fine and keeps the comparator next to the thing it guards.
+const ShotEditorMemo = memo(ShotEditor, shotDepsEqual)
+const StoryboardEditorMemo = memo(StoryboardEditor, shotDepsEqual)
+
 function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs = [], state, onPatch, globalConfig: rawGlobalConfig, perPersonaMode = false, userCameraPresets = [], activeBrand, activePreset = null, workspaceId, userId, onErr, supabase, autoStartImages = false }) {
   const personaOwnRefs = (persona.persona_refs || []).map((pr) => pr.refs).filter(Boolean)
   const [cfgOpen, setCfgOpen] = useState(false)
@@ -883,6 +940,26 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
     workspaceRefs.forEach((r) => all.set(r.id, r))
     return [...all.values()].filter((r) => state.refIds.has(r.id))
   }, [personaOwnRefs, workspaceRefs, state.refIds])
+
+  // Hoisted out of the shot map. `[...selectedRefs, ...styleRefs]` was being
+  // rebuilt PER SHOT PER RENDER — 20 shots x 12 refs = 240 object copies every
+  // time any shot ticked. Same for the VIDEO_MODELS lookup + string split,
+  // which produced an identical value for every card.
+  const shotAvailableRefs = useMemo(() => [...selectedRefs, ...styleRefs], [selectedRefs, styleRefs])
+
+  // Always-current view of `state`, for handlers that read data the memo
+  // comparator can't cheaply cover. continueStoryboard needs the naskah AND
+  // every other shot's motion text to build its "already covered" summary —
+  // putting the whole shots array in the comparator would mean any shot's
+  // 3-second progress tick re-renders every card, which is the exact problem
+  // the memo exists to fix. Reading through a ref keeps the memo effective and
+  // the data fresh at the same time.
+  const stateRef = useRef(state)
+  stateRef.current = state
+  const vidModelLabel = useMemo(
+    () => (VIDEO_MODELS.find((m) => m.v === globalConfig.vidModel)?.l || globalConfig.vidModel).split('—')[0].trim(),
+    [globalConfig.vidModel]
+  )
 
   async function parseNaskah() {
     if (!state.naskah.trim()) { onErr(`${persona.name}: naskah kosong`); return }
@@ -1875,7 +1952,9 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
       // Capped to the chosen model's max clip length. Falls back to the manual
       // hint if there's no naskah or the parse fails.
       let contSeg = null
-      const fullNaskah = (state.naskah || '').trim()
+      // via ref — this card may be memoized, so the render-closure `state` can
+      // be older than what the user just typed into the naskah box.
+      const fullNaskah = (stateRef.current.naskah || '').trim()
       const maxDur = getVideoMaxDuration(globalConfig.vidModel)
       // DETERMINISTIC next segment: if this storyboard was code-split from a
       // timestamped naskah, gen the EXACT next segment text — no LLM guessing
@@ -1906,7 +1985,9 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
       } else if (fullNaskah) {
         try {
           patchShot(idx, { continuing: 'Nyusun lanjutan dari naskah...' })
-          const covered = state.shots.map((s, i) => {
+          // via ref — must reflect edits made to OTHER shots since this card
+          // last rendered, otherwise the continuation is built on stale context.
+          const covered = stateRef.current.shots.map((s, i) => {
             const beats = s.raw.video_motion || (s.raw.panels || []).map((p) => p.visual).join(' / ') || ''
             return `Shot ${i + 1} (${s.raw.shot_label || s.raw.concept || ''}): ${String(beats).slice(0, 280)}`
           }).join('\n')
@@ -2548,9 +2629,10 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
               !shot?.raw
                 ? null
                 : shot.raw.panels
-                ? <StoryboardEditor key={shot.id} shot={shot} idx={i} ar={globalConfig.ar} requiresImageForVideo={requiresImageForVideo}
+                ? <StoryboardEditorMemo key={shot.id} shot={shot} idx={i} ar={globalConfig.ar} requiresImageForVideo={requiresImageForVideo}
                     maxDuration={getVideoMaxDuration(globalConfig.vidModel)}
-                    availableRefs={[...selectedRefs, ...styleRefs]}
+                    availableRefs={shotAvailableRefs}
+                    _deps={{ shotsLen: state.shots.length, nextShot: state.shots[i + 1], globalConfig, activeBrand, persona, userCameraPresets }}
                     onToggleRef={(refId) => patchShot(i, (prev) => {
                       const cur = new Set(prev.disabledRefIds || [])
                       if (cur.has(refId)) cur.delete(refId); else cur.add(refId)
@@ -2570,11 +2652,12 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
                     onContinue={() => continueStoryboard(i)}
                     onLinkNext={i + 1 < state.shots.length ? () => linkFrameToNextShot(i) : null}
                     onDelete={() => deleteResult(i, shot.video?.result_id)} />
-                : <ShotEditor key={shot.id} shot={shot} idx={i} requiresImageForVideo={requiresImageForVideo}
+                : <ShotEditorMemo key={shot.id} shot={shot} idx={i} requiresImageForVideo={requiresImageForVideo}
                     mode={globalConfig.mode}
                     maxDuration={getVideoMaxDuration(globalConfig.vidModel)}
-                    vidModelLabel={(VIDEO_MODELS.find((m) => m.v === globalConfig.vidModel)?.l || globalConfig.vidModel).split('—')[0].trim()}
-                    availableRefs={[...selectedRefs, ...styleRefs]}
+                    vidModelLabel={vidModelLabel}
+                    availableRefs={shotAvailableRefs}
+                    _deps={{ shotsLen: state.shots.length, nextShot: state.shots[i + 1], globalConfig, activeBrand, persona, userCameraPresets }}
                     onToggleRef={(refId) => patchShot(i, (prev) => {
                       const cur = new Set(prev.disabledRefIds || [])
                       if (cur.has(refId)) cur.delete(refId); else cur.add(refId)
