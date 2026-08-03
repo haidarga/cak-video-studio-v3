@@ -1,4 +1,5 @@
 'use client'
+import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 
@@ -458,7 +459,7 @@ function PersonaRow({ persona: p, channels, onAddChannel, onRemoveChannel, onSet
           </select>
         )}
       </div>
-      <a href="/personas" className="text-xs text-[var(--muted)] hover:text-white" title="Edit lengkap di Personas">✎</a>
+      <Link href="/personas" className="text-xs text-[var(--muted)] hover:text-white" title="Edit lengkap di Personas">✎</Link>
     </div>
   )
 }

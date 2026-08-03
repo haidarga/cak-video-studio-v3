@@ -1,4 +1,5 @@
 'use client'
+import Link from 'next/link'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { uploadFile, uploadBlob } from '@/lib/upload-client'
@@ -335,9 +336,9 @@ export default function QCClient({ workspaceId, userId, initialResults, personas
           <p className="text-sm text-[var(--muted)]">Auto-group per persona. Approve → siap upload (Post Now / Schedule). Bisa upload video eksternal yang udah lu edit di luar platform.</p>
         </div>
         {totalCounts.approved > 0 && (
-          <a href="/scheduled" className="text-xs text-green-400 underline">
+          <Link href="/scheduled" className="text-xs text-green-400 underline">
             ✓ {totalCounts.approved} approved siap upload →
-          </a>
+          </Link>
         )}
       </div>
 
@@ -719,7 +720,7 @@ const QCCard = memo(function QCCard({ result: r, onSetStatus, onRemove, onOpenNo
             {r.qc_notes ? '📝' : '+ note'}
           </button>
           {r.qc_status === 'approved' && (
-            <a href="/scheduled" className="flex-1 text-[10px] px-1.5 py-1 rounded bg-green-500/20 hover:bg-green-500/30 text-green-300 text-center font-semibold">📅</a>
+            <Link href="/scheduled" className="flex-1 text-[10px] px-1.5 py-1 rounded bg-green-500/20 hover:bg-green-500/30 text-green-300 text-center font-semibold">📅</Link>
           )}
           {isWebm && (
             <button onClick={onConvertToMp4} disabled={!!converting}

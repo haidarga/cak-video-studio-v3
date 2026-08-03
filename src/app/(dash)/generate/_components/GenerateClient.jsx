@@ -1,4 +1,5 @@
 'use client'
+import Link from 'next/link'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import {
@@ -572,7 +573,7 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
             </div>
         {personas.length === 0 ? (
           <div className="text-xs text-[var(--muted)] p-4 border border-dashed border-[var(--border)] rounded">
-            Belum ada persona. <a href="/personas" className="underline text-[var(--accent)]">Bikin persona dulu</a>.
+            Belum ada persona. <Link href="/personas" className="underline text-[var(--accent)]">Bikin persona dulu</Link>.
           </div>
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
@@ -2880,9 +2881,9 @@ function ShotEditor({ shot, idx, mode = 'shots', maxDuration = 15, requiresImage
           {/* Prominent Send to QC — visible begitu ada image atau video */}
           {(shot.image?.url || shot.video?.url) && (
             shot.qc_sent ? (
-              <a href="/qc" className="block w-full mt-1 text-[10px] px-1.5 py-1 rounded bg-green-500/30 hover:bg-green-500/50 border border-green-500/50 text-green-300 font-semibold text-center">
+              <Link href="/qc" className="block w-full mt-1 text-[10px] px-1.5 py-1 rounded bg-green-500/30 hover:bg-green-500/50 border border-green-500/50 text-green-300 font-semibold text-center">
                 ✓ In QC →
-              </a>
+              </Link>
             ) : (
               <button onClick={onSendQC}
                 className="w-full mt-1 text-[10px] px-1.5 py-1 rounded bg-purple-500 hover:bg-purple-600 text-white font-bold">
@@ -3258,9 +3259,9 @@ function StoryboardEditor({ shot, idx, ar, maxDuration = 15, requiresImageForVid
           {/* Prominent Send to QC — visible begitu ada image atau video */}
           {(shot.image?.url || shot.video?.url) && (
             shot.qc_sent ? (
-              <a href="/qc" className="block w-full mt-1 text-xs px-2 py-1.5 rounded bg-green-500/30 hover:bg-green-500/50 border border-green-500/50 text-green-300 font-semibold text-center">
+              <Link href="/qc" className="block w-full mt-1 text-xs px-2 py-1.5 rounded bg-green-500/30 hover:bg-green-500/50 border border-green-500/50 text-green-300 font-semibold text-center">
                 ✓ In QC → buka QC
-              </a>
+              </Link>
             ) : (
               <button onClick={onSendQC}
                 className="w-full mt-1 text-xs px-2 py-1.5 rounded bg-purple-500 hover:bg-purple-600 text-white font-bold">

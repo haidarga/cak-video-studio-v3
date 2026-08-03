@@ -1,4 +1,5 @@
 'use client'
+import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { LazyVideo } from '@/lib/use-lazy-video'
@@ -620,7 +621,7 @@ function ScheduleModal({ result, onClose, onSubmit, channels, channelsLoading })
               <div className="text-xs text-[var(--muted)] p-4 border border-dashed border-[var(--border)] rounded">⏳ Loading Postiz channels...</div>
             ) : !channels || channels.length === 0 ? (
               <div className="text-xs text-[var(--muted)] p-4 border border-dashed border-[var(--border)] rounded">
-                Belum ada channel. Buka <a href="/posting" className="underline text-[var(--accent)]">/posting</a> → 🔄 Sync Channels dulu.
+                Belum ada channel. Buka <Link href="/posting" className="underline text-[var(--accent)]">/posting</Link> → 🔄 Sync Channels dulu.
               </div>
             ) : (
               <div className="border border-[var(--border)] rounded bg-[var(--surface2)]/30 p-2 space-y-3 max-h-72 overflow-auto">
@@ -1061,7 +1062,7 @@ function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubm
                 )}
                 {autoRoute && missingRoute.length > 0 && (
                   <div className="mt-2 text-[10px] text-yellow-300 bg-yellow-500/10 border border-yellow-500/30 p-2 rounded">
-                    ⚠ {missingRoute.length} result gak punya channel terlink ke persona-nya. Result itu di-skip. Link persona ke channel di <a href="/posting" className="underline">/posting</a>.
+                    ⚠ {missingRoute.length} result gak punya channel terlink ke persona-nya. Result itu di-skip. Link persona ke channel di <Link href="/posting" className="underline">/posting</Link>.
                   </div>
                 )}
               </div>
@@ -1091,7 +1092,7 @@ function BulkScheduleModal({ results, channels, channelsLoading, onClose, onSubm
               <div className="text-xs text-[var(--muted)] p-4 border border-dashed border-[var(--border)] rounded">⏳ Loading channels...</div>
             ) : !channels || channels.length === 0 ? (
               <div className="text-xs text-[var(--muted)] p-4 border border-dashed border-[var(--border)] rounded">
-                Belum ada channel. Buka <a href="/posting" className="underline text-[var(--accent)]">/posting</a> → Sync Channels.
+                Belum ada channel. Buka <Link href="/posting" className="underline text-[var(--accent)]">/posting</Link> → Sync Channels.
               </div>
             ) : (
               <div className="border border-[var(--border)] rounded bg-[var(--surface2)]/30 p-2 space-y-3 max-h-60 overflow-auto">

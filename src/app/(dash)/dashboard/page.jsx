@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { fmtCost } from '@/lib/cost-table'
 
@@ -116,7 +117,7 @@ export default async function DashboardPage() {
           <div className="text-xs">
             Spend bulan ini <b>{fmtCost(monthCost)}</b> dari limit <b>{fmtCost(monthlyLimit)}</b>
             {' · '}forecast EOM <b>{fmtCost(forecastEom)}</b> ({forecastPct.toFixed(0)}%)
-            {' · '}<a href="/settings" className="underline">naikkin limit di Settings</a>
+            {' · '}<Link href="/settings" className="underline">naikkin limit di Settings</Link>
           </div>
         </div>
       )}

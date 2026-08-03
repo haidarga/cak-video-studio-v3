@@ -1,4 +1,5 @@
 'use client'
+import Link from 'next/link'
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { fmtCost } from '@/lib/cost-table'
@@ -105,7 +106,7 @@ export default function CostWidget({ workspaceId }) {
           <div className="text-[9px] text-[var(--muted2)] mt-2">
             Budget: {fmtCost(budget.daily_limit_usd)}/day · {fmtCost(budget.monthly_limit_usd)}/mo
           </div>
-          <a href="/dashboard" className="block text-[10px] text-[var(--accent)] hover:underline mt-1">View full dashboard →</a>
+          <Link href="/dashboard" className="block text-[10px] text-[var(--accent)] hover:underline mt-1">View full dashboard →</Link>
         </div>
       )}
 
