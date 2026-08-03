@@ -49,6 +49,7 @@ export default async function InboxPage() {
 
   return (
     <InboxClient
+      key={activeBrandId || "no-brand"}
       jobs={jobs || []}
       hiddenByBrand={hiddenByBrand}
       activeBrandName={activeBrand?.name || null}

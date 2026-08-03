@@ -58,6 +58,16 @@ export default async function GeneratePage({ searchParams }) {
 
   return (
     <GenerateClient
+      // REMOUNT on brand change. Every client component here mirrors its server
+      // props into state (`useState(initialPersonas)`), and useState only reads
+      // its argument on the FIRST mount — a re-render with new props is silently
+      // ignored. So switching brands re-ran the server query correctly, sent the
+      // right personas down, and the client threw them away: the label changed
+      // and nothing else did.
+      // A key is React's own answer to "reset this subtree when the context
+      // changes", and it's the right semantics here — the previous brand's
+      // shots/naskah reference personas that no longer exist in the list.
+      key={ws.active_brand_id || 'no-brand'}
       workspaceId={ws.id}
       userId={user.id}
       activeBrand={brandRes?.data || null}

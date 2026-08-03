@@ -27,7 +27,7 @@ export default async function QCPage() {
     allowedPersonaIds = (brandPersonas || []).map((p) => p.id)
     // If brand has no personas yet, short-circuit to empty results.
     if (!allowedPersonaIds.length) {
-      return <QCClient workspaceId={ws.id} userId={user.id} initialResults={[]} personas={[]} />
+      return <QCClient key={ws.active_brand_id || "no-brand"} workspaceId={ws.id} userId={user.id} initialResults={[]} personas={[]} />
     }
   }
 
@@ -51,5 +51,5 @@ export default async function QCPage() {
     personasQuery.order('created_at', { ascending: false }).limit(100),
   ])
 
-  return <QCClient workspaceId={ws.id} userId={user.id} initialResults={results || []} personas={personas || []} />
+  return <QCClient key={ws.active_brand_id || "no-brand"} workspaceId={ws.id} userId={user.id} initialResults={results || []} personas={personas || []} />
 }

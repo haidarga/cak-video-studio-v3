@@ -52,6 +52,7 @@ export default async function PersonasPage() {
 
   return (
     <PersonasClient
+      key={ws.active_brand_id || "no-brand"}
       workspaceId={ws.id}
       userId={user.id}
       activeBrandId={ws.active_brand_id || null}

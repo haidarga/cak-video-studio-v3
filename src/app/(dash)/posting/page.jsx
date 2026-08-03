@@ -36,6 +36,7 @@ export default async function PostingPage() {
 
   return (
     <PostingClient
+      key={ws.active_brand_id || "no-brand"}
       workspaceId={ws.id}
       initialPersonas={personas || []}
     />

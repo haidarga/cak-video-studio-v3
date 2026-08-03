@@ -24,7 +24,7 @@ export default async function ScheduledPage() {
       .eq('workspace_id', ws.id).eq('brand_id', ws.active_brand_id)
     allowedPersonaIds = (brandPersonas || []).map((p) => p.id)
     if (!allowedPersonaIds.length) {
-      return <ScheduledClient workspaceId={ws.id} userId={user.id} initialScheduled={[]} approvedResults={[]} />
+      return <ScheduledClient key={ws.active_brand_id || "no-brand"} workspaceId={ws.id} userId={user.id} initialScheduled={[]} approvedResults={[]} />
     }
   }
 
@@ -51,6 +51,7 @@ export default async function ScheduledPage() {
 
   return (
     <ScheduledClient
+      key={ws.active_brand_id || 'no-brand'}
       workspaceId={ws.id}
       userId={user.id}
       initialScheduled={scheduled || []}
