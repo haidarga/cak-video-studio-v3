@@ -1635,18 +1635,26 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
           })
           const j = await r.json()
           if (j.ok) {
-            // MUX — the step this path never had. /api/voice/convert only
-            // produces the cloned-voice mp3; without muxing it back onto the
-            // video, `results.url` kept the AI's native voice. Only QC did this,
-            // which is exactly why the user had to finish every video by hand.
-            patchShot(idx, { video: { status: '🎙 muxing suara...', url: videoUrl, result_id: row.id } })
-            const { swapAudioInVideo } = await import('@/lib/swap-audio')
-            const { withFfmpegLock } = await import('@/lib/editor-render')
-            const blob = await withFfmpegLock(() =>
-              swapAudioInVideo(videoUrl, j.audio_url, (stage) =>
-                patchShot(idx, { video: { status: `🎙 ${stage}`, url: videoUrl, result_id: row.id } }))
-            )
-            const { url: voicedUrl } = await uploadBlob(blob, `voiced-${row.id}-${Date.now()}.mp4`, 'qc')
+            // MUX. /api/voice/convert only produced the cloned-voice mp3; without
+            // muxing it onto the video, `results.url` kept the AI's native voice.
+            // Only QC did this, which is why every video had to be finished by
+            // hand.
+            //
+            // The server now muxes via fal's ffmpeg-api and has already updated
+            // results.url — so this whole block is a FALLBACK for when that step
+            // failed. Doing it in the browser means it only works while the tab
+            // is open, which is the exact fragility we're moving away from.
+            let voicedUrl = j.video_url || null
+            if (!voicedUrl) {
+              patchShot(idx, { video: { status: '🎙 muxing suara (browser)...', url: videoUrl, result_id: row.id } })
+              const { swapAudioInVideo } = await import('@/lib/swap-audio')
+              const { withFfmpegLock } = await import('@/lib/editor-render')
+              const blob = await withFfmpegLock(() =>
+                swapAudioInVideo(videoUrl, j.audio_url, (stage) =>
+                  patchShot(idx, { video: { status: `🎙 ${stage}`, url: videoUrl, result_id: row.id } }))
+              )
+              ;({ url: voicedUrl } = await uploadBlob(blob, `voiced-${row.id}-${Date.now()}.mp4`, 'qc'))
+            }
             // Update IN PLACE rather than inserting a second row: the user wants
             // one finished video, and a new row would be the very duplicate we
             // just added a unique index to prevent. Original URL kept in meta so
