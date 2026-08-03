@@ -18,11 +18,21 @@ export default function ActiveBrandWidget({ workspaceId, activeBrandId, brands: 
         if (data) setBrands(data)
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'workspaces', filter: `id=eq.${workspaceId}` }, (p) => {
-        setActiveId(p.new.active_brand_id)
+        setActiveId((prev) => {
+          if (prev === p.new.active_brand_id) return prev
+          // Server-rendered pages (/generate, /qc, /personas) filter their
+          // content by active_brand_id at FETCH time. pick() already refreshes,
+          // but a switch made in another tab/device only updated this widget —
+          // so the sidebar showed the new brand while the page still rendered
+          // the old one's personas and brand badge. Generating from that state
+          // silently used the WRONG brand's personas.
+          router.refresh()
+          return p.new.active_brand_id
+        })
       })
       .subscribe()
     return () => { supabase.removeChannel(ch) }
-  }, [supabase, workspaceId])
+  }, [supabase, workspaceId, router])
 
   useEffect(() => {
     function onClick(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }

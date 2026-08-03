@@ -695,7 +695,10 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
                 ? '📋 Stage 1: AI Gemini lagi nge-parse naskah & nentuin prompt visual shot per shot...'
                 : completedShotsCount >= autoGenState.total && autoGenState.total > 0
                   ? '✅ Stage Complete! Semua gambar batch selesai di-render. Membuka studio...'
-                  : `🎨 Stage 2: AI lagi nge-render gambar ke-${Math.min(completedShotsCount + 1, autoGenState.total)} dari ${autoGenState.total} pake GPT Image 2 Edit...`}
+                  // Was hardcoded to "GPT Image 2 Edit" while the header two
+                  // lines up showed the REAL model — so the modal contradicted
+                  // itself (header said nano-banana-2, body said GPT Image 2).
+                  : `🎨 Stage 2: AI lagi nge-render gambar ke-${Math.min(completedShotsCount + 1, autoGenState.total)} dari ${autoGenState.total} pake ${(globalConfig.imgModel || '').split('/').slice(-2).join('/') || 'model default'}...`}
             </div>
 
             <div className="pt-2">
@@ -956,6 +959,17 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
   // the data fresh at the same time.
   const stateRef = useRef(state)
   stateRef.current = state
+
+  // Which shots have a generation actually in flight RIGHT NOW.
+  //
+  // The double-click guard used to infer this from shot.image.status !== idle
+  // /done/error. That was wrong: a run killed mid-flight (tab closed, network
+  // drop, batch aborted) leaves a progress string like "submitting (sync)..."
+  // persisted on the shot forever, and the guard then refuses to EVER generate
+  // it again — the batch sits at 0/21 with no way to recover except editing the
+  // shot. A ref only knows about generations this page session actually started,
+  // so a stale string can't wedge anything.
+  const inFlightRef = useRef(new Set())
   const vidModelLabel = useMemo(
     () => (VIDEO_MODELS.find((m) => m.v === globalConfig.vidModel)?.l || globalConfig.vidModel).split('—')[0].trim(),
     [globalConfig.vidModel]
@@ -1129,11 +1143,12 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
     // goes false within milliseconds because onProgress immediately overwrites
     // status with a free-text progress string ("submitting (sync)..."), so
     // Re-img re-enables itself and both jobs land as separate assets.
-    const ist = shot.image?.status
-    if (ist && ist !== 'idle' && ist !== 'done' && ist !== 'error') {
-      onErr(`${persona.name}: gambar lagi digenerate (${ist}) — tunggu selesai, jangan klik ulang (bikin dobel).`)
+    const imgKey = `img:${shot.id ?? idx}`
+    if (inFlightRef.current.has(imgKey)) {
+      onErr(`${persona.name}: gambar lagi digenerate — tunggu selesai, jangan klik ulang (bikin dobel).`)
       return
     }
+    inFlightRef.current.add(imgKey)
     patchShot(idx, { image: { status: 'generating' } })
     try {
       const productKnowledge = selectedRefs.map((r) => String(r.knowledge || '').trim()).filter(Boolean).join('\n')
@@ -1303,6 +1318,8 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       })
     } catch (e) {
       patchShot(idx, { image: { status: 'error', error: friendlyFalError(e?.message || e) } })
+    } finally {
+      inFlightRef.current.delete(imgKey)
     }
   }
 
@@ -1312,13 +1329,17 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
     // IN-FLIGHT GUARD — the Re-gen button re-enables mid-gen because the status
     // becomes a live progress string ("IN_QUEUE #3 (40s)", etc.), not the exact
     // 'generating' the button checks. A user watching a slow (or realtime-stuck)
-    // gen could re-click and spawn a SECOND fal job → duplicate result. Block
-    // any status that isn't a terminal/idle state.
-    const vst = shot.video?.status
-    if (vst && vst !== 'idle' && vst !== 'done' && vst !== 'error') {
-      onErr(`${persona.name}: video lagi digenerate (${vst}) — tunggu selesai, jangan klik ulang (bikin dobel).`)
+    // gen could re-click and spawn a SECOND fal job → duplicate result.
+    //
+    // Keyed off a ref, NOT the persisted status string: a run killed mid-flight
+    // leaves a progress string on the shot forever, and a status-based guard
+    // would then refuse to ever generate it again.
+    const vidKey = `vid:${shot.id ?? idx}`
+    if (inFlightRef.current.has(vidKey)) {
+      onErr(`${persona.name}: video lagi digenerate — tunggu selesai, jangan klik ulang (bikin dobel).`)
       return
     }
+    inFlightRef.current.add(vidKey)
     // Validate motion field — empty/blank motion = model generates from text
     // prompt that's literally nothing or just the system role-id. User reported
     // a real $0.70 burn from the Continue button creating a shot with the
@@ -1784,6 +1805,8 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
       }
     } catch (e) {
       patchShot(idx, { video: { status: 'error', error: friendlyFalError(e?.message || e) } })
+    } finally {
+      inFlightRef.current.delete(vidKey)
     }
   }
 
