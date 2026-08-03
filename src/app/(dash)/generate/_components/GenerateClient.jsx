@@ -1654,6 +1654,9 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
         // Stamped so migration 0032's unique index can reject a second ingestion
         // of the SAME fal job (the "current + last" duplicate).
         request_id: vidResult.request_id || null,
+        // Lets /qc and /results paint a preview WITHOUT mounting a <video>.
+        // For i2v this image is literally frame 0.
+        poster_url: shot.image?.url || null,
         meta: { image_url: shot.image?.url || null, raw: shot.raw, source: 'generate', direct: isDirect || undefined },
         created_by: userId,
       }).select('id').single()

@@ -2,7 +2,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { uploadFile, uploadBlob } from '@/lib/upload-client'
-import { LazyVideo } from '@/lib/use-lazy-video'
 import { convertVideoToMp4 } from '@/lib/video-convert'
 import { stripAudioFromVideo } from '@/lib/strip-audio'
 import { swapAudioInVideo } from '@/lib/swap-audio'
@@ -560,6 +559,7 @@ function qcCardEqual(prev, next) {
   if (a === b) return true
   return a.id === b.id
     && a.url === b.url
+    && a.poster_url === b.poster_url
     && a.label === b.label
     && a.qc_status === b.qc_status
     && a.qc_notes === b.qc_notes
@@ -573,15 +573,41 @@ function qcCardEqual(prev, next) {
 const QCCard = memo(function QCCard({ result: r, onSetStatus, onRemove, onOpenNote, onRename, onDeletePerma, selected, onToggleSelect, isWebm, converting, onConvertToMp4, onStripAudio, onChangeVoice }) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(r.label || '')
+  // A <video> is mounted ONLY while this card is hovered. With 300 cards the
+  // page used to mount 300 media elements at once; Chrome caps how many can be
+  // active (~75), so the overflow silently never loaded — a black card that
+  // never fills in, which is what "preview lama banget" actually was. On top of
+  // that LazyVideo escalates to preload="auto" within 200px of the viewport, so
+  // scrolling alone buffered ~15 full videos at a time. fal MP4s have no
+  // faststart atom, so even preload="metadata" pulls almost the whole file —
+  // there is no cheap way to peek at a video. Showing an image instead is the
+  // only real fix.
+  const [showVideo, setShowVideo] = useState(false)
   const statusCfg = STATUSES.find((s) => s.v === r.qc_status) || STATUSES[0]
+  const isVideo = r.type === 'video'
   return (
     <div className={`bg-[var(--surface2)] border rounded overflow-hidden ${selected ? 'border-[var(--accent)] ring-2 ring-[var(--accent)]/50' : 'border-[var(--border)]'}`}>
-      <div className="relative aspect-[9/16] bg-black">
-        {r.type === 'video'
-          ? <LazyVideo src={r.url} muted loop playsInline className="w-full h-full object-cover"
-              onMouseEnter={(e) => { e.target.preload = 'auto'; e.target.play().catch(()=>{}) }}
-              onMouseLeave={(e) => e.target.pause()} />
-          : <img src={r.url} alt={r.label} loading="lazy" className="w-full h-full object-cover" />}
+      <div className="relative aspect-[9/16] bg-black"
+        onMouseEnter={isVideo ? () => setShowVideo(true) : undefined}
+        onMouseLeave={isVideo ? () => setShowVideo(false) : undefined}>
+        {!isVideo ? (
+          <img src={r.url} alt={r.label} loading="lazy" decoding="async" className="w-full h-full object-cover" />
+        ) : showVideo ? (
+          <video src={r.url} muted loop playsInline autoPlay preload="auto"
+            poster={r.poster_url || undefined}
+            className="w-full h-full object-cover" />
+        ) : r.poster_url ? (
+          <>
+            <img src={r.poster_url} alt={r.label} loading="lazy" decoding="async" className="w-full h-full object-cover" />
+            <span className="absolute inset-0 flex items-center justify-center text-2xl text-white/70 pointer-events-none drop-shadow">▶</span>
+          </>
+        ) : (
+          // No poster (t2v, upload, editor export). Don't fetch anything —
+          // hovering mounts the real video.
+          <div className="w-full h-full flex items-center justify-center text-white/40 text-xs gap-1">
+            <span className="text-2xl">▶</span>
+          </div>
+        )}
         {/* Multi-select checkbox top-left, status badge top-right */}
         {onToggleSelect && (
           <label onClick={(e) => e.stopPropagation()} className="absolute top-1.5 left-1.5 cursor-pointer">

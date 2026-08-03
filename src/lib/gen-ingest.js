@@ -31,6 +31,8 @@ export function buildResultRowFromJob(job, url) {
     ar: ingest.ar || null,
     group_label: ingest.group_label || null,
     request_id: job.request_id,
+    // Preview image so grids can render <img> instead of a <video> element.
+    poster_url: ingest.image_url || null,
     meta: {
       source: ingest.source || 'generate',
       image_url: ingest.image_url || null,
