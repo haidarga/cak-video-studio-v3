@@ -1,5 +1,57 @@
 import { describe, it, expect } from 'vitest'
-import { toRefToVideoModel, toImageToVideoModel, getVideoMaxDuration, buildStoryboardGridPrompt, buildVidInput, gridDims } from './fal-client.js'
+import { toRefToVideoModel, toImageToVideoModel, getVideoMaxDuration, buildStoryboardGridPrompt, buildVidInput, gridDims, VIDEO_MODELS } from './fal-client.js'
+
+// xai/grok-imagine-video/v1.5/reference-to-video — the v1.5 tier already shipped
+// its image-to-video variant, so the family-preserving mappers must not silently
+// downgrade a v1.5 pick to the older (cheaper, lower-quality) Grok endpoint.
+describe('Grok Imagine 1.5 — reference-to-video', () => {
+  const V15_REF = 'xai/grok-imagine-video/v1.5/reference-to-video'
+  const V15_I2V = 'xai/grok-imagine-video/v1.5/image-to-video'
+  const OLD_REF = 'xai/grok-imagine-video/reference-to-video'
+  const base = { prompt: 'discover places', duration: 10, aspect_ratio: '16:9' }
+
+  it('is registered in VIDEO_MODELS', () => {
+    expect(VIDEO_MODELS.some((m) => m.v === V15_REF)).toBe(true)
+  })
+
+  it('storyboard switch keeps the v1.5 tier instead of dropping to the older Grok ref', () => {
+    expect(toRefToVideoModel(V15_I2V)).toBe(V15_REF)
+    expect(toRefToVideoModel(OLD_REF)).toBe(OLD_REF) // already ref, untouched
+    expect(toRefToVideoModel('xai/grok-imagine-video/image-to-video')).toBe(OLD_REF)
+  })
+
+  it('long-form hand-off keeps the v1.5 tier when going back to image-to-video', () => {
+    expect(toImageToVideoModel(V15_REF)).toBe(V15_I2V)
+    expect(toImageToVideoModel(OLD_REF)).toBe('xai/grok-imagine-video/image-to-video')
+  })
+
+  it('sends refs as reference_image_urls — image_urls is the field fal 422s on', () => {
+    const out = buildVidInput(V15_REF, { ...base, reference_urls: ['https://x/1.jpg', 'https://x/2.jpg'] })
+    expect(out.reference_image_urls).toEqual(['https://x/1.jpg', 'https://x/2.jpg'])
+    expect(out.image_urls).toBeUndefined()
+    expect(out.image_url).toBeUndefined()
+  })
+
+  it('accepts up to 7 reference images (v1.5 documents 1-7)', () => {
+    const many = Array.from({ length: 10 }, (_, i) => `https://x/${i}.jpg`)
+    expect(buildVidInput(V15_REF, { ...base, reference_urls: many }).reference_image_urls).toHaveLength(7)
+  })
+
+  it('leaves the older Grok ref model at its 6-image cap', () => {
+    const many = Array.from({ length: 10 }, (_, i) => `https://x/${i}.jpg`)
+    expect(buildVidInput(OLD_REF, { ...base, reference_urls: many }).reference_image_urls).toHaveLength(6)
+  })
+
+  it('falls back to image_url as the sole reference when no refs are passed', () => {
+    const out = buildVidInput(V15_REF, { ...base, image_url: 'https://x/grid.jpg' })
+    expect(out.reference_image_urls).toEqual(['https://x/grid.jpg'])
+  })
+
+  it('passes 15s through, matching getVideoMaxDuration', () => {
+    const out = buildVidInput(V15_REF, { ...base, duration: 15, reference_urls: ['https://x/1.jpg'] })
+    expect(parseInt(out.duration)).toBe(getVideoMaxDuration(V15_REF))
+  })
+})
 
 describe('toRefToVideoModel', () => {
   it('maps each family to its OWN ref-to-video variant (respects user pick)', () => {

@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import { imageCost, videoCost, fmtCost } from './cost-table.js'
 
+describe('videoCost — Grok Imagine 1.5 ref-to-video', () => {
+  it('prices at the 720p rate ($0.14/s), same tier as v1.5 i2v — NOT the older $0.07 Grok', () => {
+    expect(videoCost('xai/grok-imagine-video/v1.5/reference-to-video', 1)).toBeCloseTo(0.14, 5)
+    expect(videoCost('xai/grok-imagine-video/v1.5/reference-to-video', 10)).toBeCloseTo(1.4, 5)
+  })
+})
+
 describe('imageCost', () => {
   it('returns the table price for known models', () => {
     expect(imageCost('openai/gpt-image-2/edit')).toBe(0.06)

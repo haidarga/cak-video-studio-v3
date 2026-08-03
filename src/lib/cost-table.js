@@ -25,6 +25,7 @@ export const VIDEO_COSTS_PER_SECOND = {
   'xai/grok-imagine-video/reference-to-video': 0.07,
   'xai/grok-imagine-video/text-to-video': 0.07,        // 720p $0.07/s, 480p $0.05/s
   'xai/grok-imagine-video/v1.5/image-to-video': 0.14,  // 720p $0.14/s, 480p $0.08/s (+$0.01/input img)
+  'xai/grok-imagine-video/v1.5/reference-to-video': 0.14, // same sheet: 720p $0.14/s, 480p $0.08/s, +$0.01 per ref (1-7)
   'fal-ai/kling-video/v3/standard/text-to-video': 0.13, // $0.084 audio off / $0.126 audio on
   'alibaba/happy-horse/text-to-video': 0.14,           // 720p; 1080p $0.28/s
   'bytedance/seedance-2.0/text-to-video': 0.31,        // 720p $0.3034/s; 1080p $0.682/s

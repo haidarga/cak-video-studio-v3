@@ -462,7 +462,10 @@ export function buildVidInput(vidModel, { prompt, image_url, reference_urls, dur
     // getVideoMaxDuration. If xAI does reject >10, it 422s at $0.00 (validation
     // errors are never billed), so the downside is a free error, not a burnt gen.
     if (isRef) {
-      const refs = (reference_urls || []).filter(Boolean).slice(0, 6)
+      // v1.5 documents 1-7 reference images (each adds $0.01); the older
+      // endpoint we've only ever validated to 6.
+      const maxRefs = vidModel.includes('v1.5') ? 7 : 6
+      const refs = (reference_urls || []).filter(Boolean).slice(0, maxRefs)
       // Fall back to image_url as first reference if caller didn't pass refs
       // (e.g. storyboard auto-route where the grid image IS the reference).
       const finalRefs = refs.length ? refs : (image_url ? [image_url] : [])
@@ -631,6 +634,9 @@ export function toRefToVideoModel(vidModel) {
   const m = (vidModel || '').toLowerCase()
   if (m.includes('reference-to-video') || m.includes('ref-to-video')) return vidModel // already ref
   if (m.includes('veo3')) return 'fal-ai/veo3.1/fast/reference-to-video'
+  // v1.5 is a separate, higher-quality tier ($0.14/s vs $0.07/s). Check it first
+  // so a v1.5 pick isn't silently downgraded to the older Grok endpoint.
+  if (m.includes('grok') && m.includes('v1.5')) return 'xai/grok-imagine-video/v1.5/reference-to-video'
   if (m.includes('grok')) return 'xai/grok-imagine-video/reference-to-video'
   // O3 has its own reference-to-video (multi-char @Element tags) — stay in
   // family instead of downgrading to the older v2.5-turbo model. v3/other
@@ -653,6 +659,7 @@ export function toImageToVideoModel(vidModel) {
   const m = (vidModel || '').toLowerCase()
   if (m.includes('image-to-video')) return vidModel // already i2v
   if (m.includes('veo3')) return 'fal-ai/veo3.1/fast/image-to-video'
+  if (m.includes('grok') && m.includes('v1.5')) return 'xai/grok-imagine-video/v1.5/image-to-video'
   if (m.includes('grok')) return 'xai/grok-imagine-video/image-to-video'
   if (m.includes('kling')) return 'fal-ai/kling-video/v3/standard/image-to-video'
   if (m.includes('happy-horse')) return 'alibaba/happy-horse/image-to-video'
@@ -678,6 +685,7 @@ export const VIDEO_MODELS = [
   { v: 'alibaba/happy-horse/text-to-video', l: '📝 Happy Horse T2V — ~$0.14/dtk 720p (native audio, 1080p $0.28)' },
   { v: 'alibaba/happy-horse/v1.1/text-to-video', l: '📝 Happy Horse 1.1 T2V — ~$0.14/dtk 720p (audio, lip-sync)' },
   { v: 'xai/grok-imagine-video/v1.5/image-to-video', l: 'Grok 1.5 i2v — ~$0.14/dtk 720p (audio, higher quality)' },
+  { v: 'xai/grok-imagine-video/v1.5/reference-to-video', l: '🎭 Grok 1.5 Ref-to-Video — ~$0.14/dtk 720p (1-7 ref, audio ref, NO grid morph)' },
   { v: 'fal-ai/veo3.1/fast/image-to-video', l: '🎬 Veo 3.1 Fast — ~$0.15/dtk (Google, native audio, 4/6/8s)' },
   { v: 'fal-ai/veo3.1/fast/reference-to-video', l: '🎭 Veo 3.1 Fast Ref-to-Video — ~$0.15/dtk (multi-ref, native audio, 8s)' },
   { v: 'fal-ai/bytedance/seedance/v1/lite/reference-to-video', l: '🎭 Seedance Lite Ref-to-Video — ~$0.16/dtk' },
