@@ -219,7 +219,18 @@ export default function GenerateClient({ workspaceId, userId, activeBrand, perso
         totalShotsCount += shots.length
         newStateByPersona[personaId] = {
           naskah: j.naskah_text || '',
-          refIds: new Set(),
+          // Seed the persona's own refs HERE, at import. Leaving this empty and
+          // relying on the seeding effect inside PersonaSection was a race: that
+          // effect is declared AFTER the auto-generate effect, so React ran
+          // auto-generate first and the queue started while refIds was still
+          // empty. Empty refs → refUrls empty → the /edit model silently gets
+          // rewritten to plain text-to-image → the character is invented from
+          // scratch. The "REFS 3/3" you see afterwards is the seeded state, not
+          // the state the generation actually ran with.
+          refIds: new Set(
+            (personas.find((p) => p.id === personaId)?.persona_refs || [])
+              .map((pr) => pr.refs?.id).filter(Boolean)
+          ),
           showWorkspaceRefs: false,
           parsed: j.parsed_shots ? { shots } : null,
           busy: false,
@@ -884,6 +895,13 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
 
     // PHASE 2 — sequential image queue.
     if (!state.shots?.length) return
+
+    // Don't start until the persona's references have actually RESOLVED. The
+    // ids can be seeded while the ref objects (fal_url) are still loading, and
+    // generating in that window produces a made-up character with no warning.
+    // personaOwnRefs, not selectedRefs — selectedRefs is declared further down,
+    // and naming it in this deps array would be a TDZ error at render time.
+    if (state.refIds.size > 0 && personaOwnRefs.length === 0) return
     const hasIdle = state.shots.some((s) => !s.image?.url && s.image?.status !== 'done')
     if (!hasIdle) return
 
@@ -901,7 +919,7 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
         }
       }
     })()
-  }, [autoStartImages, state.shots, state.naskah, state.needsParse, state.busy])
+  }, [autoStartImages, state.shots, state.naskah, state.needsParse, state.busy, state.refIds, personaOwnRefs.length])
 
   // Per-persona config ("variant generation"). When perPersonaMode is ON and
   // this persona has an override, the EFFECTIVE config = global defaults merged
@@ -1354,6 +1372,25 @@ function PersonaSection({ persona, workspaceRefs, onWorkspaceRefAdded, styleRefs
       // Seed: when "Seed konsisten" is ON, reuse the locked seed so supported
       // models (Nano-Banana / Seedance / Happy Horse) re-gen consistently
       // instead of drifting to a new result every time. OFF = fresh each gen.
+      // FAIL LOUD instead of inventing a character.
+      //
+      // When refUrls is empty the code below rewrites an `/edit` model to its
+      // plain text-to-image variant, buildImgInput omits image_urls entirely,
+      // and the prompt compiler drops its "keep identity consistent with
+      // references" line. Nothing then constrains who the person is — the model
+      // makes someone up. That is invisible in the UI, which keeps showing the
+      // refs as selected.
+      //
+      // If the user HAS refs selected and they all failed to resolve, that is a
+      // bug (import race, RLS miss, empty fal_url), not a valid text-to-image
+      // request. Refuse rather than burn money on a stranger's face.
+      if (refUrls.length === 0 && state.refIds.size > 0) {
+        throw new Error(
+          `${state.refIds.size} ref kepilih tapi gak ada satupun yang bisa dipakai — gambar bakal ngarang karakter. ` +
+          `Coba buka/refresh halamannya, pastiin ref-nya kebaca (thumbnail muncul), baru generate lagi.`
+        )
+      }
+
       const seed = globalConfig.seedLock ? globalConfig.seed : randomSeed()
       const hasRefs = refUrls.length > 0
       const targetModel = (!hasRefs && globalConfig.imgModel.includes('gpt-image-2/edit'))
