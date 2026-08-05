@@ -192,7 +192,7 @@ function BatchCard({ batch, personaMap, onDeleteBatch, onDeleteJob, onOpenExecut
   const [expanded, setExpanded] = useState(false)
   const [expandedJobId, setExpandedJobId] = useState(null)
 
-  const { batchId, title, jobs } = batch
+  const { batchId, title, jobs, dayNo, dayTotal } = batch
   const jobCount = jobs.length
   const personas = [...new Set(jobs.map(j => j.persona_mapping?.source_persona_name || 'Subject'))]
   const pendingJobs = jobs.filter(j => ['pending', 'parsed'].includes(j.status))
@@ -212,6 +212,13 @@ function BatchCard({ batch, personaMap, onDeleteBatch, onDeleteJob, onOpenExecut
           <div>
             <div className="flex items-center gap-2">
               <h3 className="text-base font-extrabold text-[var(--fg)]">{title}</h3>
+              {/* Without this the three day-batches of a content plan look
+                  identical — same topic, same personas, different content. */}
+              {dayNo && (
+                <span className="rounded-full bg-sky-500/20 border border-sky-500/40 px-2.5 py-0.5 text-[11px] font-bold text-sky-300">
+                  📅 Hari {dayNo}{dayTotal ? `/${dayTotal}` : ''}
+                </span>
+              )}
               <span className="rounded-full bg-purple-500/20 border border-purple-500/40 px-2.5 py-0.5 text-[11px] font-bold text-purple-300">
                 {jobCount} Naskah
               </span>
@@ -391,14 +398,26 @@ export default function InboxClient({ jobs: initialJobs, personaMap, workspaceId
     // 3-minute bucket groups jobs pushed in the same request together, but keeps separate pushes apart
     const timeBucket = Math.floor(createdTime / (3 * 60 * 1000))
 
-    const batchId = pushBatchId && !pushBatchId.startsWith('topic_')
+    const baseId = pushBatchId && !pushBatchId.startsWith('topic_')
       ? pushBatchId
       : `${topicTitle.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${timeBucket}`
+
+    // SPLIT BY DAY. Caketing sends day_no per naskah, and a multi-day content
+    // plan is pushed in ONE action — so grouping by push alone collapsed
+    // 8 personas × 3 days into a single 24-naskah, 142-shot batch. A batch is
+    // meant to be one naskah per persona: 8 personas over 3 days = 3 batches
+    // of 8, which is also what "Eksekusi All Batch" can realistically run in
+    // one go. day_no is absent on single-day pushes, which then behave as before.
+    const dayNo = job.source_ref?.day_no ?? null
+    const dayTotal = job.source_ref?.day_total ?? null
+    const batchId = dayNo ? `${baseId}__d${dayNo}` : baseId
 
     if (!batchesMap.has(batchId)) {
       batchesMap.set(batchId, {
         batchId,
         title: topicTitle,
+        dayNo,
+        dayTotal,
         jobs: [],
       })
     }
@@ -406,6 +425,23 @@ export default function InboxClient({ jobs: initialJobs, personaMap, workspaceId
   }
 
   const batchList = Array.from(batchesMap.values())
+
+  // Caketing sends day_no but not day_total, so derive it: how many distinct
+  // days came from the same push. Data-driven rather than parsing "Hari 1/3"
+  // out of the title, which is a display string and free to change.
+  const daysPerPush = new Map()
+  for (const b of batchList) {
+    if (!b.dayNo) continue
+    const base = b.batchId.replace(/__d\d+$/, '')
+    if (!daysPerPush.has(base)) daysPerPush.set(base, new Set())
+    daysPerPush.get(base).add(b.dayNo)
+  }
+  for (const b of batchList) {
+    if (!b.dayNo) continue
+    b.dayTotal = b.dayTotal || daysPerPush.get(b.batchId.replace(/__d\d+$/, ''))?.size || null
+  }
+  // Same push, day 1 before day 3.
+  batchList.sort((a, b) => (a.dayNo || 0) - (b.dayNo || 0))
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -421,7 +457,7 @@ export default function InboxClient({ jobs: initialJobs, personaMap, workspaceId
             )}
           </h1>
           <p className="text-xs text-[var(--muted)] mt-0.5">
-            Naskah pushed from Caketing — grouped by push batch & ready for production
+            Naskah pushed from Caketing — 1 batch = 1 hari konten, siap diproduksi
             {activeBrandName && <> · difilter buat brand <span className="text-[var(--accent)] font-semibold">{activeBrandName}</span></>}
             {hiddenByBrand > 0 && (
               <> · <span className="text-amber-400">{hiddenByBrand} job brand lain disembunyiin</span></>
