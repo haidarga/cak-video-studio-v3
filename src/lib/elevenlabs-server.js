@@ -192,8 +192,9 @@ export async function getWorkspaceKey(supabase, workspaceId) {
   const { data, error } = await supabase
     .from('workspaces').select('elevenlabs_key').eq('id', workspaceId).maybeSingle()
   if (error) throw new Error('load workspace: ' + error.message)
-  if (!data?.elevenlabs_key) {
+  const key = data?.elevenlabs_key || process.env.ELEVENLABS_API_KEY
+  if (!key) {
     throw new Error('Workspace belum punya ElevenLabs API key. Set di Settings dulu.')
   }
-  return data.elevenlabs_key
+  return key
 }
