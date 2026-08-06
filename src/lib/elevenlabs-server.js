@@ -11,8 +11,9 @@
 const BASE = 'https://api.elevenlabs.io'
 
 function headers(apiKey, extra = {}) {
-  if (!apiKey) throw new Error('Workspace belum punya ElevenLabs API key — set di Settings dulu')
-  return { 'xi-api-key': apiKey, ...extra }
+  const cleanKey = String(apiKey || '').trim().replace(/^['"]|['"]$/g, '')
+  if (!cleanKey) throw new Error('Workspace belum punya ElevenLabs API key — set di Settings dulu')
+  return { 'xi-api-key': cleanKey, ...extra }
 }
 
 // ── List voices in this account ──
@@ -192,7 +193,7 @@ export async function getWorkspaceKey(supabase, workspaceId) {
   const { data, error } = await supabase
     .from('workspaces').select('elevenlabs_key').eq('id', workspaceId).maybeSingle()
   if (error) throw new Error('load workspace: ' + error.message)
-  const key = data?.elevenlabs_key || process.env.ELEVENLABS_API_KEY
+  const key = String(data?.elevenlabs_key || process.env.ELEVENLABS_API_KEY || '').trim().replace(/^['"]|['"]$/g, '')
   if (!key) {
     throw new Error('Workspace belum punya ElevenLabs API key. Set di Settings dulu.')
   }

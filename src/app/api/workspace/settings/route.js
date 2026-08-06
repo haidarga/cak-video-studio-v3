@@ -36,7 +36,15 @@ export async function PATCH(req) {
   const body = await req.json()
   const patch = {}
   for (const k of ['fal_key', 'gemini_key', 'postiz_url', 'postiz_key', 'elevenlabs_key']) {
-    if (k in body) patch[k] = body[k] === '' ? null : body[k]
+    if (k in body) {
+      if (body[k] === '' || body[k] === null) {
+        patch[k] = null
+      } else if (typeof body[k] === 'string') {
+        patch[k] = body[k].trim().replace(/^['"]|['"]$/g, '')
+      } else {
+        patch[k] = body[k]
+      }
+    }
   }
   if (!Object.keys(patch).length) {
     return NextResponse.json({ ok: false, error: 'nothing to update' }, { status: 400 })
