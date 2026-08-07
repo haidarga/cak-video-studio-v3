@@ -271,7 +271,13 @@ export default function PersonasClient({ workspaceId, userId, activeBrandId, act
       )}
 
       {editing && (
-        <PersonaEditor persona={editing.isNew ? null : editing} workspaceId={workspaceId} userId={userId}
+        // key = remount per persona. Every field in PersonaEditor is
+        // `useState(persona?.x)`, which only reads the prop on FIRST mount — so
+        // switching from persona A to persona B without closing the editor kept
+        // A's voice_id, character_prompt, avatar and refs in state, and saving B
+        // wrote A's values onto B. A persona silently ending up with another
+        // persona's cloned voice is exactly that.
+        <PersonaEditor key={editing.isNew ? 'new' : editing.id} persona={editing.isNew ? null : editing} workspaceId={workspaceId} userId={userId}
           onClose={() => setEditing(null)} onError={setErr} />
       )}
 
