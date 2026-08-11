@@ -31,15 +31,25 @@ function ensureConfigured(falKey) {
 
 // Returns the muxed video URL. Throws on failure — callers decide whether to
 // fall back to the browser mux.
-export async function muxAudioOntoVideo(videoUrl, audioUrl, { falKey, onProgress } = {}) {
+export async function muxAudioOntoVideo(videoUrl, audioUrl, { falKey, onProgress, timeoutMs = 60_000 } = {}) {
   if (!videoUrl || !audioUrl) throw new Error('muxAudioOntoVideo: video_url + audio_url wajib')
   ensureConfigured(falKey)
 
-  const result = await fal.subscribe(MUX_MODEL, {
-    input: { video_url: videoUrl, audio_url: audioUrl },
-    logs: false,
-    onQueueUpdate: (u) => onProgress?.(u?.status || 'processing'),
-  })
+  // HARD DEADLINE. fal.subscribe waits for the whole queue job, and this runs
+  // inside a serverless request that already spent time on rehost + audio
+  // extract + ElevenLabs. Without a bound, a slow fal queue pushed the request
+  // past maxDuration and Vercel killed it — returning a 504 whose body is HTML,
+  // which the browser then failed to JSON.parse ("Unexpected token 'A'").
+  // Timing out here instead lets the caller fall back cleanly.
+  const result = await Promise.race([
+    fal.subscribe(MUX_MODEL, {
+      input: { video_url: videoUrl, audio_url: audioUrl },
+      logs: false,
+      onQueueUpdate: (u) => onProgress?.(u?.status || 'processing'),
+    }),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`mux timeout ${Math.round(timeoutMs / 1000)}s — fal queue lagi lambat`)), timeoutMs)),
+  ])
 
   const out = result?.data?.video?.url || result?.video?.url || null
   if (!out) {

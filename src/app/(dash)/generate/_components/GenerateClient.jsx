@@ -1853,7 +1853,15 @@ PRODUCT FIDELITY (critical): the product is a solid, rigid manufactured object. 
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ video_url: videoUrl, voice_id: effectiveVoiceId, result_id: row.id }),
           })
-          const j = await r.json()
+          // A Vercel timeout/crash replies with an HTML body, so r.json() threw
+          // "Unexpected token 'A', \"An error o\"..." — a parser message that
+          // told the user nothing about what actually went wrong.
+          const j = await r.json().catch(() => ({
+            ok: false,
+            error: r.status === 504
+              ? `server timeout (504) — konversi suara kelamaan. Video tetap kepakai; coba Change Voice manual di QC buat shot ini.`
+              : `server balas ${r.status} (bukan JSON)`,
+          }))
           if (j.ok) {
             // MUX. /api/voice/convert only produced the cloned-voice mp3; without
             // muxing it onto the video, `results.url` kept the AI's native voice.

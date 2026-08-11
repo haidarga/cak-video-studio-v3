@@ -10,6 +10,11 @@ import { muxAudioOntoVideo } from '@/lib/fal-mux'
 // take a while on a multi-MB clip — give it room so it doesn't 504 mid-convert.
 // +mux step (fal ffmpeg) on top of rehost + extract + S2S + upload.
 export const maxDuration = 180
+const MAX_MS = maxDuration * 1000
+// Leave room to still write the DB row and serialize a response after the mux.
+const SAFETY_MS = 20_000
+// Below this there's no point starting a queue job we can't wait out.
+const MIN_MUX_MS = 25_000
 
 // Rough ElevenLabs Speech-to-Speech cost per call. Actual cost depends on
 // minutes of audio; this is a conservative estimate for one shot (~10s) used
@@ -23,6 +28,7 @@ const VOICE_CONVERT_USD = 0.30
 // 4. Optionally patches results.meta.cloned_audio_url if result_id is provided
 // Returns the public audio URL.
 export async function POST(req) {
+  const startedAt = Date.now()
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
@@ -65,9 +71,23 @@ export async function POST(req) {
     // back to the browser mux rather than losing the converted voice entirely.
     let voicedUrl = null
     let muxError = null
-    try {
+    // Only attempt the mux if enough of the function budget is left. Everything
+    // above (rehost + extract + S2S + upload) already consumed part of it, and
+    // being killed mid-mux costs the whole request: Vercel returns a 504 with an
+    // HTML body, the browser can't JSON.parse it, and the cloned audio we just
+    // PAID for is thrown away. Bailing early keeps audio_url, so the caller
+    // falls back to the browser mux instead of losing the work.
+    const elapsed = Date.now() - startedAt
+    const budgetLeft = MAX_MS - elapsed - SAFETY_MS
+    if (budgetLeft < MIN_MUX_MS) {
+      muxError = `skip mux: sisa waktu ${Math.round(budgetLeft / 1000)}s gak cukup (butuh ≥${MIN_MUX_MS / 1000}s) — di-mux di browser aja`
+      console.warn('[voice/convert]', muxError)
+    } else try {
       const { data: ws2 } = await supabase.from('workspaces').select('fal_key').eq('id', wsId).maybeSingle()
-      voicedUrl = await muxAudioOntoVideo(video_url, publicUrl, { falKey: ws2?.fal_key || process.env.FAL_KEY })
+      voicedUrl = await muxAudioOntoVideo(video_url, publicUrl, {
+        falKey: ws2?.fal_key || process.env.FAL_KEY,
+        timeoutMs: budgetLeft,
+      })
     } catch (e) {
       muxError = String(e?.message || e).slice(0, 300)
       console.warn('[voice/convert] server mux failed, caller may fall back to browser mux:', muxError)
