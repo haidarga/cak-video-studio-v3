@@ -391,6 +391,28 @@ export function compileImagePrompt(spec) {
 // Per user directive â€” "TUGAS ELU CUMAN MASUKIN PRMPTNYA KE FAL.AI": no
 // 11-layer compile, no preset injection, no sanitizer rewrites. Just pass
 // the naskah motion through.
+// The spoken line, as a HARD CONSTRAINT.
+//
+// Before this, the per-shot path passed `dialog` into the compiler and never
+// used it — only the storyboard branch emitted any words. Meanwhile
+// buildVoiceDirection ("the character speaks Indonesian… at a natural UNHURRIED
+// pace, do NOT rush") WAS emitted on both paths. So the model was told to talk,
+// given no script, and told to take its time: it improvised whatever it liked
+// for the full clip duration. That is the reported "ngide ngomong berlebihan,
+// gak sesuai dialog".
+//
+// Stating the words is not enough on its own — a short line inside a long clip
+// leaves dead air the model fills by inventing more. The clause has to close
+// that door explicitly.
+function speechLine(dialog, lang) {
+  const words = String(dialog || '').trim()
+  if (!words) return null
+  return `The subject speaks EXACTLY these words in ${lang}, and NOTHING else: "${words}"
+` +
+    `Do NOT add, improvise, extend, paraphrase or continue past this line — no extra sentences, no ad-libs, no filler talk, no repeating it. ` +
+    `Once the line is finished the subject STOPS talking and simply stays present (natural breathing, blinks, small movement) for whatever time remains.`
+}
+
 export function compileVideoPrompt(spec) {
   const {
     identity = null,
@@ -457,7 +479,8 @@ export function compileVideoPrompt(spec) {
     // Light realism so the subject isn't frozen — does NOT fight cuts.
     sb.push('Natural secondary motion — breathing, occasional blinks, hair and shoulder micro-movement; nothing robotic.')
     if (hasDialog && audioOn !== false && dialog) {
-      sb.push(`The subject says, in ${lang}: "${String(dialog).trim()}"`)
+      const sl = speechLine(dialog, lang)
+      if (sl) sb.push(sl)
       const vl = buildVoiceDirection({ lang, dialect, hasDialog, audioOn })
       if (vl) sb.push(vl)
     }
@@ -519,6 +542,12 @@ export function compileVideoPrompt(spec) {
   }
   // Spoken-audio direction: language + regional accent/dialect + relaxed pace,
   // for native-audio models. Only when there's dialog and audio is on.
+  // Words first, then how to say them. Previously only the "how" was emitted
+  // here and the "what" was silently dropped.
+  if (hasDialog && audioOn !== false && dialog) {
+    const sl = speechLine(dialog, lang)
+    if (sl) lines.push(sl)
+  }
   const voiceLine = buildVoiceDirection({ lang, dialect, hasDialog, audioOn })
   if (voiceLine) lines.push(voiceLine)
   lines.push(`${ar} composition.`)

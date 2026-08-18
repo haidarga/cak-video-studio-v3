@@ -425,3 +425,42 @@ describe('compileImagePrompt — realism injection', () => {
     expect(out).not.toMatch(/directional shadow/i)
   })
 })
+
+// Regression: the reported "ngide ngomong berlebihan, gak sesuai dialog".
+// compileVideoPrompt received `dialog` but only the STORYBOARD branch ever
+// emitted it — the per-shot branch dropped the words while still emitting
+// buildVoiceDirection's "speaks Indonesian at a natural unhurried pace". The
+// model was told to talk, given no script, and told not to rush, so it
+// improvised for the whole clip.
+describe('compileVideoPrompt — spoken dialogue is bound, not suggested', () => {
+  const base = {
+    camera: 'iphone_15_clean', action: 'talking head', ar: '9:16',
+    lang: 'Indonesian', hasDialog: true, audioOn: true,
+    dialog: 'Cek komposisi susunya dulu ya.',
+  }
+
+  it('per-shot mode actually includes the dialogue words', () => {
+    const out = compileVideoPrompt({ ...base, storyboard: false })
+    expect(out).toContain('Cek komposisi susunya dulu ya.')
+  })
+
+  it('storyboard mode includes them too', () => {
+    const out = compileVideoPrompt({ ...base, storyboard: true })
+    expect(out).toContain('Cek komposisi susunya dulu ya.')
+  })
+
+  it('forbids improvising past the line, on both paths', () => {
+    for (const storyboard of [false, true]) {
+      const out = compileVideoPrompt({ ...base, storyboard })
+      expect(out, `storyboard=${storyboard}`).toMatch(/NOTHING else/i)
+      expect(out, `storyboard=${storyboard}`).toMatch(/do NOT add, improvise/i)
+      expect(out, `storyboard=${storyboard}`).toMatch(/STOPS talking/i)
+    }
+  })
+
+  it('emits no speech instruction at all when dialog is off or empty', () => {
+    expect(compileVideoPrompt({ ...base, hasDialog: false })).not.toMatch(/speaks EXACTLY/i)
+    expect(compileVideoPrompt({ ...base, dialog: '   ' })).not.toMatch(/speaks EXACTLY/i)
+    expect(compileVideoPrompt({ ...base, audioOn: false })).not.toMatch(/speaks EXACTLY/i)
+  })
+})
