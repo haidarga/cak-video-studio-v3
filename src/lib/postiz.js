@@ -81,15 +81,51 @@ async function postizJson(creds, path, init = {}) {
   return json
 }
 
+// Which API prefix this Postiz instance actually serves, per base URL.
+// Self-hosted Postiz mounts its public API at different prefixes depending on
+// version and reverse-proxy setup. Probing per endpoint independently meant
+// `/integrations` could succeed on one prefix while `/upload` blindly retried
+// the same doomed list and 404'd on all three — which is exactly the
+// "Postiz upload 404 @ /api/v1/upload: not_found" report.
+const prefixCache = new Map()
+
+export function knownPostizPrefix(baseUrl) {
+  return prefixCache.get(String(baseUrl || '').replace(/\/$/, '')) || null
+}
+
+// Order the candidates so the prefix we've already proven works is tried first.
+function orderByKnownPrefix(url, paths) {
+  const known = knownPostizPrefix(url)
+  if (!known) return paths
+  const preferred = paths.filter((p) => p.startsWith(known))
+  const rest = paths.filter((p) => !p.startsWith(known))
+  return [...preferred, ...rest]
+}
+
+// The prefix part of a path, e.g. '/api/public/v1/integrations' -> '/api/public/v1'
+function prefixOf(path) {
+  const m = String(path).match(/^(.*\/v1)\//)
+  return m ? m[1] : null
+}
+
 async function postizJsonFallback(creds, paths, init) {
+  const { url } = normCreds(creds)
   let lastErr
-  for (const p of paths) {
-    try { return await postizJson(creds, p, init) }
+  const tried = []
+  for (const p of orderByKnownPrefix(url, paths)) {
+    tried.push(p)
+    try {
+      const out = await postizJson(creds, p, init)
+      const pre = prefixOf(p)
+      if (pre) prefixCache.set(url, pre)
+      return out
+    }
     catch (e) {
       lastErr = e
       if (e.status && e.status !== 404) throw e
     }
   }
+  if (lastErr) lastErr.triedPaths = tried
   throw lastErr
 }
 
@@ -260,9 +296,19 @@ async function downloadMedia(url) {
 
 async function uploadToPostiz(creds, { buffer, name, contentType }) {
   const { url, key } = normCreds(creds)
-  const paths = ['/public/v1/upload', '/api/public/v1/upload', '/api/v1/upload']
+  // Try the prefix that fetchPostizChannels already proved works on THIS
+  // instance first. Probing each endpoint's list independently is how we ended
+  // up 404-ing all three upload paths on an instance whose integrations
+  // endpoint was answering fine the whole time.
+  const known = knownPostizPrefix(url)
+  const basePaths = ['/public/v1/upload', '/api/public/v1/upload', '/api/v1/upload', '/api/upload', '/upload']
+  const paths = known
+    ? [`${known}/upload`, ...basePaths.filter((p) => p !== `${known}/upload`)]
+    : basePaths
+  const attempted = []
   let lastErr
   for (const path of paths) {
+    attempted.push(path)
     try {
       const form = new FormData()
       const FileCtor = globalThis.File
@@ -304,6 +350,14 @@ async function uploadToPostiz(creds, { buffer, name, contentType }) {
       lastErr = e
       if (e.status && e.status !== 404 && e.status < 500) throw e
     }
+  }
+  // Name every path we tried — a bare "404 @ /api/v1/upload" hid the fact that
+  // this instance simply doesn't serve upload on any prefix we know, and made it
+  // look like one specific URL was broken.
+  if (lastErr && lastErr.status === 404) {
+    lastErr.message = `${lastErr.message} — dicoba semua path: ${attempted.join(', ')}. ` +
+      `Instance Postiz ini kayaknya gak expose endpoint upload di prefix manapun yang kita tau (padahal /integrations jalan). ` +
+      `Cek versi Postiz-nya atau reverse-proxy-nya.`
   }
   throw lastErr
 }
